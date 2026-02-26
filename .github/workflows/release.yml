@@ -1,22 +1,53 @@
-name: Rust
+name: Rust Release Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  build-linux-x64:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Generate lockfile if missing
+        run: |
+          if [ ! -f Cargo.lock ]; then
+            cargo generate-lockfile
+          fi
+
+      - name: Build release
+        env:
+          CARGO_BUILD_JOBS: 1
+          RUSTFLAGS: -C codegen-units=16 -C opt-level=2 -C panic=abort
+        run: cargo build --release --locked
+
+      - name: Check binary exists
+        run: |
+          ls -lah target/release/
+          test -f target/release/tgbot
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tgbot-linux-x86_64
+          path: target/release/tgbot
+          if-no-files-found: error
+          retention-days: 14
