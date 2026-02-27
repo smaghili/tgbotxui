@@ -4,5 +4,3 @@ __pycache__/
 .env
 data/*.db
 .pytest_cache/
-target/
-Cargo.lock

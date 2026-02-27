@@ -1,86 +1,109 @@
-# Telegram 3x-ui Bot (Rust, Production-Oriented)
+# ربات تلگرام مدیریت 3x-ui
 
-ربات تلگرام بازنویسی‌شده با Rust برای مصرف CPU/RAM پایین‌تر و معماری قابل توسعه در محیط عملیاتی.
+این پروژه یک ربات تلگرام ماژولار با Python است برای:
+- مدیریت پنل‌های 3x-ui
+- مدیریت کاربران/کلاینت‌ها
+- نمایش وضعیت سرویس کاربران
 
-## ویژگی‌ها
+## وضعیت پروژه
 
-- معماری ماژولار: `config`, `db`, `service`, `xui`, `bot`, `metrics`
-- SQLite + migration versioned (`migrations/`)
-- رمزنگاری AES-256-GCM برای اطلاعات حساس پنل
-- RBAC ادمین با `ADMIN_IDS`
-- rate-limit برای عملیات مدیریتی
-- audit log برای عملیات حساس
-- endpoint مانیتورینگ:
-  - `/healthz`
-  - `/metrics` (Prometheus)
-- sync دوره‌ای مصرف سرویس‌ها
+این پنل هنوز **به طور کامل تکمیل نشده** است و بعضی بخش‌ها در حال توسعه و بهینه‌سازی هستند.
 
-## منوی ربات
+## قابلیت‌های فعلی
 
-- کاربر:
-  - `📊 وضعیت سرویس من`
-- ادمین:
-  - `مدیریت`
-  - `افزودن پنل`
-  - `لیست پنل‌ها`
-  - `اتصال سرویس به کاربر`
-  - `همگام‌سازی مصرف`
+### 1) منوی اصلی
+- `📊 وضعیت سرویس من`
+- `🌐 تغییر زبان (فارسی/انگلیسی)`
+- `مدیریت` (فقط برای ادمین)
 
-## کانفیگ `.env`
+### 2) مدیریت پنل‌ها (ادمین)
+- افزودن پنل 3x-ui با تست لاگین
+- لیست پنل‌ها
+- انتخاب/حذف پنل پیش‌فرض
+- لیست اینباندها
 
-فایل نمونه: `.env.example`
+### 3) مدیریت کاربران (ادمین)
+- لیست کاربران هر اینباند
+- لیست کاربران آنلاین
+- جستجوی کاربر بر اساس بخشی از ایمیل
+- لیست کاربران غیرفعال
+- لیست آخرین آنلاین
+- مدیریت جزئیات کاربر:
+  - فعال/غیرفعال
+  - محدودیت ترافیک
+  - ریست ترافیک
+  - تنظیم تاریخ انقضا
+  - محدودیت IP
+  - مشاهده/پاکسازی IP log
+  - تنظیم tgId
 
-مهم‌ترین کلیدها:
+### 4) صفحه‌بندی (Pagination)
+- برای لیست‌های بزرگ صفحه‌بندی اضافه شده است.
+- هر صفحه: `20` کاربر (چیدمان `2 ستونه`)
+
+### 5) چندزبانه
+- تغییر زبان به صورت per-user
+- پیام‌ها و دکمه‌ها از سیستم i18n خوانده می‌شوند.
+
+### 6) زیرساخت
+- SQLite + Migration
+- Rate limit برای عملیات ادمین
+- Metrics/Health endpoint
+- ساختار سرویس‌محور (`handlers`, `services`, `middlewares`)
+
+## نصب و اجرا (محلی)
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+python main.py
+```
+
+## متغیرهای محیطی مهم
+
+در فایل `.env` تنظیم می‌شوند:
 - `BOT_TOKEN`
 - `ADMIN_IDS`
-- `DATABASE_URL=sqlite:data/bot.db`
-- `ENCRYPTION_KEY` (base64 کلید 32 بایتی)
-- `METRICS_ENABLED`, `METRICS_HOST`, `METRICS_PORT`
+- `DATABASE_PATH`
+- `TIMEZONE`
+- `ENCRYPTION_KEY`
+- تنظیمات sync / metrics / rate-limit
 
-## اجرای لوکال
+## دستورات مهم
+
+- `/start`
+- `/status`
+- `/help`
+- `/cancel`
+- `/bind ...` (ادمین)
+- `/sync_all` (ادمین)
+
+## مانیتورینگ
+
+- `GET /healthz`
+- `GET /metrics`
+
+## معماری کد
+
+- `bot/handlers`: ورودی‌های تلگرام و جریان‌های UI
+- `bot/services`: منطق کسب‌وکار و ارتباط با 3x-ui
+- `bot/middlewares`: زبان، rate-limit و ...
+- `bot/i18n.py`: متن‌ها و ترجمه‌ها
+- `bot/migrations`: اسکریپت‌های migration دیتابیس
+
+## تست
+
+تست‌های واحد پایه برای callback و pagination اضافه شده‌اند:
 
 ```bash
-cargo run --release
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## نصب روی سرور
+## نکات توسعه
 
-```bash
-chmod +x scripts/install.sh
-sudo bash scripts/install.sh
-```
-
-اسکریپت نصب:
-- به‌صورت تعاملی `BOT_TOKEN` و `ADMIN_IDS` می‌گیرد
-- اگر `ENCRYPTION_KEY` مقدار معتبر نداشته باشد، خودکار تولید می‌کند
-- باینری release می‌سازد
-- سرویس systemd سخت‌سازی‌شده نصب می‌کند
-- build را با تنظیمات مناسب VPS کم‌منبع اجرا می‌کند (`CARGO_BUILD_JOBS=1`)
-
-### اگر سرور 1GB RAM است
-
-- قبل از build بهتر است 2 تا 4 گیگ swap داشته باشید.
-- اسکریپت نصب build را کم‌مصرف‌تر انجام می‌دهد، ولی بدون swap همچنان امکان OOM وجود دارد.
-
-## عملیات
-
-- لاگ:
-```bash
-sudo journalctl -u tgbot -f
-```
-
-- وضعیت:
-```bash
-sudo systemctl status tgbot
-```
-
-- metrics:
-```bash
-curl http://127.0.0.1:9090/metrics
-```
-
-## نکته مهم
-
-در این محیط توسعه، toolchain Rust نصب نبود و compile/runtime تست نگرفتم. برای اطمینان نهایی روی سرور:
-- `cargo build --release`
-- `cargo clippy -- -D warnings`
+- پروژه در حال توسعه است و ممکن است در نسخه‌های بعدی:
+  - APIهای جدید 3x-ui پوشش داده شوند
+  - تست‌ها کامل‌تر شوند
+  - ساختار callback و UI باز هم بهینه‌تر شود

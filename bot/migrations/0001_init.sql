@@ -64,4 +64,3 @@ CREATE TABLE IF NOT EXISTS usage_snapshots (
 CREATE INDEX IF NOT EXISTS idx_user_services_telegram_user_id ON user_services(telegram_user_id);
 CREATE INDEX IF NOT EXISTS idx_user_services_panel_id ON user_services(panel_id);
 CREATE INDEX IF NOT EXISTS idx_usage_snapshots_user_service_id ON usage_snapshots(user_service_id);
-CREATE INDEX IF NOT EXISTS idx_usage_snapshots_synced_at ON usage_snapshots(synced_at);
