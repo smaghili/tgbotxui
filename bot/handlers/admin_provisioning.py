@@ -8,18 +8,23 @@ from bot.callbacks import NOOP
 from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.pagination import chunk_buttons, paginate_window
-from bot.keyboards import cancel_only_keyboard
 from bot.services.container import ServiceContainer
 from bot.states import ProvisioningStates
 from bot.utils import format_gb, to_local_date
 
 from .admin_shared import (
-    admin_keyboard_for_user,
+    answer_with_admin_menu,
+    answer_with_cancel,
+    bind_services_for_tg_identity,
     edit_config_actions_keyboard,
     format_client_detail,
+    inline_button,
+    normalize_tg_id,
+    panel_select_keyboard,
     parse_client_callback,
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
+    yes_no_inline_keyboard,
 )
 from .config_bundle import send_config_bundle_card, send_existing_config_bundle_for_email, send_rotation_preview_bundle_for_email
 
@@ -32,24 +37,14 @@ def _inbound_access_keyboard(rows: list, prefix: str) -> InlineKeyboardMarkup:
     for row in rows:
         buttons.append(
             [
-                InlineKeyboardButton(
-                    text=f"{row.panel_name} | {row.inbound_name}",
-                    callback_data=f"{prefix}:{row.panel_id}:{row.inbound_id}",
-                )
+                inline_button(f"{row.panel_name} | {row.inbound_name}", f"{prefix}:{row.panel_id}:{row.inbound_id}")
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _create_tg_id_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=t("btn_yes", lang), callback_data="pcu:tg_choice:yes"),
-                InlineKeyboardButton(text=t("btn_no", lang), callback_data="pcu:tg_choice:no"),
-            ]
-        ]
-    )
+    return yes_no_inline_keyboard("pcu:tg_choice:yes", "pcu:tg_choice:no", lang)
 
 
 def _edit_actions_keyboard(
@@ -77,14 +72,7 @@ def _truncate_button_text(text: str, max_len: int = 60) -> str:
 
 
 def _edit_panel_select_keyboard(panels: list[dict], lang: str | None = None) -> InlineKeyboardMarkup:
-    buttons: list[list[InlineKeyboardButton]] = []
-    for panel in panels:
-        ok = "✅" if panel["last_login_ok"] else "❌"
-        star = "⭐ " if panel.get("is_default") else ""
-        buttons.append(
-            [InlineKeyboardButton(text=f"{star}{ok} {panel['name']}", callback_data=f"pecsp:{panel['id']}")]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return panel_select_keyboard(panels, "pecsp")
 
 
 def _edit_search_results_keyboard(
@@ -105,9 +93,9 @@ def _edit_search_results_keyboard(
             continue
         prefix = "🟢" if bool(client.get("enabled", True)) else "⚫"
         page_buttons.append(
-            InlineKeyboardButton(
-                text=_truncate_button_text(f"{prefix} {email}"),
-                callback_data=f"pecs:{panel_id}:{inbound_id}:{client_uuid}:{page}:{query}",
+            inline_button(
+                _truncate_button_text(f"{prefix} {email}"),
+                f"pecs:{panel_id}:{inbound_id}:{client_uuid}:{page}:{query}",
             )
         )
     rows = chunk_buttons(page_buttons, columns=2)
@@ -115,24 +103,23 @@ def _edit_search_results_keyboard(
         nav_row: list[InlineKeyboardButton] = []
         if page > 1:
             nav_row.append(
-                InlineKeyboardButton(text=t("admin_page_prev", lang), callback_data=f"pecp:{panel_id}:{page - 1}:{query}")
+                inline_button(t("admin_page_prev", lang), f"pecp:{panel_id}:{page - 1}:{query}")
             )
-        nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data=NOOP))
+        nav_row.append(inline_button(f"{page}/{total_pages}", NOOP))
         if page < total_pages:
             nav_row.append(
-                InlineKeyboardButton(text=t("admin_page_next", lang), callback_data=f"pecp:{panel_id}:{page + 1}:{query}")
+                inline_button(t("admin_page_next", lang), f"pecp:{panel_id}:{page + 1}:{query}")
             )
         rows.append(nav_row)
-    rows.append([InlineKeyboardButton(text=t("admin_refresh_list", lang), callback_data=f"pecsr:{panel_id}:{query}")])
+    rows.append([inline_button(t("admin_refresh_list", lang), f"pecsr:{panel_id}:{query}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _delete_confirm_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"pec:delete_yes:{panel_id}:{inbound_id}:{client_uuid}")],
-            [InlineKeyboardButton(text=t("btn_no", lang), callback_data=f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}")],
-        ]
+    return yes_no_inline_keyboard(
+        f"pec:delete_yes:{panel_id}:{inbound_id}:{client_uuid}",
+        f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}",
+        lang,
     )
 
 
@@ -226,13 +213,6 @@ def _resolved_client_email(before: dict, after: dict) -> str:
     return str(after.get("email") or before.get("email") or "")
 
 
-def _normalize_tg_id(raw: str) -> str | None:
-    tg_id = "" if raw == "-" else raw
-    if tg_id and not (tg_id.lstrip("-").isdigit() or tg_id.startswith("@")):
-        return None
-    return tg_id
-
-
 def _delegated_min_create_error(
     *,
     is_delegated_admin: bool,
@@ -247,43 +227,6 @@ def _delegated_min_create_error(
     if expiry_days is not None and expiry_days < settings.delegated_admin_min_create_days:
         return "admin_delegated_min_create_days", settings.delegated_admin_min_create_days
     return None
-
-
-async def _bind_services_for_tg_identity(
-    *,
-    services: ServiceContainer,
-    panel_id: int,
-    inbound_id: int,
-    client_email: str,
-    tg_id: str,
-) -> None:
-    resolved_user_id: int | None = None
-    resolved_username: str | None = None
-    if not tg_id:
-        return
-    if tg_id.lstrip("-").isdigit():
-        resolved_user_id = int(tg_id)
-        user = await services.db.get_user_by_telegram_id(resolved_user_id)
-        if user is not None:
-            resolved_username = str(user.get("username") or "").strip() or None
-    else:
-        user = await services.db.find_user_by_username(tg_id)
-        if user is not None:
-            resolved_user_id = int(user["telegram_user_id"])
-            resolved_username = str(user.get("username") or "").strip() or None
-    if resolved_user_id is None:
-        return
-    await services.panel_service.bind_service_to_user(
-        panel_id=panel_id,
-        telegram_user_id=resolved_user_id,
-        client_email=client_email,
-        service_name=None,
-        inbound_id=inbound_id,
-    )
-    await services.panel_service.bind_services_for_telegram_identity(
-        telegram_user_id=resolved_user_id,
-        username=resolved_username,
-    )
 
 
 async def _notify_added_traffic(
@@ -409,14 +352,12 @@ async def _restore_admin_menu(
     message = target.message if isinstance(target, CallbackQuery) else target
     if message is None:
         return
-    await message.answer(
+    await answer_with_admin_menu(
+        message,
         t("menu_management", lang),
-        reply_markup=await admin_keyboard_for_user(
-            user_id=target.from_user.id,
-            settings=settings,
-            services=services,
-            lang=lang,
-        ),
+        settings=settings,
+        services=services,
+        lang=lang,
     )
 
 
@@ -477,14 +418,12 @@ async def _resolve_panel_for_edit_search(
         pass
     panels = await _visible_panels_for_actor(actor_user_id=actor_user_id, settings=settings, services=services)
     if not panels:
-        await message.answer(
+        await answer_with_admin_menu(
+            message,
             t("bind_no_panel", lang),
-            reply_markup=await admin_keyboard_for_user(
-                user_id=actor_user_id,
-                settings=settings,
-                services=services,
-                lang=lang,
-            ),
+            settings=settings,
+            services=services,
+            lang=lang,
         )
         return None
     await state.update_data(edit_search_query=query)
@@ -580,7 +519,7 @@ async def start_create_user(
         selected = rows[0]
         await state.update_data(create_panel_id=selected.panel_id, create_inbound_id=selected.inbound_id)
         await state.set_state(ProvisioningStates.waiting_create_email)
-        await message.answer(t("admin_create_enter_email", lang), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(message, t("admin_create_enter_email", lang), lang=lang)
         return
     await message.answer(
         t("admin_create_user_pick_inbound", lang),
@@ -605,7 +544,7 @@ async def pick_create_user_inbound(callback: CallbackQuery, state: FSMContext, s
         return
     await state.update_data(create_panel_id=panel_id, create_inbound_id=inbound_id)
     await state.set_state(ProvisioningStates.waiting_create_email)
-    await callback.message.answer(t("admin_create_enter_email", lang), reply_markup=cancel_only_keyboard(lang))
+    await answer_with_cancel(callback.message, t("admin_create_enter_email", lang), lang=lang)
     await callback.answer()
 
 
@@ -616,11 +555,11 @@ async def create_user_email(message: Message, state: FSMContext, settings: Setti
     lang = await services.db.get_user_language(message.from_user.id)
     email = (message.text or "").strip()
     if not email:
-        await message.answer(t("bind_config_id_empty", lang), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(message, t("bind_config_id_empty", lang), lang=lang)
         return
     await state.update_data(create_email=email)
     await state.set_state(ProvisioningStates.waiting_create_traffic_gb)
-    await message.answer(t("admin_create_enter_traffic", lang), reply_markup=cancel_only_keyboard(lang))
+    await answer_with_cancel(message, t("admin_create_enter_traffic", lang), lang=lang)
 
 
 @router.message(ProvisioningStates.waiting_create_traffic_gb)
@@ -633,7 +572,7 @@ async def create_user_traffic(message: Message, state: FSMContext, settings: Set
         if gb <= 0:
             raise ValueError
     except ValueError:
-        await message.answer(t("admin_invalid_positive_number", lang), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
         return
     delegated_limit_error = _delegated_min_create_error(
         is_delegated_admin=await services.access_service.is_delegated_admin(message.from_user.id),
@@ -642,14 +581,11 @@ async def create_user_traffic(message: Message, state: FSMContext, settings: Set
     )
     if delegated_limit_error is not None:
         error_key, minimum = delegated_limit_error
-        await message.answer(
-            t(error_key, lang, minimum=minimum),
-            reply_markup=cancel_only_keyboard(lang),
-        )
+        await answer_with_cancel(message, t(error_key, lang, minimum=minimum), lang=lang)
         return
     await state.update_data(create_total_gb=gb)
     await state.set_state(ProvisioningStates.waiting_create_expiry_days)
-    await message.answer(t("admin_create_enter_days", lang), reply_markup=cancel_only_keyboard(lang))
+    await answer_with_cancel(message, t("admin_create_enter_days", lang), lang=lang)
 
 
 @router.message(ProvisioningStates.waiting_create_expiry_days)
@@ -662,7 +598,7 @@ async def create_user_days(message: Message, state: FSMContext, settings: Settin
         if days <= 0:
             raise ValueError
     except ValueError:
-        await message.answer(t("admin_invalid_positive_number", lang), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
         return
     delegated_limit_error = _delegated_min_create_error(
         is_delegated_admin=await services.access_service.is_delegated_admin(message.from_user.id),
@@ -671,10 +607,7 @@ async def create_user_days(message: Message, state: FSMContext, settings: Settin
     )
     if delegated_limit_error is not None:
         error_key, minimum = delegated_limit_error
-        await message.answer(
-            t(error_key, lang, minimum=minimum),
-            reply_markup=cancel_only_keyboard(lang),
-        )
+        await answer_with_cancel(message, t(error_key, lang, minimum=minimum), lang=lang)
         return
     await state.update_data(create_expiry_days=days)
     await state.set_state(ProvisioningStates.waiting_create_tg_id_choice)
@@ -703,7 +636,7 @@ async def create_user_tg_choice_yes(callback: CallbackQuery, state: FSMContext, 
     await state.set_state(ProvisioningStates.waiting_create_tg_id)
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.message.answer(t("admin_create_enter_tg", lang), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(callback.message, t("admin_create_enter_tg", lang), lang=lang)
     await callback.answer()
 
 
@@ -712,9 +645,9 @@ async def create_user_tg_value(message: Message, state: FSMContext, settings: Se
     if await reject_if_not_any_admin(message, settings, services):
         return
     lang = await services.db.get_user_language(message.from_user.id)
-    normalized = _normalize_tg_id((message.text or "").strip())
+    normalized = normalize_tg_id((message.text or "").strip())
     if normalized is None:
-        await message.answer(t("admin_tgid_invalid", lang), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(message, t("admin_tgid_invalid", lang), lang=lang)
         return
     await state.update_data(create_tg_id=normalized)
     await _finish_create_user(message, state, settings, services, lang, actor_user_id=message.from_user.id)
@@ -731,7 +664,7 @@ async def _finish_create_user(
 ) -> None:
     data = await state.get_data()
     await state.clear()
-    await message.answer(t("admin_create_preparing", lang), reply_markup=cancel_only_keyboard(lang))
+    await answer_with_cancel(message, t("admin_create_preparing", lang), lang=lang)
     try:
         result = await services.admin_provisioning_service.create_client_for_actor(
             actor_user_id=actor_user_id,
@@ -785,7 +718,7 @@ async def start_edit_config(message: Message, state: FSMContext, settings: Setti
         return
     lang = await services.db.get_user_language(message.from_user.id)
     await state.set_state(ProvisioningStates.waiting_vless_config)
-    await message.answer(t("admin_edit_config_prompt", lang), reply_markup=cancel_only_keyboard(lang))
+    await answer_with_cancel(message, t("admin_edit_config_prompt", lang), lang=lang)
 
 
 @router.message(ProvisioningStates.waiting_vless_config)
@@ -795,11 +728,11 @@ async def resolve_vless_config(message: Message, state: FSMContext, settings: Se
     lang = await services.db.get_user_language(message.from_user.id)
     raw = (message.text or "").strip()
     if not raw:
-        await message.answer(t("admin_edit_config_prompt", lang), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(message, t("admin_edit_config_prompt", lang), lang=lang)
         return
     if not raw.lower().startswith("vless://"):
         if len(raw) < 2:
-            await message.answer(t("admin_search_too_short", lang), reply_markup=cancel_only_keyboard(lang))
+            await answer_with_cancel(message, t("admin_search_too_short", lang), lang=lang)
             return
         panel_id = await _resolve_panel_for_edit_search(
             message,
@@ -825,7 +758,7 @@ async def resolve_vless_config(message: Message, state: FSMContext, settings: Se
             )
             await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         except Exception as exc:
-            await message.answer(t("admin_edit_config_error", lang, error=exc), reply_markup=cancel_only_keyboard(lang))
+            await answer_with_cancel(message, t("admin_edit_config_error", lang, error=exc), lang=lang)
         return
     try:
         ref = await services.admin_provisioning_service.resolve_client_from_vless_for_actor(
@@ -834,7 +767,7 @@ async def resolve_vless_config(message: Message, state: FSMContext, settings: Se
             vless_uri=raw,
         )
     except Exception as exc:
-        await message.answer(t("admin_edit_config_error", lang, error=exc), reply_markup=cancel_only_keyboard(lang))
+        await answer_with_cancel(message, t("admin_edit_config_error", lang, error=exc), lang=lang)
         return
     await state.clear()
     await _show_resolved_edit_target(
@@ -846,14 +779,12 @@ async def resolve_vless_config(message: Message, state: FSMContext, settings: Se
         services=services,
         lang=lang,
     )
-    await message.answer(
+    await answer_with_admin_menu(
+        message,
         t("menu_management", lang),
-        reply_markup=await admin_keyboard_for_user(
-            user_id=message.from_user.id,
-            settings=settings,
-            services=services,
-            lang=lang,
-        ),
+        settings=settings,
+        services=services,
+        lang=lang,
     )
 
 
@@ -1114,11 +1045,10 @@ async def edit_config_get_config(callback: CallbackQuery, settings: Settings, se
 
 
 def _rotate_confirm_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"pec:rotate_yes:{panel_id}:{inbound_id}:{client_uuid}")],
-            [InlineKeyboardButton(text=t("btn_no", lang), callback_data=f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}")],
-        ]
+    return yes_no_inline_keyboard(
+        f"pec:rotate_yes:{panel_id}:{inbound_id}:{client_uuid}",
+        f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}",
+        lang,
     )
 
 
@@ -1250,7 +1180,7 @@ async def edit_config_set_tg_prompt(callback: CallbackQuery, state: FSMContext, 
         return
     await state.update_data(edit_panel_id=panel_id, edit_inbound_id=inbound_id, edit_client_uuid=client_uuid)
     await state.set_state(ProvisioningStates.waiting_edit_tg_id)
-    await callback.message.answer(t("admin_enter_tg", lang), reply_markup=cancel_only_keyboard(lang))
+    await answer_with_cancel(callback.message, t("admin_enter_tg", lang), lang=lang)
     await callback.answer()
 
 
@@ -1260,7 +1190,7 @@ async def edit_config_set_tg_value(message: Message, state: FSMContext, settings
         return
     lang = await services.db.get_user_language(message.from_user.id)
     raw = (message.text or "").strip()
-    tg_id = _normalize_tg_id(raw)
+    tg_id = normalize_tg_id(raw)
     if tg_id is None:
         await message.answer(t("admin_tgid_invalid", lang))
         return
@@ -1291,7 +1221,7 @@ async def edit_config_set_tg_value(message: Message, state: FSMContext, settings
             detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
             client_email = str(detail.get("email") or "").strip()
             if client_email:
-                await _bind_services_for_tg_identity(
+                await bind_services_for_tg_identity(
                     services=services,
                     panel_id=panel_id,
                     inbound_id=inbound_id,

@@ -1,4 +1,13 @@
-from bot.handlers.admin_shared import edit_config_actions_keyboard, users_clients_keyboard
+from bot.handlers.admin_shared import (
+    client_expiry_menu_keyboard,
+    client_iplimit_menu_keyboard,
+    client_traffic_menu_keyboard,
+    edit_config_actions_keyboard,
+    format_inbounds_overview,
+    panel_select_keyboard,
+    users_clients_keyboard,
+    yes_no_inline_keyboard,
+)
 from bot.i18n import btn, t
 from bot.keyboards import admin_keyboard
 
@@ -10,7 +19,9 @@ def test_admin_keyboard_removes_search_user_button() -> None:
     assert btn("btn_search_user", "fa") not in labels
     assert btn("btn_edit_config", "fa") in labels
     assert btn("btn_inbounds_overview", "fa") in labels
-    assert btn("btn_bulk_operations", "fa") in labels
+    assert btn("btn_bulk_operations", "fa") not in labels
+    assert btn("btn_list_inbounds", "fa") not in labels
+    assert btn("btn_last_online_users", "fa") not in labels
 
 
 def test_edit_config_actions_keyboard_includes_toggle_button() -> None:
@@ -32,3 +43,77 @@ def test_users_clients_keyboard_does_not_include_bulk_button() -> None:
     labels = [button.text for row in markup.inline_keyboard for button in row]
 
     assert t("admin_bulk_actions", "fa") not in labels
+
+
+def test_inbounds_overview_includes_status_and_inactive_counts() -> None:
+    text = format_inbounds_overview(
+        "xui CDN",
+        [
+            {
+                "remark": "Work",
+                "port": 8880,
+                "up": 10,
+                "down": 20,
+                "enable": False,
+                "expiryTime": 0,
+                "clientStats": [
+                    {"enable": True},
+                    {"enable": False},
+                    {"enabled": False},
+                ],
+            }
+        ],
+        "fa",
+    )
+
+    assert t("admin_inactive_clients_count", "fa") in text
+    assert t("admin_status", "fa") in text
+    assert t("admin_disabled", "fa") in text
+
+
+def test_panel_select_keyboard_uses_default_and_health_markers() -> None:
+    markup = panel_select_keyboard(
+        [
+            {"id": 7, "name": "xui CDN", "last_login_ok": True, "is_default": True},
+            {"id": 8, "name": "Backup", "last_login_ok": False, "is_default": False},
+        ],
+        "pick",
+    )
+
+    first_row = markup.inline_keyboard[0][0]
+    second_row = markup.inline_keyboard[1][0]
+
+    assert first_row.text == "⭐ ✅ xui CDN"
+    assert first_row.callback_data == "pick:7"
+    assert second_row.text == "❌ Backup"
+    assert second_row.callback_data == "pick:8"
+
+
+def test_yes_no_inline_keyboard_builds_two_buttons() -> None:
+    markup = yes_no_inline_keyboard("yes:1", "no:1", "fa")
+    row = markup.inline_keyboard[0]
+
+    assert len(row) == 2
+    assert row[0].text == t("btn_yes", "fa")
+    assert row[0].callback_data == "yes:1"
+    assert row[1].text == t("btn_no", "fa")
+    assert row[1].callback_data == "no:1"
+
+
+def test_client_traffic_menu_groups_presets_in_three_columns() -> None:
+    markup = client_traffic_menu_keyboard(1, 2, "uuid-1", "fa")
+
+    assert [button.text for button in markup.inline_keyboard[0]] == [t("admin_cancel", "fa")]
+    assert len(markup.inline_keyboard[1]) == 2
+    assert [button.text for button in markup.inline_keyboard[2]] == ["1 GB", "5 GB", "10 GB"]
+    assert markup.inline_keyboard[-1][-1].callback_data == "ts:1:2:uuid-1:200"
+
+
+def test_client_expiry_and_iplimit_menus_keep_expected_layouts() -> None:
+    expiry_markup = client_expiry_menu_keyboard(1, 2, "uuid-1", "fa")
+    ip_markup = client_iplimit_menu_keyboard(1, 2, "uuid-1", "fa")
+
+    assert [button.text for button in expiry_markup.inline_keyboard[2]] == ["7d", "10d"]
+    assert expiry_markup.inline_keyboard[-1][-1].callback_data == "es:1:2:uuid-1:365"
+    assert [button.text for button in ip_markup.inline_keyboard[2]] == ["1", "2", "3"]
+    assert ip_markup.inline_keyboard[-1][-1].callback_data == "is:1:2:uuid-1:10"

@@ -2,19 +2,22 @@
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 
 from bot.callbacks import NOOP, parse_inbound_page, parse_online_page
 from bot.config import Settings
 from bot.i18n import button_variants, t
-from bot.keyboards import admin_keyboard, cancel_only_keyboard
 from bot.services.container import ServiceContainer
 from bot.states import ClientManageStates
 from bot.utils import format_gb, to_local_date
 
 from .admin_shared import (
-    admin_keyboard_for_user,
     action_panel_select_keyboard,
+    answer_with_admin_menu,
+    answer_with_cancel,
+    back_to_detail_keyboard,
+    bind_services_for_tg_identity,
+    callback_error_alert,
     client_actions_keyboard,
     client_confirm_reset_keyboard,
     client_expiry_menu_keyboard,
@@ -35,7 +38,9 @@ from .admin_shared import (
     show_online_clients_for_panel_message,
     show_users_inbounds_for_panel_callback,
     show_users_inbounds_for_panel_message,
+    single_button_inline_keyboard,
     panel_bulk_actions_keyboard,
+    normalize_tg_id,
     users_clients_keyboard,
     users_panel_select_keyboard,
 )
@@ -255,7 +260,7 @@ async def _resolve_panel_or_prompt(
     else:
         panels = await services.panel_service.list_panels()
     if not panels:
-        await message.answer(t("bind_no_panel", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return None
     await message.answer(t(action_text_key, None), reply_markup=action_panel_select_keyboard(panels, action_prefix))
     return None
@@ -299,10 +304,9 @@ async def _render_inbound_clients_view(
     if not clients:
         await message.edit_text(
             t("admin_inbound_clients_empty", None, panel=panel["name"], inbound=inbound_name),
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text=t("admin_back_to_inbounds", None), callback_data=f"users_panel_pick:{panel_id}")]
-                ]
+            reply_markup=single_button_inline_keyboard(
+                t("admin_back_to_inbounds", None),
+                f"users_panel_pick:{panel_id}",
             ),
         )
         return
@@ -385,7 +389,12 @@ async def _open_bulk_panel_menu(
         await target.answer()
         return
     if not clients:
-        await target.answer(t("admin_bulk_empty", None), reply_markup=await admin_keyboard_for_user(user_id=user_id, settings=settings, services=services))
+        await answer_with_admin_menu(
+            target,
+            t("admin_bulk_empty", None),
+            settings=settings,
+            services=services,
+        )
         return
     await target.answer(
         t("admin_bulk_menu_text", None),
@@ -411,6 +420,7 @@ async def start_users_list(message: Message, settings: Settings, services: Servi
         await show_users_inbounds_for_panel_message(
             message,
             services,
+            settings,
             panel_id,
             allowed_inbound_ids=allowed_inbound_ids,
         )
@@ -425,7 +435,7 @@ async def start_users_list(message: Message, settings: Settings, services: Servi
     else:
         panels = await services.panel_service.list_panels()
     if not panels:
-        await message.answer(t("bind_no_panel", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
     await message.answer(
         t("admin_default_not_selected_list_users", None),
@@ -456,7 +466,7 @@ async def start_bulk_operations(message: Message, settings: Settings, services: 
         services=services,
     )
     if not panels:
-        await message.answer(t("bind_no_panel", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
     await message.answer(
         t("admin_bulk_pick_panel", None),
@@ -482,6 +492,7 @@ async def start_online_users_list(message: Message, settings: Settings, services
         await show_online_clients_for_panel_message(
             message,
             services,
+            settings,
             panel_id,
             owner_admin_user_id=owner_filter,
             allowed_inbound_ids=allowed_inbound_ids,
@@ -497,7 +508,7 @@ async def start_online_users_list(message: Message, settings: Settings, services
     else:
         panels = await services.panel_service.list_panels()
     if not panels:
-        await message.answer(t("bind_no_panel", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
     await message.answer(
         t("admin_default_not_selected_online", None),
@@ -545,7 +556,7 @@ async def start_disabled_users(message: Message, settings: Settings, services: S
         return
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
-        await message.answer(t("admin_panel_not_found", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("admin_panel_not_found", None), settings=settings, services=services)
         return
     owner_filter, allowed_inbound_ids = await _actor_scope(
         user_id=message.from_user.id,
@@ -583,7 +594,7 @@ async def start_last_online_users(message: Message, settings: Settings, services
         return
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
-        await message.answer(t("admin_panel_not_found", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("admin_panel_not_found", None), settings=settings, services=services)
         return
     owner_filter, allowed_inbound_ids = await _actor_scope(
         user_id=message.from_user.id,
@@ -844,7 +855,7 @@ async def users_bulk_add_traffic_prompt(callback: CallbackQuery, state: FSMConte
     await state.update_data(bulk_panel_id=panel_id)
     await state.set_state(ClientManageStates.waiting_bulk_add_traffic_gb)
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(t("admin_bulk_enter_traffic", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(callback.message, t("admin_bulk_enter_traffic", None))
     await callback.answer()
 
 
@@ -864,7 +875,7 @@ async def users_bulk_add_days_prompt(callback: CallbackQuery, state: FSMContext,
     await state.update_data(bulk_panel_id=panel_id)
     await state.set_state(ClientManageStates.waiting_bulk_add_expiry_days)
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(t("admin_bulk_enter_days", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(callback.message, t("admin_bulk_enter_days", None))
     await callback.answer()
 
 
@@ -1034,7 +1045,7 @@ async def online_search_execute(message: Message, state: FSMContext, settings: S
     panel_id_raw = data.get("online_search_panel_id")
     if panel_id_raw is None:
         await state.clear()
-        await message.answer(t("admin_invalid_data", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("admin_invalid_data", None), settings=settings, services=services)
         return
     panel_id = int(panel_id_raw)
     if len(query) < 2:
@@ -1043,7 +1054,7 @@ async def online_search_execute(message: Message, state: FSMContext, settings: S
     await state.clear()
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
-        await message.answer(t("admin_panel_not_found", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("admin_panel_not_found", None), settings=settings, services=services)
         return
     try:
         owner_filter, allowed_inbound_ids = await _actor_scope(
@@ -1059,7 +1070,12 @@ async def online_search_execute(message: Message, state: FSMContext, settings: S
             allowed_inbound_ids=allowed_inbound_ids,
         )
     except Exception as exc:
-        await message.answer(f"{t('admin_error_fetch_online', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            message,
+            f"{t('admin_error_fetch_online', None)}:\n{exc}",
+            settings=settings,
+            services=services,
+        )
         return
     if not clients:
         await message.answer(t("admin_search_empty", None, query=query, panel=panel["name"]))
@@ -1302,7 +1318,7 @@ async def client_reset_yes(callback: CallbackQuery, settings: Settings, services
         detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
         await services.panel_service.reset_client_traffic(panel_id, inbound_id, str(detail.get("email") or ""))
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', None)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc)
         return
     await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
     await callback.answer(t("admin_reset_done", None))
@@ -1362,7 +1378,7 @@ async def client_traffic_set(callback: CallbackQuery, settings: Settings, servic
         await services.panel_service.set_client_total_gb(panel_id, inbound_id, client_uuid, total_gb)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', None)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc)
         return
     await _notify_traffic_change(
         callback,
@@ -1461,7 +1477,7 @@ async def client_expiry_set(callback: CallbackQuery, settings: Settings, service
         await services.panel_service.set_client_expiry_days(panel_id, inbound_id, client_uuid, days)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', None)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc)
         return
     await _notify_expiry_change(
         callback,
@@ -1558,7 +1574,7 @@ async def iplimit_set_callback(callback: CallbackQuery, settings: Settings, serv
     try:
         await services.panel_service.set_client_limit_ip(panel_id, inbound_id, client_uuid, limit_ip)
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', None)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc)
         return
     await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
     await callback.answer(t("admin_ip_limit_updated", None))
@@ -1647,7 +1663,7 @@ async def client_toggle_enable(callback: CallbackQuery, settings: Settings, serv
     try:
         enabled = await services.panel_service.toggle_client_enable(panel_id, inbound_id, client_uuid)
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', None)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc)
         return
     await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
     await callback.answer(t("admin_enable_on", None) if enabled else t("admin_enable_off", None))
@@ -1679,7 +1695,7 @@ async def client_ips_log(callback: CallbackQuery, settings: Settings, services: 
         detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
         ips = await services.panel_service.get_client_ips(panel_id, str(detail.get("email") or ""))
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', None)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc)
         return
     await callback.message.edit_text(
         t("admin_ip_log_for", None, email=detail.get("email"), ips=ips),
@@ -1714,7 +1730,7 @@ async def client_ips_clear(callback: CallbackQuery, settings: Settings, services
         detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
         await services.panel_service.clear_client_ips(panel_id, str(detail.get("email") or ""))
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', None)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc)
         return
     await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
     await callback.answer(t("admin_ip_log_cleared", None))
@@ -1750,7 +1766,12 @@ async def client_custom_traffic_gb(message: Message, state: FSMContext, settings
         await services.panel_service.set_client_total_gb(panel_id, inbound_id, client_uuid, gb)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
-        await message.answer(f"{t('admin_update_traffic_error', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            message,
+            f"{t('admin_update_traffic_error', None)}:\n{exc}",
+            settings=settings,
+            services=services,
+        )
         return
     await _notify_traffic_change(
         message,
@@ -1764,9 +1785,7 @@ async def client_custom_traffic_gb(message: Message, state: FSMContext, settings
     )
     await message.answer(
         t("admin_done", None),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=t("admin_back_to_detail", None), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")]]
-        ),
+        reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),
     )
 
 
@@ -1778,7 +1797,7 @@ async def bulk_add_traffic_gb(message: Message, state: FSMContext, settings: Set
         if gb <= 0:
             raise ValueError
     except ValueError:
-        await message.answer(t("admin_invalid_positive_number", None), reply_markup=cancel_only_keyboard())
+        await answer_with_cancel(message, t("admin_invalid_positive_number", None))
         return
     data = await state.get_data()
     await state.clear()
@@ -1790,12 +1809,9 @@ async def bulk_add_traffic_gb(message: Message, state: FSMContext, settings: Set
         panel_id=panel_id,
     )
     if not clients:
-        await message.answer(
-            t("admin_bulk_empty", None),
-            reply_markup=await admin_keyboard_for_user(user_id=message.from_user.id, settings=settings, services=services),
-        )
+        await answer_with_admin_menu(message, t("admin_bulk_empty", None), settings=settings, services=services)
         return
-    await message.answer(t("admin_bulk_started", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(message, t("admin_bulk_started", None))
     success = 0
     failed = 0
     for client in clients:
@@ -1804,9 +1820,11 @@ async def bulk_add_traffic_gb(message: Message, state: FSMContext, settings: Set
             success += 1
         except Exception:
             failed += 1
-    await message.answer(
+    await answer_with_admin_menu(
+        message,
         t("admin_bulk_done", None, success=success, failed=failed),
-        reply_markup=await admin_keyboard_for_user(user_id=message.from_user.id, settings=settings, services=services),
+        settings=settings,
+        services=services,
     )
 
 
@@ -1818,7 +1836,7 @@ async def bulk_add_expiry_days(message: Message, state: FSMContext, settings: Se
         if days <= 0:
             raise ValueError
     except ValueError:
-        await message.answer(t("admin_invalid_positive_number", None), reply_markup=cancel_only_keyboard())
+        await answer_with_cancel(message, t("admin_invalid_positive_number", None))
         return
     data = await state.get_data()
     await state.clear()
@@ -1830,12 +1848,9 @@ async def bulk_add_expiry_days(message: Message, state: FSMContext, settings: Se
         panel_id=panel_id,
     )
     if not clients:
-        await message.answer(
-            t("admin_bulk_empty", None),
-            reply_markup=await admin_keyboard_for_user(user_id=message.from_user.id, settings=settings, services=services),
-        )
+        await answer_with_admin_menu(message, t("admin_bulk_empty", None), settings=settings, services=services)
         return
-    await message.answer(t("admin_bulk_started", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(message, t("admin_bulk_started", None))
     success = 0
     failed = 0
     for client in clients:
@@ -1844,9 +1859,11 @@ async def bulk_add_expiry_days(message: Message, state: FSMContext, settings: Se
             success += 1
         except Exception:
             failed += 1
-    await message.answer(
+    await answer_with_admin_menu(
+        message,
         t("admin_bulk_done", None, success=success, failed=failed),
-        reply_markup=await admin_keyboard_for_user(user_id=message.from_user.id, settings=settings, services=services),
+        settings=settings,
+        services=services,
     )
 
 
@@ -1880,7 +1897,12 @@ async def client_custom_expiry_days(message: Message, state: FSMContext, setting
         await services.panel_service.set_client_expiry_days(panel_id, inbound_id, client_uuid, days)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
-        await message.answer(f"{t('admin_update_expiry_error', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            message,
+            f"{t('admin_update_expiry_error', None)}:\n{exc}",
+            settings=settings,
+            services=services,
+        )
         return
     await _notify_expiry_change(
         message,
@@ -1894,9 +1916,7 @@ async def client_custom_expiry_days(message: Message, state: FSMContext, setting
     )
     await message.answer(
         t("admin_done", None),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=t("admin_back_to_detail", None), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")]]
-        ),
+        reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),
     )
 
 
@@ -1928,20 +1948,26 @@ async def client_custom_ip_limit(message: Message, state: FSMContext, settings: 
     try:
         await services.panel_service.set_client_limit_ip(panel_id, inbound_id, client_uuid, limit)
     except Exception as exc:
-        await message.answer(f"{t('admin_update_ip_error', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            message,
+            f"{t('admin_update_ip_error', None)}:\n{exc}",
+            settings=settings,
+            services=services,
+        )
         return
     await message.answer(
         t("admin_done", None),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=t("admin_back_to_detail", None), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")]]
-        ),
+        reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),
     )
 
 
 @router.message(ClientManageStates.waiting_tg_id)
 async def client_set_tg_id(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     raw = (message.text or "").strip()
-    tg_id = "" if raw == "-" else raw
+    tg_id = normalize_tg_id(raw)
+    if tg_id is None:
+        await message.answer(t("admin_tgid_invalid", None))
+        return
     data = await state.get_data()
     panel_id = int(data["client_manage_panel_id"])
     inbound_id = int(data["client_manage_inbound_id"])
@@ -1960,46 +1986,31 @@ async def client_set_tg_id(message: Message, state: FSMContext, settings: Settin
     try:
         await services.panel_service.set_client_tg_id(panel_id, inbound_id, client_uuid, tg_id)
     except Exception as exc:
-        await message.answer(f"{t('admin_update_tg_error', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            message,
+            f"{t('admin_update_tg_error', None)}:\n{exc}",
+            settings=settings,
+            services=services,
+        )
         return
 
-    resolved_user_id: int | None = None
-    resolved_username: str | None = None
     if tg_id:
-        if tg_id.lstrip("-").isdigit():
-            resolved_user_id = int(tg_id)
-            user = await services.db.get_user_by_telegram_id(resolved_user_id)
-            if user is not None:
-                resolved_username = str(user.get("username") or "").strip() or None
-        else:
-            user = await services.db.find_user_by_username(tg_id)
-            if user is not None:
-                resolved_user_id = int(user["telegram_user_id"])
-                resolved_username = str(user.get("username") or "").strip() or None
-
-    if resolved_user_id is not None:
         try:
             detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
             client_email = str(detail.get("email") or "").strip()
             if client_email:
-                await services.panel_service.bind_service_to_user(
+                await bind_services_for_tg_identity(
+                    services=services,
                     panel_id=panel_id,
-                    telegram_user_id=resolved_user_id,
-                    client_email=client_email,
-                    service_name=None,
                     inbound_id=inbound_id,
+                    client_email=client_email,
+                    tg_id=tg_id,
                 )
-            await services.panel_service.bind_services_for_telegram_identity(
-                telegram_user_id=resolved_user_id,
-                username=resolved_username,
-            )
         except Exception as exc:
             await message.answer(t("admin_tgid_saved_bind_failed", None, error=exc))
             return
 
     await message.answer(
         t("admin_tg_done", None),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=t("admin_back_to_detail", None), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")]]
-        ),
+        reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),
     )

@@ -4,14 +4,20 @@ import asyncio
 import logging
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.keyboards import main_keyboard
 from bot.services.container import ServiceContainer
 
-from .admin_shared import format_client_detail
+from .admin_shared import (
+    callback_error_alert,
+    format_client_detail,
+    inline_button,
+    two_button_inline_keyboard,
+    yes_no_inline_keyboard,
+)
 from .config_bundle import send_existing_config_bundle_for_email, send_rotation_preview_bundle_for_email
 
 router = Router(name="common")
@@ -30,14 +36,42 @@ async def _is_any_admin(user_id: int, settings: Settings, services: ServiceConta
     return await services.access_service.is_any_admin(user_id, settings)
 
 
+async def _main_menu_markup(
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str,
+):
+    return main_keyboard(await _is_any_admin(user_id, settings, services), lang)
+
+
+async def _answer_with_main_menu(
+    message: Message,
+    text: str,
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str,
+) -> None:
+    await message.answer(
+        text,
+        reply_markup=await _main_menu_markup(
+            user_id=user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
+        ),
+    )
+
+
 def _language_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🇮🇷 Persian", callback_data="lang:set:fa"),
-                InlineKeyboardButton(text="🇬🇧 English", callback_data="lang:set:en"),
-            ]
-        ]
+    return two_button_inline_keyboard(
+        "🇮🇷 Persian",
+        "lang:set:fa",
+        "🇬🇧 English",
+        "lang:set:en",
     )
 
 
@@ -45,22 +79,15 @@ def _status_service_keyboard(service_id: int, lang: str) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=t("btn_rotate_link", lang), callback_data=f"status_rotate_uuid:{service_id}"),
-                InlineKeyboardButton(text=t("btn_get_config", lang), callback_data=f"status_get_config:{service_id}"),
+                inline_button(t("btn_rotate_link", lang), f"status_rotate_uuid:{service_id}"),
+                inline_button(t("btn_get_config", lang), f"status_get_config:{service_id}"),
             ]
         ]
     )
 
 
 def _status_rotate_confirm_keyboard(service_id: int, lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"status_rotate_yes:{service_id}"),
-                InlineKeyboardButton(text=t("btn_no", lang), callback_data=f"status_rotate_no:{service_id}"),
-            ]
-        ]
-    )
+    return yes_no_inline_keyboard(f"status_rotate_yes:{service_id}", f"status_rotate_no:{service_id}", lang)
 
 
 async def _send_service_status(
@@ -102,9 +129,13 @@ async def _send_service_status(
             success=False,
             details=str(exc)[:500],
         )
-        await message.answer(
+        await _answer_with_main_menu(
+            message,
             t("status_fetch_error", lang),
-            reply_markup=main_keyboard(await _is_any_admin(user_id, settings, services), lang),
+            user_id=user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
         )
         return
 
@@ -116,9 +147,13 @@ async def _send_service_status(
             success=True,
             details="empty",
         )
-        await message.answer(
+        await _answer_with_main_menu(
+            message,
             t("status_empty", lang),
-            reply_markup=main_keyboard(await _is_any_admin(user_id, settings, services), lang),
+            user_id=user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
         )
         return
 
@@ -160,9 +195,13 @@ async def handle_start(message: Message, settings: Settings, services: ServiceCo
         username=user.username,
     )
     lang = await _user_lang(services, user.id)
-    await message.answer(
+    await _answer_with_main_menu(
+        message,
         t("welcome", lang),
-        reply_markup=main_keyboard(await _is_any_admin(user.id, settings, services), lang),
+        user_id=user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
     )
 
 
@@ -180,9 +219,13 @@ async def handle_help(message: Message, settings: Settings, services: ServiceCon
                 t("help_bind_default", lang),
             ]
         )
-    await message.answer(
+    await _answer_with_main_menu(
+        message,
         "\n".join(lines),
-        reply_markup=main_keyboard(await _is_any_admin(message.from_user.id, settings, services), lang),
+        user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
     )
 
 
@@ -219,7 +262,12 @@ async def set_language(callback: CallbackQuery, settings: Settings, services: Se
     if callback.message is not None:
         await callback.message.answer(
             t(text_key, lang),
-            reply_markup=main_keyboard(await _is_any_admin(callback.from_user.id, settings, services), lang),
+            reply_markup=await _main_menu_markup(
+                user_id=callback.from_user.id,
+                settings=settings,
+                services=services,
+                lang=lang,
+            ),
         )
 
 
@@ -305,7 +353,7 @@ async def rotate_uuid_confirm(callback: CallbackQuery, settings: Settings, servi
             inbound_id=row.get("inbound_id"),
         )
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', lang)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc, lang)
         return
     if callback.message is not None:
         await callback.message.answer(t("status_rotated", lang))
@@ -345,6 +393,5 @@ async def get_config_from_status(callback: CallbackQuery, settings: Settings, se
                 lang=lang,
             )
     except Exception as exc:
-        await callback.answer(f"{t('error_prefix', lang)}: {exc}", show_alert=True)
+        await callback_error_alert(callback, exc, lang)
         return
-

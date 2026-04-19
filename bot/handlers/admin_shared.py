@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from bot.callbacks import NOOP, encode_inbound_page, encode_online_page
 from bot.config import Settings
 from bot.i18n import t
-from bot.keyboards import admin_keyboard
+from bot.keyboards import admin_keyboard, cancel_only_keyboard
 from bot.pagination import chunk_buttons, paginate_window
 from bot.services.container import ServiceContainer
 from bot.utils import format_bytes, now_jalali_datetime, parse_epoch, relative_remaining_time, to_jalali_datetime, to_persian_digits
@@ -16,6 +16,36 @@ CLIENTS_PER_PAGE = 20
 
 def _truncate_button_text(text: str, max_len: int = 60) -> str:
     return text if len(text) <= max_len else text[: max_len - 3] + "..."
+
+
+def _panel_button_text(panel: dict) -> str:
+    ok = "✅" if panel["last_login_ok"] else "❌"
+    star = "⭐ " if panel.get("is_default") else ""
+    return f"{star}{ok} {panel['name']}"
+
+
+def inline_button(text: str, callback_data: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=callback_data)
+
+
+def single_button_inline_keyboard(text: str, callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[inline_button(text, callback_data)]])
+
+
+def _append_preset_rows(
+    rows: list[list[InlineKeyboardButton]],
+    *,
+    items: list[tuple[str, str]],
+    columns: int,
+) -> None:
+    current_row: list[InlineKeyboardButton] = []
+    for text, callback_data in items:
+        current_row.append(inline_button(text, callback_data))
+        if len(current_row) == columns:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
 
 
 def _pagination_nav_row(
@@ -29,10 +59,10 @@ def _pagination_nav_row(
         return None
     row: list[InlineKeyboardButton] = []
     if page > 1:
-        row.append(InlineKeyboardButton(text=t("admin_page_prev", lang), callback_data=callback_for_page(page - 1)))
-    row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data=NOOP))
+        row.append(inline_button(t("admin_page_prev", lang), callback_for_page(page - 1)))
+    row.append(inline_button(f"{page}/{total_pages}", NOOP))
     if page < total_pages:
-        row.append(InlineKeyboardButton(text=t("admin_page_next", lang), callback_data=callback_for_page(page + 1)))
+        row.append(inline_button(t("admin_page_next", lang), callback_for_page(page + 1)))
     return row
 
 
@@ -88,81 +118,185 @@ async def admin_keyboard_for_user(
     return admin_keyboard(context.mode, lang)
 
 
-def two_factor_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+async def admin_reply_markup_for_message(
+    message: Message,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None = None,
+) -> ReplyKeyboardMarkup:
+    return await admin_keyboard_for_user(
+        user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+
+
+async def answer_with_admin_menu(
+    message: Message,
+    text: str,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None = None,
+) -> None:
+    await message.answer(
+        text,
+        reply_markup=await admin_reply_markup_for_message(
+            message,
+            settings=settings,
+            services=services,
+            lang=lang,
+        ),
+    )
+
+
+async def answer_with_cancel(
+    message: Message,
+    text: str,
+    *,
+    lang: str | None = None,
+) -> None:
+    await message.answer(text, reply_markup=cancel_only_keyboard(lang))
+
+
+def two_button_inline_keyboard(
+    left_text: str,
+    left_callback: str,
+    right_text: str,
+    right_callback: str,
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=t("btn_yes", lang), callback_data="twofa_yes"),
-                InlineKeyboardButton(text=t("btn_no", lang), callback_data="twofa_no"),
+                inline_button(left_text, left_callback),
+                inline_button(right_text, right_callback),
             ]
         ]
     )
+
+
+def yes_no_inline_keyboard(
+    yes_callback: str,
+    no_callback: str,
+    lang: str | None = None,
+) -> InlineKeyboardMarkup:
+    return two_button_inline_keyboard(
+        t("btn_yes", lang),
+        yes_callback,
+        t("btn_no", lang),
+        no_callback,
+    )
+
+
+def two_factor_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    return yes_no_inline_keyboard("twofa_yes", "twofa_no", lang)
+
+
+def normalize_tg_id(raw: str) -> str | None:
+    tg_id = "" if raw == "-" else raw
+    if tg_id and not (tg_id.lstrip("-").isdigit() or tg_id.startswith("@")):
+        return None
+    return tg_id
+
+
+async def bind_services_for_tg_identity(
+    *,
+    services: ServiceContainer,
+    panel_id: int,
+    inbound_id: int,
+    client_email: str,
+    tg_id: str,
+) -> None:
+    resolved_user_id: int | None = None
+    resolved_username: str | None = None
+    if not tg_id:
+        return
+    if tg_id.lstrip("-").isdigit():
+        resolved_user_id = int(tg_id)
+        user = await services.db.get_user_by_telegram_id(resolved_user_id)
+        if user is not None:
+            resolved_username = str(user.get("username") or "").strip() or None
+    else:
+        user = await services.db.find_user_by_username(tg_id)
+        if user is not None:
+            resolved_user_id = int(user["telegram_user_id"])
+            resolved_username = str(user.get("username") or "").strip() or None
+    if resolved_user_id is None:
+        return
+    await services.panel_service.bind_service_to_user(
+        panel_id=panel_id,
+        telegram_user_id=resolved_user_id,
+        client_email=client_email,
+        service_name=None,
+        inbound_id=inbound_id,
+    )
+    await services.panel_service.bind_services_for_telegram_identity(
+        telegram_user_id=resolved_user_id,
+        username=resolved_username,
+    )
+
+
+def back_to_detail_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
+    return single_button_inline_keyboard(
+        t("admin_back_to_detail", lang),
+        f"cr:{panel_id}:{inbound_id}:{client_uuid}",
+    )
+
+
+async def callback_error_alert(callback: CallbackQuery, exc: Exception, lang: str | None = None) -> None:
+    await callback.answer(f"{t('error_prefix', lang)}: {exc}", show_alert=True)
 
 
 def panels_list_text(lang: str | None = None) -> str:
     return t("admin_panels_list", lang)
 
 
+def panel_select_keyboard(panels: list[dict], callback_prefix: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for panel in panels:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_panel_button_text(panel),
+                    callback_data=f"{callback_prefix}:{panel['id']}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def panels_glass_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for p in panels:
-        ok = "✅" if p["last_login_ok"] else "❌"
-        star = "⭐ " if p.get("is_default") else ""
-        text = f"{star}{ok} {p['name']}"
         rows.append(
             [
-                InlineKeyboardButton(text=text, callback_data=f"panel_default_toggle:{p['id']}"),
-                InlineKeyboardButton(text="🗑️", callback_data=f"panel_delete_ask:{p['id']}"),
+                inline_button(_panel_button_text(p), f"panel_default_toggle:{p['id']}"),
+                inline_button("🗑️", f"panel_delete_ask:{p['id']}"),
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def panel_delete_confirm_keyboard(panel_id: int, lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"panel_delete_yes:{panel_id}"),
-                InlineKeyboardButton(text=t("btn_no", lang), callback_data="panel_delete_no"),
-            ]
-        ]
-    )
+    return yes_no_inline_keyboard(f"panel_delete_yes:{panel_id}", "panel_delete_no", lang)
 
 
 def bind_panel_select_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for p in panels:
-        ok = "✅" if p["last_login_ok"] else "❌"
-        star = "⭐ " if p.get("is_default") else ""
-        rows.append([InlineKeyboardButton(text=f"{star}{ok} {p['name']}", callback_data=f"bind_panel_pick:{p['id']}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return panel_select_keyboard(panels, "bind_panel_pick")
 
 
 def inbounds_panel_select_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for p in panels:
-        ok = "✅" if p["last_login_ok"] else "❌"
-        star = "⭐ " if p.get("is_default") else ""
-        rows.append([InlineKeyboardButton(text=f"{star}{ok} {p['name']}", callback_data=f"inbounds_panel_pick:{p['id']}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return panel_select_keyboard(panels, "inbounds_panel_pick")
 
 
 def users_panel_select_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for p in panels:
-        ok = "✅" if p["last_login_ok"] else "❌"
-        star = "⭐ " if p.get("is_default") else ""
-        rows.append([InlineKeyboardButton(text=f"{star}{ok} {p['name']}", callback_data=f"users_panel_pick:{p['id']}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return panel_select_keyboard(panels, "users_panel_pick")
 
 
 def online_panel_select_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for p in panels:
-        ok = "✅" if p["last_login_ok"] else "❌"
-        star = "⭐ " if p.get("is_default") else ""
-        rows.append([InlineKeyboardButton(text=f"{star}{ok} {p['name']}", callback_data=f"online_panel_pick:{p['id']}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return panel_select_keyboard(panels, "online_panel_pick")
 
 
 def inbound_display_name(inbound: dict) -> str:
@@ -208,9 +342,7 @@ def users_clients_keyboard(
         uuid = str(client.get("uuid") or "").strip()
         if not email or not uuid:
             continue
-        page_buttons.append(
-            InlineKeyboardButton(text=_truncate_button_text(email), callback_data=f"uo:{panel_id}:{inbound_id}:{uuid}")
-        )
+        page_buttons.append(inline_button(_truncate_button_text(email), f"uo:{panel_id}:{inbound_id}:{uuid}"))
     rows = chunk_buttons(page_buttons, columns=2)
     nav_row = _pagination_nav_row(
         page=page,
@@ -220,15 +352,15 @@ def users_clients_keyboard(
     )
     if nav_row is not None:
         rows.append(nav_row)
-    rows.append([InlineKeyboardButton(text=t("admin_back_to_inbounds", lang), callback_data=f"users_panel_pick:{panel_id}")])
+    rows.append([inline_button(t("admin_back_to_inbounds", lang), f"users_panel_pick:{panel_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def panel_bulk_actions_keyboard(panel_id: int, lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=t("admin_bulk_add_traffic", lang), callback_data=f"pabt:{panel_id}")],
-            [InlineKeyboardButton(text=t("admin_bulk_add_days", lang), callback_data=f"pabd:{panel_id}")],
+            [inline_button(t("admin_bulk_add_traffic", lang), f"pabt:{panel_id}")],
+            [inline_button(t("admin_bulk_add_days", lang), f"pabd:{panel_id}")],
         ]
     )
 
@@ -260,19 +392,7 @@ def online_clients_keyboard(
 
 
 def action_panel_select_keyboard(panels: list[dict], action_prefix: str) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for p in panels:
-        ok = "✅" if p["last_login_ok"] else "❌"
-        star = "⭐ " if p.get("is_default") else ""
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{star}{ok} {p['name']}",
-                    callback_data=f"{action_prefix}:{p['id']}",
-                )
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return panel_select_keyboard(panels, action_prefix)
 
 
 def online_filtered_clients_keyboard(
@@ -301,7 +421,7 @@ def online_filtered_clients_keyboard(
             text = _truncate_button_text(f"🟢 {email}")
         else:
             text = _truncate_button_text(f"⚫ {email}")
-        page_buttons.append(InlineKeyboardButton(text=text, callback_data=f"uol:{panel_id}:{inbound_id}:{uuid}"))
+        page_buttons.append(inline_button(text, f"uol:{panel_id}:{inbound_id}:{uuid}"))
     rows = chunk_buttons(page_buttons, columns=2)
     nav_row = _pagination_nav_row(
         page=page,
@@ -316,8 +436,8 @@ def online_filtered_clients_keyboard(
     )
     if nav_row is not None:
         rows.append(nav_row)
-    rows.append([InlineKeyboardButton(text=t("admin_refresh_list", lang), callback_data=f"uolp:{panel_id}")])
-    rows.append([InlineKeyboardButton(text=t("admin_back_to_online_list", lang), callback_data=f"uolp:{panel_id}")])
+    rows.append([inline_button(t("admin_refresh_list", lang), f"uolp:{panel_id}")])
+    rows.append([inline_button(t("admin_back_to_online_list", lang), f"uolp:{panel_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -334,19 +454,19 @@ def edit_config_actions_keyboard(
     toggle_text = t("admin_toggle_on", lang) if enabled else t("admin_toggle_off", lang)
     rows = [
         [
-            InlineKeyboardButton(text=t("btn_rotate_link", lang), callback_data=f"pec:rotate_ask:{panel_id}:{inbound_id}:{client_uuid}"),
-            InlineKeyboardButton(text=t("btn_get_config", lang), callback_data=f"pec:get_config:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("btn_rotate_link", lang), f"pec:rotate_ask:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("btn_get_config", lang), f"pec:get_config:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
         [
-            InlineKeyboardButton(text=t("admin_edit_add_traffic", lang), callback_data=f"pec:traffic_input:{panel_id}:{inbound_id}:{client_uuid}"),
-            InlineKeyboardButton(text=t("admin_edit_add_days", lang), callback_data=f"pec:days_input:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_edit_add_traffic", lang), f"pec:traffic_input:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_edit_add_days", lang), f"pec:days_input:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
-        [InlineKeyboardButton(text=t("admin_set_tg", lang), callback_data=f"pec:tg_input:{panel_id}:{inbound_id}:{client_uuid}")],
-        [InlineKeyboardButton(text=toggle_text, callback_data=f"pec:toggle:{panel_id}:{inbound_id}:{client_uuid}")],
-        [InlineKeyboardButton(text=t("admin_edit_delete_client", lang), callback_data=f"pec:delete_ask:{panel_id}:{inbound_id}:{client_uuid}")],
+        [inline_button(t("admin_set_tg", lang), f"pec:tg_input:{panel_id}:{inbound_id}:{client_uuid}")],
+        [inline_button(toggle_text, f"pec:toggle:{panel_id}:{inbound_id}:{client_uuid}")],
+        [inline_button(t("admin_edit_delete_client", lang), f"pec:delete_ask:{panel_id}:{inbound_id}:{client_uuid}")],
     ]
     if back_callback:
-        rows.append([InlineKeyboardButton(text=back_text or t("admin_back", lang), callback_data=back_callback)])
+        rows.append([inline_button(back_text or t("admin_back", lang), back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -363,71 +483,74 @@ def client_actions_keyboard(
 def client_confirm_reset_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=t("admin_confirm_reset", lang), callback_data=f"ry:{panel_id}:{inbound_id}:{client_uuid}")],
-            [InlineKeyboardButton(text=t("admin_cancel_reset", lang), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
+            [inline_button(t("admin_confirm_reset", lang), f"ry:{panel_id}:{inbound_id}:{client_uuid}")],
+            [inline_button(t("admin_cancel_reset", lang), f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
         ]
     )
 
 
 def client_traffic_menu_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=t("admin_cancel", lang), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
+        [inline_button(t("admin_cancel", lang), f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
         [
-            InlineKeyboardButton(text=t("admin_unlimited_reset", lang), callback_data=f"ts:{panel_id}:{inbound_id}:{client_uuid}:unlimited"),
-            InlineKeyboardButton(text=t("admin_custom", lang), callback_data=f"tc:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_unlimited_reset", lang), f"ts:{panel_id}:{inbound_id}:{client_uuid}:unlimited"),
+            inline_button(t("admin_custom", lang), f"tc:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
     ]
-    for gb in [1, 5, 10, 20, 30, 40, 50, 60, 80, 100, 150, 200]:
-        if len(rows) == 2 or len(rows[-1]) == 3:
-            rows.append([])
-        rows[-1].append(InlineKeyboardButton(text=f"{gb} GB", callback_data=f"ts:{panel_id}:{inbound_id}:{client_uuid}:{gb}"))
+    _append_preset_rows(
+        rows,
+        items=[(f"{gb} GB", f"ts:{panel_id}:{inbound_id}:{client_uuid}:{gb}") for gb in [1, 5, 10, 20, 30, 40, 50, 60, 80, 100, 150, 200]],
+        columns=3,
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def client_expiry_menu_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=t("admin_cancel_reset", lang), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
+        [inline_button(t("admin_cancel_reset", lang), f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
         [
-            InlineKeyboardButton(text=t("admin_unlimited_reset", lang), callback_data=f"es:{panel_id}:{inbound_id}:{client_uuid}:unlimited"),
-            InlineKeyboardButton(text=t("admin_custom", lang), callback_data=f"ec:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_unlimited_reset", lang), f"es:{panel_id}:{inbound_id}:{client_uuid}:unlimited"),
+            inline_button(t("admin_custom", lang), f"ec:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
     ]
-    for days, label in [
-        (7, "7d"),
-        (10, "10d"),
-        (14, "14d"),
-        (20, "20d"),
-        (30, "1m"),
-        (90, "3m"),
-        (180, "6m"),
-        (365, "12m"),
-    ]:
-        if len(rows) == 2 or len(rows[-1]) == 2:
-            rows.append([])
-        rows[-1].append(InlineKeyboardButton(text=label, callback_data=f"es:{panel_id}:{inbound_id}:{client_uuid}:{days}"))
+    _append_preset_rows(
+        rows,
+        items=[
+            ("7d", f"es:{panel_id}:{inbound_id}:{client_uuid}:7"),
+            ("10d", f"es:{panel_id}:{inbound_id}:{client_uuid}:10"),
+            ("14d", f"es:{panel_id}:{inbound_id}:{client_uuid}:14"),
+            ("20d", f"es:{panel_id}:{inbound_id}:{client_uuid}:20"),
+            ("1m", f"es:{panel_id}:{inbound_id}:{client_uuid}:30"),
+            ("3m", f"es:{panel_id}:{inbound_id}:{client_uuid}:90"),
+            ("6m", f"es:{panel_id}:{inbound_id}:{client_uuid}:180"),
+            ("12m", f"es:{panel_id}:{inbound_id}:{client_uuid}:365"),
+        ],
+        columns=2,
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def client_iplimit_menu_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=t("admin_cancel_ip_limit", lang), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
+        [inline_button(t("admin_cancel_ip_limit", lang), f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
         [
-            InlineKeyboardButton(text=t("admin_unlimited_reset", lang), callback_data=f"is:{panel_id}:{inbound_id}:{client_uuid}:unlimited"),
-            InlineKeyboardButton(text=t("admin_custom", lang), callback_data=f"ic:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_unlimited_reset", lang), f"is:{panel_id}:{inbound_id}:{client_uuid}:unlimited"),
+            inline_button(t("admin_custom", lang), f"ic:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
     ]
-    for value in range(1, 11):
-        if len(rows) == 2 or len(rows[-1]) == 3:
-            rows.append([])
-        rows[-1].append(InlineKeyboardButton(text=str(value), callback_data=f"is:{panel_id}:{inbound_id}:{client_uuid}:{value}"))
+    _append_preset_rows(
+        rows,
+        items=[(str(value), f"is:{panel_id}:{inbound_id}:{client_uuid}:{value}") for value in range(1, 11)],
+        columns=3,
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def client_ips_log_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=t("admin_clear_ip_log", lang), callback_data=f"ix:{panel_id}:{inbound_id}:{client_uuid}")],
-            [InlineKeyboardButton(text=t("admin_back", lang), callback_data=f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
+            [inline_button(t("admin_clear_ip_log", lang), f"ix:{panel_id}:{inbound_id}:{client_uuid}")],
+            [inline_button(t("admin_back", lang), f"cr:{panel_id}:{inbound_id}:{client_uuid}")],
         ]
     )
 
@@ -436,14 +559,31 @@ def human_bytes(value: int, lang: str | None = None) -> str:
     return format_bytes(value, lang or "fa")
 
 
+def _inbound_client_state_counts(inbound: dict) -> tuple[int, int, int]:
+    clients = inbound.get("clientStats")
+    if not isinstance(clients, list):
+        return 0, 0, 0
+    total_count = len(clients)
+    active_count = 0
+    inactive_count = 0
+    for client in clients:
+        enabled = client.get("enable")
+        if enabled is None:
+            enabled = client.get("enabled", True)
+        if bool(enabled):
+            active_count += 1
+        else:
+            inactive_count += 1
+    return total_count, active_count, inactive_count
+
+
 def format_inbounds_list(panel_name: str, rows: list[dict], lang: str | None = None) -> str:
     if not rows:
         return f"{t('admin_inbounds_title', lang)}\n{t('admin_panel_label', lang)}: {panel_name}\n\n{t('admin_no_inbounds', lang)}"
     lines = [f"{t('admin_inbounds_title', lang)}", f"{t('admin_panel_label', lang)}: {panel_name}", ""]
     for offset, inbound in enumerate(rows):
         status = t("admin_enabled", lang) if inbound.get("enable") else t("admin_disabled", lang)
-        clients = inbound.get("clientStats")
-        client_count = len(clients) if isinstance(clients, list) else 0
+        client_count, _, inactive_count = _inbound_client_state_counts(inbound)
         remark = str(inbound.get("remark") or "-")
         up_value = int(inbound.get("up") or 0)
         down_value = int(inbound.get("down") or 0)
@@ -460,6 +600,7 @@ def format_inbounds_list(panel_name: str, rows: list[dict], lang: str | None = N
             f"({t('admin_download', lang)}: {down} , {t('admin_upload', lang)}: {up})\n"
             f"{t('admin_expiry', lang)}: {expiry_text}\n"
             f"{t('admin_clients_count', lang)}: {client_count}\n"
+            f"{t('admin_inactive_clients_count', lang)}: {inactive_count}\n"
             f"{t('admin_status', lang)}: {status}"
         )
         if offset != len(rows) - 1:
@@ -474,6 +615,8 @@ def format_inbounds_overview(
     *,
     total_usage_bytes: int | None = None,
     total_clients_count: int | None = None,
+    total_active_clients_count: int | None = None,
+    total_inactive_clients_count: int | None = None,
     total_inbounds_count: int | None = None,
 ) -> str:
     if not rows:
@@ -484,28 +627,39 @@ def format_inbounds_overview(
         )
     total_usage = 0 if total_usage_bytes is None else total_usage_bytes
     total_clients = 0 if total_clients_count is None else total_clients_count
+    total_active_clients = 0 if total_active_clients_count is None else total_active_clients_count
+    total_inactive_clients = 0 if total_inactive_clients_count is None else total_inactive_clients_count
     total_inbounds = len(rows) if total_inbounds_count is None else total_inbounds_count
-    if total_usage_bytes is None or total_clients_count is None:
+    if (
+        total_usage_bytes is None
+        or total_clients_count is None
+        or total_active_clients_count is None
+        or total_inactive_clients_count is None
+    ):
         total_usage = 0
         total_clients = 0
+        total_active_clients = 0
+        total_inactive_clients = 0
         for inbound in rows:
             up_value = int(inbound.get("up") or 0)
             down_value = int(inbound.get("down") or 0)
             total_usage += up_value + down_value
-            clients = inbound.get("clientStats")
-            total_clients += len(clients) if isinstance(clients, list) else 0
+            client_count, active_count, inactive_count = _inbound_client_state_counts(inbound)
+            total_clients += client_count
+            total_active_clients += active_count
+            total_inactive_clients += inactive_count
 
     lines = [
         f"{t('admin_inbounds_overview_title', lang)}",
         f"{t('admin_panel_label', lang)}: {panel_name}",
         f"{t('admin_panel_total_usage', lang)}: {human_bytes(total_usage, lang)}",
         f"{t('admin_inbounds_count', lang)}: {to_persian_digits(total_inbounds) if (lang or 'fa') == 'fa' else total_inbounds}",
-        f"{t('admin_clients_count', lang)}: {to_persian_digits(total_clients) if (lang or 'fa') == 'fa' else total_clients}",
+        f"{t('admin_active_clients_count', lang)}: {to_persian_digits(total_active_clients) if (lang or 'fa') == 'fa' else total_active_clients}",
+        f"{t('admin_inactive_clients_count', lang)}: {to_persian_digits(total_inactive_clients) if (lang or 'fa') == 'fa' else total_inactive_clients}",
         "",
     ]
     for offset, inbound in enumerate(rows):
-        clients = inbound.get("clientStats")
-        client_count = len(clients) if isinstance(clients, list) else 0
+        client_count, _, inactive_count = _inbound_client_state_counts(inbound)
         remark = str(inbound.get("remark") or "-")
         up_value = int(inbound.get("up") or 0)
         down_value = int(inbound.get("down") or 0)
@@ -515,12 +669,16 @@ def format_inbounds_overview(
         expiry = inbound.get("expiryTime")
         expiry_epoch = parse_epoch(expiry)
         expiry_text = t("admin_unlimited_reset_value", lang) if not expiry_epoch else to_jalali_datetime(expiry_epoch, "Asia/Tehran")
+        status = t("admin_enabled", lang) if inbound.get("enable") else t("admin_disabled", lang)
         lines.append(
             f"{t('admin_inbound_name', lang)}: {remark}\n"
             f"{t('admin_port', lang)}: {to_persian_digits(inbound.get('port', '-')) if (lang or 'fa') == 'fa' else inbound.get('port', '-')}\n"
-            f"{t('admin_traffic', lang)}: {total} (↑{up},↓{down})\n"
+            f"{t('admin_traffic', lang)}: {total}\n"
+            f"({t('admin_download', lang)}: {down} , {t('admin_upload', lang)}: {up})\n"
             f"{t('admin_expiry', lang)}: {expiry_text}\n"
-            f"{t('admin_clients_count', lang)}: {to_persian_digits(client_count) if (lang or 'fa') == 'fa' else client_count}"
+            f"{t('admin_clients_count', lang)}: {to_persian_digits(client_count) if (lang or 'fa') == 'fa' else client_count}\n"
+            f"{t('admin_inactive_clients_count', lang)}: {to_persian_digits(inactive_count) if (lang or 'fa') == 'fa' else inactive_count}\n"
+            f"{t('admin_status', lang)}: {status}"
         )
         if offset != len(rows) - 1:
             lines.append("")
@@ -547,13 +705,17 @@ def split_inbounds_overview_for_telegram(
         return [format_inbounds_overview(panel_name, rows, lang)]
     total_usage = 0
     total_clients = 0
+    total_active_clients = 0
+    total_inactive_clients = 0
     total_inbounds = len(rows)
     for inbound in rows:
         up_value = int(inbound.get("up") or 0)
         down_value = int(inbound.get("down") or 0)
         total_usage += up_value + down_value
-        clients = inbound.get("clientStats")
-        total_clients += len(clients) if isinstance(clients, list) else 0
+        client_count, active_count, inactive_count = _inbound_client_state_counts(inbound)
+        total_clients += client_count
+        total_active_clients += active_count
+        total_inactive_clients += inactive_count
     chunks: list[str] = []
     for i in range(0, len(rows), chunk_size):
         chunk = rows[i : i + chunk_size]
@@ -564,26 +726,37 @@ def split_inbounds_overview_for_telegram(
                 lang,
                 total_usage_bytes=total_usage,
                 total_clients_count=total_clients,
+                total_active_clients_count=total_active_clients,
+                total_inactive_clients_count=total_inactive_clients,
                 total_inbounds_count=total_inbounds,
             )
         )
     return chunks
 
 
-async def show_inbounds_overview_for_panel(message: Message, services: ServiceContainer, panel_id: int) -> None:
+async def show_inbounds_overview_for_panel(message: Message, services: ServiceContainer, settings: Settings, panel_id: int) -> None:
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
-        await message.answer(t("admin_panel_not_found", None), reply_markup=admin_keyboard())
+        await message.answer(
+            t("admin_panel_not_found", None),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     await message.answer(t("admin_fetching_inbounds_alt", None))
     try:
         rows = await services.panel_service.list_inbounds(panel_id)
     except Exception as exc:
-        await message.answer(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await message.answer(
+            f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     cards = split_inbounds_overview_for_telegram(panel["name"], rows)
     for idx, card in enumerate(cards):
-        await message.answer(card, reply_markup=admin_keyboard() if idx == 0 else None)
+        await message.answer(
+            card,
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services) if idx == 0 else None,
+        )
 
 
 def parse_client_callback(data: str, prefix: str) -> tuple[int, int, str]:
@@ -690,43 +863,62 @@ async def refresh_panels_message(callback: CallbackQuery, services: ServiceConta
     await callback.message.edit_text(panels_list_text(), reply_markup=panels_glass_keyboard(panels))
 
 
-async def show_inbounds_for_panel(message: Message, services: ServiceContainer, panel_id: int) -> None:
+async def show_inbounds_for_panel(message: Message, services: ServiceContainer, settings: Settings, panel_id: int) -> None:
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
-        await message.answer(t("admin_panel_not_found", None), reply_markup=admin_keyboard())
+        await message.answer(
+            t("admin_panel_not_found", None),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     await message.answer(t("admin_fetching_inbounds_alt", None))
     try:
         rows = await services.panel_service.list_inbounds(panel_id)
     except Exception as exc:
-        await message.answer(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await message.answer(
+            f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     cards = split_inbounds_for_telegram(panel["name"], rows)
     for idx, card in enumerate(cards):
-        await message.answer(card, reply_markup=admin_keyboard() if idx == 0 else None)
+        await message.answer(
+            card,
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services) if idx == 0 else None,
+        )
 
 
 async def show_users_inbounds_for_panel_message(
     message: Message,
     services: ServiceContainer,
+    settings: Settings,
     panel_id: int,
     *,
     allowed_inbound_ids: set[int] | None = None,
 ) -> None:
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
-        await message.answer(t("admin_panel_not_found", None), reply_markup=admin_keyboard())
+        await message.answer(
+            t("admin_panel_not_found", None),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     await message.answer(t("admin_fetching_inbounds", None))
     try:
         inbounds = await services.panel_service.list_inbounds(panel_id)
     except Exception as exc:
-        await message.answer(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await message.answer(
+            f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     if allowed_inbound_ids is not None:
         inbounds = [item for item in inbounds if int(item.get("id") or 0) in allowed_inbound_ids]
     if not inbounds:
-        await message.answer(t("admin_no_inbound_for_panel", None), reply_markup=admin_keyboard())
+        await message.answer(
+            t("admin_no_inbound_for_panel", None),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     await message.answer(
         t("admin_panel_and_pick_inbound", None, name=panel["name"]),
@@ -766,6 +958,7 @@ async def show_users_inbounds_for_panel_callback(
 async def show_online_clients_for_panel_message(
     message: Message,
     services: ServiceContainer,
+    settings: Settings,
     panel_id: int,
     *,
     owner_admin_user_id: int | None = None,
@@ -773,7 +966,10 @@ async def show_online_clients_for_panel_message(
 ) -> None:
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
-        await message.answer(t("admin_panel_not_found", None), reply_markup=admin_keyboard())
+        await message.answer(
+            t("admin_panel_not_found", None),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     await message.answer(t("admin_fetching_online", None))
     try:
@@ -783,10 +979,16 @@ async def show_online_clients_for_panel_message(
             allowed_inbound_ids=allowed_inbound_ids,
         )
     except Exception as exc:
-        await message.answer(f"{t('admin_error_fetch_online', None)}:\n{exc}", reply_markup=admin_keyboard())
+        await message.answer(
+            f"{t('admin_error_fetch_online', None)}:\n{exc}",
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     if not clients:
-        await message.answer(t("admin_no_online", None, name=panel["name"]), reply_markup=admin_keyboard())
+        await message.answer(
+            t("admin_no_online", None, name=panel["name"]),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
         return
     await message.answer(
         t("admin_online_header", None, name=panel["name"], count=len(clients)),

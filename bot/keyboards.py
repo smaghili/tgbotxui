@@ -22,23 +22,18 @@ def admin_keyboard(mode: str = "full", lang: str | None = None) -> ReplyKeyboard
     lang = lang or get_current_lang()
     if mode == "limited":
         rows = [
-            [KeyboardButton(text=btn("btn_list_users", lang)), KeyboardButton(text=btn("btn_list_inbounds", lang))],
-            [KeyboardButton(text=btn("btn_online_users", lang)), KeyboardButton(text=btn("btn_last_online_users", lang))],
-            [KeyboardButton(text=btn("btn_disabled_users", lang)), KeyboardButton(text=btn("btn_inbounds_overview", lang))],
-            [KeyboardButton(text=btn("btn_create_user", lang))],
-            [KeyboardButton(text=btn("btn_edit_config", lang))],
-            [KeyboardButton(text=btn("btn_bulk_operations", lang))],
+            [KeyboardButton(text=btn("btn_list_users", lang)), KeyboardButton(text=btn("btn_inbounds_overview", lang))],
+            [KeyboardButton(text=btn("btn_online_users", lang)), KeyboardButton(text=btn("btn_disabled_users", lang))],
+            [KeyboardButton(text=btn("btn_edit_config", lang)), KeyboardButton(text=btn("btn_create_user", lang))],
             [KeyboardButton(text=btn("btn_back", lang))],
         ]
     else:
         rows = [
-            [KeyboardButton(text=btn("btn_add_panel", lang)), KeyboardButton(text=btn("btn_list_panels", lang))],
-            [KeyboardButton(text=btn("btn_list_inbounds", lang)), KeyboardButton(text=btn("btn_list_users", lang))],
-            [KeyboardButton(text=btn("btn_online_users", lang)), KeyboardButton(text=btn("btn_last_online_users", lang))],
-            [KeyboardButton(text=btn("btn_disabled_users", lang)), KeyboardButton(text=btn("btn_inbounds_overview", lang))],
-            [KeyboardButton(text=btn("btn_create_user", lang)), KeyboardButton(text=btn("btn_edit_config", lang))],
-            [KeyboardButton(text=btn("btn_manage_admins", lang))],
-            [KeyboardButton(text=btn("btn_cleanup_settings", lang)), KeyboardButton(text=btn("btn_bulk_operations", lang))],
+            [KeyboardButton(text=btn("btn_list_panels", lang)), KeyboardButton(text=btn("btn_add_panel", lang))],
+            [KeyboardButton(text=btn("btn_list_users", lang)), KeyboardButton(text=btn("btn_inbounds_overview", lang))],
+            [KeyboardButton(text=btn("btn_online_users", lang)), KeyboardButton(text=btn("btn_disabled_users", lang))],
+            [KeyboardButton(text=btn("btn_edit_config", lang)), KeyboardButton(text=btn("btn_create_user", lang))],
+            [KeyboardButton(text=btn("btn_manage_admins", lang)), KeyboardButton(text=btn("btn_cleanup_settings", lang))],
             [KeyboardButton(text=btn("btn_back", lang))],
         ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=False)

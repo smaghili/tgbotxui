@@ -7,11 +7,13 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
-from bot.keyboards import admin_keyboard, cancel_only_keyboard, main_keyboard
+from bot.keyboards import cancel_only_keyboard, main_keyboard
 from bot.services.container import ServiceContainer
 from bot.states import AddPanelStates, AdminSettingsStates, InboundsListStates
 
 from .admin_shared import (
+    answer_with_admin_menu,
+    answer_with_cancel,
     admin_keyboard_for_user,
     inbounds_panel_select_keyboard,
     panel_delete_confirm_keyboard,
@@ -47,10 +49,7 @@ async def handle_cancel(message: Message, state: FSMContext, settings: Settings,
 async def handle_management(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    await message.answer(
-        t("menu_management", None),
-        reply_markup=await admin_keyboard_for_user(user_id=message.from_user.id, settings=settings, services=services),
-    )
+    await answer_with_admin_menu(message, t("menu_management", None), settings=settings, services=services)
 
 
 @router.message(F.text.in_(button_variants("btn_back")))
@@ -70,7 +69,7 @@ async def start_cleanup_settings(message: Message, state: FSMContext, settings: 
         str(settings.depleted_client_delete_after_hours),
     )
     await state.set_state(AdminSettingsStates.waiting_depleted_cleanup_hours)
-    await message.answer(t("admin_cleanup_hours_prompt", None, hours=current), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(message, t("admin_cleanup_hours_prompt", None, hours=current))
 
 
 @router.message(AdminSettingsStates.waiting_depleted_cleanup_hours)
@@ -82,17 +81,15 @@ async def save_cleanup_hours(message: Message, state: FSMContext, settings: Sett
         if hours <= 0:
             raise ValueError
     except ValueError:
-        await message.answer(t("admin_invalid_positive_number", None), reply_markup=cancel_only_keyboard())
+        await answer_with_cancel(message, t("admin_invalid_positive_number", None))
         return
     await services.db.set_app_setting("depleted_client_delete_after_hours", str(hours))
     await state.clear()
-    await message.answer(
+    await answer_with_admin_menu(
+        message,
         t("admin_cleanup_hours_saved", None, hours=hours),
-        reply_markup=await admin_keyboard_for_user(
-            user_id=message.from_user.id,
-            settings=settings,
-            services=services,
-        ),
+        settings=settings,
+        services=services,
     )
 
 
@@ -101,7 +98,7 @@ async def start_add_panel(message: Message, state: FSMContext, settings: Setting
     if await reject_if_not_admin(message, settings):
         return
     await state.set_state(AddPanelStates.waiting_name)
-    await message.answer(t("panel_add_enter_name", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(message, t("panel_add_enter_name", None))
 
 
 @router.message(AddPanelStates.waiting_name)
@@ -112,21 +109,21 @@ async def add_panel_get_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(panel_name=panel_name)
     await state.set_state(AddPanelStates.waiting_login_url)
-    await message.answer(t("panel_add_enter_login", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(message, t("panel_add_enter_login", None))
 
 
 @router.message(AddPanelStates.waiting_login_url)
 async def add_panel_get_url(message: Message, state: FSMContext) -> None:
     await state.update_data(login_url=(message.text or "").strip())
     await state.set_state(AddPanelStates.waiting_username)
-    await message.answer(t("panel_add_enter_user", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(message, t("panel_add_enter_user", None))
 
 
 @router.message(AddPanelStates.waiting_username)
 async def add_panel_get_username(message: Message, state: FSMContext) -> None:
     await state.update_data(username=(message.text or "").strip())
     await state.set_state(AddPanelStates.waiting_password)
-    await message.answer(t("panel_add_enter_pass", None), reply_markup=cancel_only_keyboard())
+    await answer_with_cancel(message, t("panel_add_enter_pass", None))
 
 
 @router.message(AddPanelStates.waiting_password)
@@ -141,6 +138,7 @@ async def _finalize_add_panel(
     origin_message: Message,
     actor_user_id: int,
     state: FSMContext,
+    settings: Settings,
     services: ServiceContainer,
     two_factor: str | None,
 ) -> None:
@@ -156,25 +154,40 @@ async def _finalize_add_panel(
         two_factor_code=two_factor,
     )
     if result.status == "invalid_credentials":
-        await origin_message.answer(t("panel_add_invalid_credentials", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(origin_message, t("panel_add_invalid_credentials", None), settings=settings, services=services)
         return
     if result.status == "rate_limited":
-        await origin_message.answer(t("panel_add_rate_limit", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(origin_message, t("panel_add_rate_limit", None), settings=settings, services=services)
         return
     if result.status == "validation_error":
-        await origin_message.answer(t("panel_add_validation", None, error=result.error), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            origin_message,
+            t("panel_add_validation", None, error=result.error),
+            settings=settings,
+            services=services,
+        )
         return
     if result.status == "xui_error":
-        await origin_message.answer(t("panel_add_xui_error", None, error=result.error), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            origin_message,
+            t("panel_add_xui_error", None, error=result.error),
+            settings=settings,
+            services=services,
+        )
         return
     if result.status == "unexpected_error":
-        await origin_message.answer(t("panel_add_unexpected", None, error=result.error), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(
+            origin_message,
+            t("panel_add_unexpected", None, error=result.error),
+            settings=settings,
+            services=services,
+        )
         return
-    await origin_message.answer(t("panel_add_ok", None), reply_markup=admin_keyboard())
+    await answer_with_admin_menu(origin_message, t("panel_add_ok", None), settings=settings, services=services)
 
 
 @router.callback_query(AddPanelStates.waiting_two_factor_choice, F.data == "twofa_no")
-async def add_panel_two_factor_no(callback: CallbackQuery, state: FSMContext, services: ServiceContainer) -> None:
+async def add_panel_two_factor_no(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     await callback.answer()
     if callback.message is None:
         return
@@ -182,6 +195,7 @@ async def add_panel_two_factor_no(callback: CallbackQuery, state: FSMContext, se
         origin_message=callback.message,
         actor_user_id=callback.from_user.id,
         state=state,
+        settings=settings,
         services=services,
         two_factor=None,
     )
@@ -192,11 +206,11 @@ async def add_panel_two_factor_yes(callback: CallbackQuery, state: FSMContext) -
     await callback.answer()
     await state.set_state(AddPanelStates.waiting_two_factor_code)
     if callback.message is not None:
-        await callback.message.answer(t("panel_add_enter_twofa", None), reply_markup=cancel_only_keyboard())
+        await answer_with_cancel(callback.message, t("panel_add_enter_twofa", None))
 
 
 @router.message(AddPanelStates.waiting_two_factor_code)
-async def add_panel_get_two_factor_code(message: Message, state: FSMContext, services: ServiceContainer) -> None:
+async def add_panel_get_two_factor_code(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     code = (message.text or "").strip()
     if not code:
         await message.answer(t("panel_add_twofa_empty", None))
@@ -205,6 +219,7 @@ async def add_panel_get_two_factor_code(message: Message, state: FSMContext, ser
         origin_message=message,
         actor_user_id=message.from_user.id,
         state=state,
+        settings=settings,
         services=services,
         two_factor=code,
     )
@@ -216,7 +231,7 @@ async def list_panels(message: Message, settings: Settings, services: ServiceCon
         return
     panels = await services.panel_service.list_panels()
     if not panels:
-        await message.answer(t("bind_no_panel", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
     await message.answer(panels_list_text(), reply_markup=panels_glass_keyboard(panels))
 
@@ -306,11 +321,11 @@ async def start_inbounds_list(message: Message, state: FSMContext, settings: Set
     except ValueError:
         panel_id = None
     if panel_id is not None:
-        await show_inbounds_for_panel(message, services, panel_id)
+        await show_inbounds_for_panel(message, services, settings, panel_id)
         return
     panels = await services.panel_service.list_panels()
     if not panels:
-        await message.answer(t("bind_no_panel", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
     await state.set_state(InboundsListStates.waiting_panel_select)
     await message.answer(
@@ -328,11 +343,11 @@ async def start_inbounds_overview(message: Message, state: FSMContext, settings:
     except ValueError:
         panel_id = None
     if panel_id is not None:
-        await show_inbounds_overview_for_panel(message, services, panel_id)
+        await show_inbounds_overview_for_panel(message, services, settings, panel_id)
         return
     panels = await services.panel_service.list_panels()
     if not panels:
-        await message.answer(t("bind_no_panel", None), reply_markup=admin_keyboard())
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
     await state.set_state(InboundsListStates.waiting_overview_panel_select)
     await message.answer(
@@ -365,7 +380,7 @@ async def inbounds_pick_panel(
         return
     await state.clear()
     await callback.answer()
-    await show_inbounds_for_panel(callback.message, services, panel_id)
+    await show_inbounds_for_panel(callback.message, services, settings, panel_id)
 
 
 @router.callback_query(InboundsListStates.waiting_overview_panel_select, F.data.startswith("inbounds_panel_pick:"))
@@ -392,7 +407,7 @@ async def inbounds_overview_pick_panel(
         return
     await state.clear()
     await callback.answer()
-    await show_inbounds_overview_for_panel(callback.message, services, panel_id)
+    await show_inbounds_overview_for_panel(callback.message, services, settings, panel_id)
 
 
 @router.message(InboundsListStates.waiting_panel_select)
