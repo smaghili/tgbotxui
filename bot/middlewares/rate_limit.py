@@ -38,6 +38,9 @@ class AdminRateLimitMiddleware(BaseMiddleware):
             *button_variants("btn_search_user"),
             *button_variants("btn_disabled_users"),
             *button_variants("btn_last_online_users"),
+            *button_variants("btn_create_user"),
+            *button_variants("btn_edit_config"),
+            *button_variants("btn_manage_admins"),
             "/bind",
             "/sync_all",
         }

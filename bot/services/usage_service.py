@@ -1,29 +1,494 @@
 ﻿from __future__ import annotations
 
 import logging
+import time
 from typing import List
+
+from aiogram import Bot
 
 from bot.db import Database
 from bot.i18n import t
 from bot.metrics import PANEL_COUNT, SYNC_RUNS, USER_SERVICE_COUNT, USER_STATUS_REQUESTS
 from bot.services.panel_service import PanelService
-from bot.utils import format_gb, relative_remaining_time, status_emoji, to_local_date
+from bot.utils import format_bytes, format_gb, relative_remaining_time, status_emoji, to_local_date
 
 logger = logging.getLogger(__name__)
 
 
 class UsageService:
-    def __init__(self, db: Database, panel_service: PanelService, timezone: str) -> None:
+    def __init__(
+        self,
+        db: Database,
+        panel_service: PanelService,
+        timezone: str,
+        root_admin_ids: set[int] | None = None,
+        depleted_delete_after_hours: int = 48,
+    ) -> None:
         self.db = db
         self.panel_service = panel_service
         self.timezone = timezone
+        self.root_admin_ids = set(root_admin_ids or set())
+        self.depleted_delete_after_hours = depleted_delete_after_hours
+        self.bot: Bot | None = None
+
+    def attach_bot(self, bot: Bot | None) -> None:
+        self.bot = bot
+
+    @staticmethod
+    def _remaining_bytes(total_bytes: int, used_bytes: int) -> int | None:
+        if total_bytes <= 0:
+            return None
+        return max(total_bytes - used_bytes, 0)
+
+    @staticmethod
+    def _user_traffic_alert_state(*, total_bytes: int, used_bytes: int) -> str:
+        remaining = UsageService._remaining_bytes(total_bytes, used_bytes)
+        if remaining is None:
+            return "normal"
+        if remaining <= 0:
+            return "depleted"
+        if remaining <= 100 * 1024 * 1024:
+            return "lt100"
+        if remaining <= 200 * 1024 * 1024:
+            return "lt200"
+        return "normal"
+
+    @staticmethod
+    def _delegated_alert_state(*, total_bytes: int, used_bytes: int) -> str:
+        if total_bytes <= 0:
+            return "normal"
+        remaining = max(total_bytes - used_bytes, 0)
+        if remaining <= 0:
+            return "depleted"
+        if remaining <= 100 * 1024 * 1024:
+            return "low"
+        return "normal"
+
+    @staticmethod
+    def _delegated_expiry_alert_state(*, expire_at: int | None) -> str:
+        if not expire_at:
+            return "normal"
+        remaining_seconds = int(expire_at) - int(time.time())
+        if remaining_seconds <= 0:
+            return "normal"
+        if remaining_seconds <= 86400:
+            return "low"
+        return "normal"
+
+    async def _send_chat_message(self, chat_id: int, text: str) -> bool:
+        if self.bot is None:
+            return False
+        try:
+            await self.bot.send_message(chat_id, text)
+        except Exception:
+            logger.exception("failed to send telegram message", extra={"chat_id": chat_id})
+            return False
+        return True
+
+    async def _manager_chat_ids_for_service(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int | None,
+        client_uuid: str | None,
+    ) -> list[int]:
+        if inbound_id and client_uuid:
+            try:
+                detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+            except Exception:
+                logger.exception(
+                    "failed to resolve service owner for admin notification",
+                    extra={"panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
+                )
+            else:
+                comment = str(detail.get("comment") or "").strip()
+                if comment.isdigit():
+                    delegated_id = int(comment)
+                    delegated = await self.db.get_delegated_admin_by_user_id(delegated_id)
+                    if delegated is not None:
+                        return [delegated_id]
+        return sorted(self.root_admin_ids)
+
+    async def _service_location_labels(self, panel_id: int, inbound_id: int | None) -> tuple[str, str]:
+        panel_label = str(panel_id)
+        inbound_label = str(inbound_id) if inbound_id is not None else "-"
+        try:
+            panel = await self.panel_service.get_panel(panel_id)
+        except Exception:
+            panel = None
+        if panel is not None:
+            panel_label = str(panel.get("name") or panel_id)
+        if inbound_id is not None:
+            try:
+                inbounds = await self.panel_service.list_inbounds(panel_id)
+            except Exception:
+                inbounds = []
+            target = next((row for row in inbounds if int(row.get("id") or 0) == inbound_id), None)
+            if target is not None:
+                inbound_label = str(target.get("remark") or f"inbound-{inbound_id}")
+        return panel_label, inbound_label
+
+    async def _notify_user_about_threshold(
+        self,
+        *,
+        telegram_user_id: int,
+        service_name: str,
+        remaining_bytes: int,
+        threshold_mb: int,
+    ) -> None:
+        lang = await self.db.get_user_language(telegram_user_id)
+        if lang == "en":
+            text = (
+                "Service warning:\n"
+                f"Your service {service_name} is below {threshold_mb} MB remaining.\n"
+                f"Remaining traffic: {format_bytes(remaining_bytes, lang)}"
+            )
+        else:
+            text = (
+                "هشدار سرویس:\n"
+                f"حجم باقی مانده سرویس {service_name} به کمتر از {threshold_mb} مگابایت رسیده است.\n"
+                f"حجم باقی مانده: {format_bytes(remaining_bytes, lang)}"
+            )
+        await self._send_chat_message(telegram_user_id, text)
+
+    async def _notify_service_depleted(
+        self,
+        *,
+        service_row: dict,
+        service_name: str,
+    ) -> None:
+        user_id = int(service_row["telegram_user_id"])
+        lang = await self.db.get_user_language(user_id)
+        if lang == "en":
+            user_text = (
+                "Service warning:\n"
+                f"Your service {service_name} has run out of traffic."
+            )
+        else:
+            user_text = (
+                "هشدار سرویس:\n"
+                f"سرویس {service_name} به پایان رسیده و حجم آن تمام شده است."
+            )
+        await self._send_chat_message(user_id, user_text)
+
+        panel_label, inbound_label = await self._service_location_labels(
+            int(service_row["panel_id"]),
+            int(service_row["inbound_id"]) if service_row.get("inbound_id") else None,
+        )
+        manager_text = (
+            "هشدار اتمام سرویس:\n"
+            f"کاربر: {service_row.get('client_email')}\n"
+            f"سرویس: {service_name}\n"
+            f"پنل: {panel_label}\n"
+            f"اینباند: {inbound_label}\n"
+            "وضعیت: حجم سرویس تمام شده است."
+        )
+        manager_chat_ids = await self._manager_chat_ids_for_service(
+            panel_id=int(service_row["panel_id"]),
+            inbound_id=int(service_row["inbound_id"]) if service_row.get("inbound_id") else None,
+            client_uuid=str(service_row.get("client_id") or "").strip() or None,
+        )
+        for chat_id in manager_chat_ids:
+            await self._send_chat_message(chat_id, manager_text)
+
+    async def _notify_service_expired(
+        self,
+        *,
+        service_row: dict,
+        service_name: str,
+    ) -> None:
+        user_id = int(service_row["telegram_user_id"])
+        lang = await self.db.get_user_language(user_id)
+        if lang == "en":
+            user_text = (
+                "Service warning:\n"
+                f"Your service {service_name} has expired."
+            )
+        else:
+            user_text = (
+                "هشدار سرویس:\n"
+                f"زمان سرویس {service_name} به پایان رسیده است."
+            )
+        await self._send_chat_message(user_id, user_text)
+
+        panel_label, inbound_label = await self._service_location_labels(
+            int(service_row["panel_id"]),
+            int(service_row["inbound_id"]) if service_row.get("inbound_id") else None,
+        )
+        manager_text = (
+            "هشدار اتمام سرویس:\n"
+            f"کاربر: {service_row.get('client_email')}\n"
+            f"سرویس: {service_name}\n"
+            f"پنل: {panel_label}\n"
+            f"اینباند: {inbound_label}\n"
+            "وضعیت: تاریخ انقضای سرویس تمام شده است."
+        )
+        manager_chat_ids = await self._manager_chat_ids_for_service(
+            panel_id=int(service_row["panel_id"]),
+            inbound_id=int(service_row["inbound_id"]) if service_row.get("inbound_id") else None,
+            client_uuid=str(service_row.get("client_id") or "").strip() or None,
+        )
+        for chat_id in manager_chat_ids:
+            await self._send_chat_message(chat_id, manager_text)
+
+    async def _notify_service_state_changes(self, previous: dict, current: dict) -> None:
+        service_name = str(current.get("service_name") or previous.get("service_name") or previous.get("client_email") or "service")
+        previous_total = int(previous.get("total_bytes") or 0)
+        previous_used = int(previous.get("used_bytes") or 0)
+        current_total = int(current.get("total_bytes") or 0)
+        current_used = int(current.get("used_bytes") or 0)
+        previous_remaining = self._remaining_bytes(previous_total, previous_used)
+        current_remaining = self._remaining_bytes(current_total, current_used)
+        previous_state = self._user_traffic_alert_state(total_bytes=previous_total, used_bytes=previous_used)
+        current_state = self._user_traffic_alert_state(total_bytes=current_total, used_bytes=current_used)
+        previous_status = str(previous.get("status") or "")
+        current_status = str(current.get("status") or "")
+
+        if current_status == "expired":
+            if previous_status != "expired":
+                await self._notify_service_expired(service_row=current, service_name=service_name)
+            return
+
+        if current_state == "depleted" or current_status == "depleted":
+            if previous_state != "depleted" and previous_status != "depleted":
+                await self._notify_service_depleted(service_row=current, service_name=service_name)
+            return
+
+        if previous_remaining is None or current_remaining is None:
+            return
+
+        if previous_remaining > 200 * 1024 * 1024 and current_remaining <= 200 * 1024 * 1024:
+            await self._notify_user_about_threshold(
+                telegram_user_id=int(current["telegram_user_id"]),
+                service_name=service_name,
+                remaining_bytes=current_remaining,
+                threshold_mb=200,
+            )
+        if previous_remaining > 100 * 1024 * 1024 and current_remaining <= 100 * 1024 * 1024:
+            await self._notify_user_about_threshold(
+                telegram_user_id=int(current["telegram_user_id"]),
+                service_name=service_name,
+                remaining_bytes=current_remaining,
+                threshold_mb=100,
+            )
+
+    async def _sync_service_row(self, service_row: dict) -> None:
+        usage = await self.panel_service.fetch_client_usage(service_row["panel_id"], service_row["client_email"])
+        await self.db.update_user_service_stats(
+            service_id=service_row["id"],
+            total_bytes=usage["total_bytes"],
+            used_bytes=usage["used_bytes"],
+            expire_at=usage["expire_at"],
+            status=usage["status"],
+            service_name=service_row.get("service_name") or usage["service_name"],
+            client_id=usage.get("client_id"),
+            inbound_id=usage.get("inbound_id"),
+            last_synced_at=usage["synced_at"],
+        )
+        await self.db.add_usage_snapshot(
+            user_service_id=service_row["id"],
+            used_bytes=usage["used_bytes"],
+            total_bytes=usage["total_bytes"],
+            remaining_bytes=usage["remaining_bytes"],
+            status=usage["status"],
+            synced_at=usage["synced_at"],
+        )
+        current_row = {
+            **service_row,
+            "service_name": service_row.get("service_name") or usage["service_name"],
+            "client_id": usage.get("client_id"),
+            "inbound_id": usage.get("inbound_id"),
+            "total_bytes": usage["total_bytes"],
+            "used_bytes": usage["used_bytes"],
+            "expire_at": usage["expire_at"],
+            "status": usage["status"],
+            "last_synced_at": usage["synced_at"],
+        }
+        await self._notify_service_state_changes(service_row, current_row)
+
+    async def notify_user_traffic_increased(
+        self,
+        *,
+        panel_id: int,
+        client_email: str,
+        added_bytes: int,
+        new_total_bytes: int,
+    ) -> None:
+        if added_bytes <= 0:
+            return
+        rows = await self.db.get_user_services_by_panel_email(panel_id, client_email)
+        notified_user_ids: set[int] = set()
+        for row in rows:
+            user_id = int(row["telegram_user_id"])
+            if user_id in notified_user_ids:
+                continue
+            notified_user_ids.add(user_id)
+            lang = await self.db.get_user_language(user_id)
+            service_name = str(row.get("service_name") or row.get("client_email") or client_email)
+            if lang == "en":
+                text = (
+                    "Service update:\n"
+                    f"{format_bytes(added_bytes, lang)} has been added to your service {service_name} by the admin.\n"
+                    f"New total traffic: {format_gb(new_total_bytes, lang)}"
+                )
+            else:
+                text = (
+                    "اطلاع سرویس:\n"
+                    f"{format_bytes(added_bytes, lang)} توسط ادمین به سرویس {service_name} اضافه شد.\n"
+                    f"حجم جدید سرویس: {format_gb(new_total_bytes, lang)}"
+                )
+            await self._send_chat_message(user_id, text)
+
+    async def notify_user_expiry_extended(
+        self,
+        *,
+        panel_id: int,
+        client_email: str,
+        added_days: int,
+        new_expiry: int | None,
+    ) -> None:
+        if added_days <= 0:
+            return
+        rows = await self.db.get_user_services_by_panel_email(panel_id, client_email)
+        notified_user_ids: set[int] = set()
+        for row in rows:
+            user_id = int(row["telegram_user_id"])
+            if user_id in notified_user_ids:
+                continue
+            notified_user_ids.add(user_id)
+            lang = await self.db.get_user_language(user_id)
+            service_name = str(row.get("service_name") or row.get("client_email") or client_email)
+            if lang == "en":
+                text = (
+                    "Service update:\n"
+                    f"{added_days} day(s) has been added to your service {service_name} by the admin.\n"
+                    f"New expiry date: {to_local_date(new_expiry, self.timezone, lang)}"
+                )
+            else:
+                text = (
+                    "اطلاع سرویس:\n"
+                    f"{added_days} روز توسط ادمین به سرویس {service_name} اضافه شد.\n"
+                    f"تاریخ جدید انقضا: {to_local_date(new_expiry, self.timezone, lang)}"
+                )
+            await self._send_chat_message(user_id, text)
+
+    async def _scan_delegated_admin_alerts(self) -> None:
+        if self.bot is None:
+            return
+        access_rows = await self.db.list_delegated_admin_access_rows()
+        if not access_rows:
+            return
+        inbound_names_cache: dict[tuple[int, int], str] = {}
+        panel_names_cache: dict[int, str] = {}
+
+        for access in access_rows:
+            admin_user_id = int(access["telegram_user_id"])
+            panel_id = int(access["panel_id"])
+            inbound_id = int(access["inbound_id"])
+            panel_name = str(access.get("panel_name") or panel_id)
+            panel_names_cache[panel_id] = panel_name
+            try:
+                clients = await self.panel_service.list_inbound_clients(
+                    panel_id,
+                    inbound_id,
+                    owner_admin_user_id=admin_user_id,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to list delegated admin inbound clients",
+                    extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id},
+                )
+                continue
+
+            if (panel_id, inbound_id) not in inbound_names_cache:
+                try:
+                    inbounds = await self.panel_service.list_inbounds(panel_id)
+                    target = next((row for row in inbounds if int(row.get("id") or 0) == inbound_id), None)
+                    inbound_names_cache[(panel_id, inbound_id)] = str(target.get("remark") or f"inbound-{inbound_id}") if target else f"inbound-{inbound_id}"
+                except Exception:
+                    inbound_names_cache[(panel_id, inbound_id)] = f"inbound-{inbound_id}"
+            inbound_name = inbound_names_cache[(panel_id, inbound_id)]
+
+            for client in clients:
+                client_uuid = str(client.get("uuid") or "").strip()
+                if not client_uuid:
+                    continue
+                try:
+                    detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+                except Exception:
+                    logger.exception(
+                        "failed to fetch delegated client detail",
+                        extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
+                    )
+                    continue
+                total_bytes = int(detail.get("total") or 0)
+                used_bytes = int(detail.get("used") or 0)
+                traffic_state = self._delegated_alert_state(total_bytes=total_bytes, used_bytes=used_bytes)
+                expiry_state = self._delegated_expiry_alert_state(expire_at=detail.get("expiry"))
+                old_traffic_state, old_expiry_state = await self.db.get_delegated_admin_client_alert_states(
+                    delegated_admin_user_id=admin_user_id,
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                )
+                should_notify_traffic = traffic_state == "low" and traffic_state != old_traffic_state
+                should_notify_expiry = expiry_state == "low" and expiry_state != old_expiry_state
+                notified = False
+
+                if should_notify_traffic:
+                    remaining = max(total_bytes - used_bytes, 0)
+                    text = (
+                        "هشدار سرویس:\n"
+                        f"کاربر {detail.get('email')} کمتر از 100 مگابایت حجم دارد.\n"
+                        f"پنل: {panel_name}\n"
+                        f"اینباند: {inbound_name}\n"
+                        f"حجم باقی‌مانده: {format_gb(remaining, 'fa')}"
+                    )
+                    try:
+                        await self.bot.send_message(admin_user_id, text)
+                    except Exception:
+                        logger.exception(
+                            "failed to send delegated admin alert",
+                            extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
+                        )
+                    else:
+                        notified = True
+
+                if should_notify_expiry:
+                    text = (
+                        "هشدار انقضا:\n"
+                        f"کمتر از 1 روز تا پایان کاربر {detail.get('email')} باقی مانده است.\n"
+                        f"پنل: {panel_name}\n"
+                        f"اینباند: {inbound_name}\n"
+                        f"تاریخ پایان: {to_local_date(detail.get('expiry'), self.timezone, 'fa')}\n"
+                        f"زمان باقی‌مانده: {relative_remaining_time(detail.get('expiry'), self.timezone, 'fa')}"
+                    )
+                    try:
+                        await self.bot.send_message(admin_user_id, text)
+                    except Exception:
+                        logger.exception(
+                            "failed to send delegated admin expiry alert",
+                            extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
+                        )
+                    else:
+                        notified = True
+
+                await self.db.upsert_delegated_admin_client_alert_states(
+                    delegated_admin_user_id=admin_user_id,
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                    traffic_alert_state=traffic_state,
+                    expiry_alert_state=expiry_state,
+                    mark_notified=notified,
+                )
 
     async def refresh_user_services(self, telegram_user_id: int) -> None:
         services = await self.db.get_user_services(telegram_user_id)
         had_error = False
         for row in services:
             try:
-                await self.panel_service.sync_single_service(row)
+                await self._sync_service_row(row)
             except Exception:
                 had_error = True
                 logger.exception("failed to sync service", extra={"service_id": row.get("id")})
@@ -34,12 +499,36 @@ class UsageService:
         had_error = False
         for row in services:
             try:
-                await self.panel_service.sync_single_service(row)
+                await self._sync_service_row(row)
             except Exception:
                 had_error = True
                 logger.exception("failed to sync service", extra={"service_id": row.get("id")})
+        try:
+            await self._scan_delegated_admin_alerts()
+        except Exception:
+            had_error = True
+            logger.exception("failed to scan delegated admin alerts")
+        try:
+            await self.cleanup_depleted_clients()
+        except Exception:
+            had_error = True
+            logger.exception("failed to cleanup depleted clients")
         SYNC_RUNS.labels(result="error" if had_error else "ok").inc()
         await self.refresh_cardinality_metrics()
+
+    async def cleanup_depleted_clients(self) -> None:
+        raw_hours = await self.db.get_app_setting(
+            "depleted_client_delete_after_hours",
+            str(self.depleted_delete_after_hours),
+        )
+        try:
+            hours = int(raw_hours or self.depleted_delete_after_hours)
+            if hours <= 0:
+                raise ValueError
+        except ValueError:
+            hours = self.depleted_delete_after_hours
+        result = await self.panel_service.cleanup_depleted_clients(hours)
+        logger.info("depleted client cleanup finished", extra={"hours": hours, **result})
 
     async def refresh_cardinality_metrics(self) -> None:
         PANEL_COUNT.set(await self.db.count_panels())

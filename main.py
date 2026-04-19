@@ -4,9 +4,7 @@ import asyncio
 import logging
 from contextlib import suppress
 
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram import Dispatcher
 from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -14,13 +12,17 @@ from bot.config import Settings
 from bot.db import Database
 from bot.handlers import admin, common
 from bot.middlewares.language_context import LanguageContextMiddleware
+from bot.middlewares.menu_state_reset import MenuStateResetMiddleware
 from bot.metrics import create_metrics_app
 from bot.middlewares.rate_limit import AdminRateLimitMiddleware
 from bot.observability import configure_logging
+from bot.services.access_service import AccessService
 from bot.services.admin_panel_service import AdminPanelService
+from bot.services.admin_provisioning_service import AdminProvisioningService
 from bot.services.container import ServiceContainer
 from bot.services.crypto import CryptoService
 from bot.services.panel_service import PanelService
+from bot.services.telegram_runtime import create_bot_with_failover
 from bot.services.usage_service import UsageService
 from bot.services.xui_client import XUIClient
 
@@ -34,19 +36,39 @@ async def run(settings: Settings) -> None:
 
     crypto = CryptoService(settings.encryption_key)
     xui = XUIClient(timeout_seconds=settings.request_timeout_seconds)
-    panel_service = PanelService(db=db, crypto=crypto, xui=xui)
+    panel_service = PanelService(
+        db=db,
+        crypto=crypto,
+        xui=xui,
+        sub_url_strip_port_rules=settings.sub_url_strip_port_rules,
+        sub_url_base_overrides=settings.sub_url_base_overrides,
+    )
     admin_panel_service = AdminPanelService(db=db, panel_service=panel_service)
-    usage_service = UsageService(db=db, panel_service=panel_service, timezone=settings.timezone)
+    access_service = AccessService(db=db)
+    admin_provisioning_service = AdminProvisioningService(
+        db=db,
+        panel_service=panel_service,
+        access_service=access_service,
+    )
+    usage_service = UsageService(
+        db=db,
+        panel_service=panel_service,
+        timezone=settings.timezone,
+        root_admin_ids=settings.admin_ids,
+        depleted_delete_after_hours=settings.depleted_client_delete_after_hours,
+    )
     services = ServiceContainer(
         db=db,
         panel_service=panel_service,
         admin_panel_service=admin_panel_service,
+        access_service=access_service,
+        admin_provisioning_service=admin_provisioning_service,
         usage_service=usage_service,
     )
 
-    bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.message.middleware(LanguageContextMiddleware())
+    dp.message.middleware(MenuStateResetMiddleware())
     dp.callback_query.middleware(LanguageContextMiddleware())
     dp.message.middleware(AdminRateLimitMiddleware(settings))
     dp.include_router(common.router)
@@ -75,16 +97,36 @@ async def run(settings: Settings) -> None:
 
     await usage_service.refresh_cardinality_metrics()
     logger.info("bot is running")
+    bot = None
+    proxy_index = 0
     try:
-        await dp.start_polling(bot, settings=settings, services=services)
+        while True:
+            launch = await create_bot_with_failover(settings, start_index=proxy_index)
+            bot = launch.bot
+            usage_service.attach_bot(bot)
+            proxy_index = (launch.proxy_index + 1) % max(len(settings.telegram_proxies), 1)
+            try:
+                await dp.start_polling(bot, settings=settings, services=services)
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("polling crashed; retrying with next telegram proxy candidate")
+                usage_service.attach_bot(None)
+                with suppress(Exception):
+                    await bot.session.close()
+                bot = None
+                await asyncio.sleep(3)
     finally:
         if metrics_runner is not None:
             with suppress(Exception):
                 await metrics_runner.cleanup()
         with suppress(Exception):
             scheduler.shutdown(wait=False)
-        with suppress(Exception):
-            await bot.session.close()
+        if bot is not None:
+            with suppress(Exception):
+                await bot.session.close()
+        usage_service.attach_bot(None)
         with suppress(Exception):
             await db.close()
 

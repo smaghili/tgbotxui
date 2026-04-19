@@ -13,52 +13,123 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BACKUP_STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="${APP_DIR}/backups/${BACKUP_STAMP}"
+INSTALL_MODE="install"
+UPDATED_ENV_KEYS=()
+ADDED_ENV_KEYS=()
 
-echo "[1/7] Installing dependencies..."
-apt-get update
-apt-get install -y "${PYTHON_BIN}" python3-venv python3-pip rsync
+log_step() {
+  echo
+  echo "[$1] $2"
+}
 
-echo "[2/7] Preparing runtime user..."
-if ! id "${BOT_USER}" >/dev/null 2>&1; then
-  useradd --system --create-home --home-dir "/home/${BOT_USER}" --shell /usr/sbin/nologin "${BOT_USER}"
-fi
+has_socks_proxy() {
+  local proxy_value
+  for proxy_value in \
+    "${http_proxy:-}" \
+    "${https_proxy:-}" \
+    "${all_proxy:-}" \
+    "${HTTP_PROXY:-}" \
+    "${HTTPS_PROXY:-}" \
+    "${ALL_PROXY:-}"; do
+    if [[ "${proxy_value}" =~ ^socks5h?:// || "${proxy_value}" =~ ^socks4a?:// ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
-echo "[3/7] Syncing project to ${APP_DIR}..."
-mkdir -p "${APP_DIR}"
-rsync -a --delete \
-  --exclude ".git" \
-  --exclude ".venv" \
-  --exclude "__pycache__" \
-  --exclude ".pytest_cache" \
-  --exclude "data/*.db" \
-  "${PROJECT_ROOT}/" "${APP_DIR}/"
-chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}"
+run_as_bot() {
+  local env_args=()
+  local key
+  for key in http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY; do
+    if [[ -n "${!key:-}" ]]; then
+      env_args+=("${key}=${!key}")
+    fi
+  done
+  runuser -u "${BOT_USER}" -- env "${env_args[@]}" "$@"
+}
 
-echo "[4/7] Building virtualenv..."
-runuser -u "${BOT_USER}" -- "${PYTHON_BIN}" -m venv "${APP_DIR}/.venv"
-runuser -u "${BOT_USER}" -- "${APP_DIR}/.venv/bin/pip" install --upgrade pip
-runuser -u "${BOT_USER}" -- "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+detect_existing_install() {
+  [[ -d "${APP_DIR}" && ( -f "${APP_DIR}/main.py" || -f "${APP_DIR}/.env" || -d "${APP_DIR}/data" ) ]]
+}
 
-echo "[5/7] Preparing environment..."
-if [[ ! -f "${APP_DIR}/.env" ]]; then
-  cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
-fi
+prompt_install_mode() {
+  if ! detect_existing_install; then
+    INSTALL_MODE="install"
+    return
+  fi
 
-read -r -p "Enter BOT_TOKEN: " INPUT_BOT_TOKEN
-while [[ -z "${INPUT_BOT_TOKEN}" ]]; do
-  echo "BOT_TOKEN cannot be empty."
-  read -r -p "Enter BOT_TOKEN: " INPUT_BOT_TOKEN
-done
+  echo "Existing installation detected in ${APP_DIR}."
+  echo "1) Update existing bot (replace files, keep database/data)"
+  echo "2) Fresh install over current path"
+  echo "3) Cancel"
+  read -r -p "Choose an option [1-3]: " MODE_CHOICE
 
-read -r -p "Enter ADMIN_IDS (comma-separated numeric Telegram IDs): " INPUT_ADMIN_IDS
-while [[ -z "${INPUT_ADMIN_IDS}" ]]; do
-  echo "ADMIN_IDS cannot be empty."
-  read -r -p "Enter ADMIN_IDS (comma-separated numeric Telegram IDs): " INPUT_ADMIN_IDS
-done
-if ! [[ "${INPUT_ADMIN_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-  echo "ADMIN_IDS format invalid. Expected: 12345,67890"
-  exit 1
-fi
+  case "${MODE_CHOICE}" in
+    1) INSTALL_MODE="update" ;;
+    2) INSTALL_MODE="install" ;;
+    3)
+      echo "Cancelled."
+      exit 0
+      ;;
+    *)
+      echo "Invalid choice."
+      exit 1
+      ;;
+  esac
+}
+
+ensure_runtime_user() {
+  if ! id "${BOT_USER}" >/dev/null 2>&1; then
+    useradd --system --create-home --home-dir "/home/${BOT_USER}" --shell /usr/sbin/nologin "${BOT_USER}"
+  fi
+}
+
+backup_existing_state() {
+  if [[ "${INSTALL_MODE}" != "update" ]]; then
+    return
+  fi
+
+  mkdir -p "${BACKUP_DIR}"
+
+  if [[ -f "${APP_DIR}/.env" ]]; then
+    cp -a "${APP_DIR}/.env" "${BACKUP_DIR}/.env"
+  fi
+
+  if [[ -d "${APP_DIR}/data" ]]; then
+    mkdir -p "${BACKUP_DIR}/data"
+    rsync -a "${APP_DIR}/data/" "${BACKUP_DIR}/data/"
+  fi
+}
+
+sync_project_files() {
+  mkdir -p "${APP_DIR}" "${APP_DIR}/data"
+
+  if [[ "${INSTALL_MODE}" == "update" ]]; then
+    rsync -a --delete \
+      --exclude ".git" \
+      --exclude ".venv" \
+      --exclude "__pycache__" \
+      --exclude ".pytest_cache" \
+      --exclude ".env" \
+      --exclude "data/" \
+      --exclude "backups/" \
+      "${PROJECT_ROOT}/" "${APP_DIR}/"
+  else
+    rsync -a --delete \
+      --exclude ".git" \
+      --exclude ".venv" \
+      --exclude "__pycache__" \
+      --exclude ".pytest_cache" \
+      --exclude "data/" \
+      --exclude "backups/" \
+      "${PROJECT_ROOT}/" "${APP_DIR}/"
+  fi
+
+  chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}"
+}
 
 set_env_value() {
   local key="$1"
@@ -70,20 +141,168 @@ set_env_value() {
   fi
 }
 
-CURRENT_KEY="$(grep '^ENCRYPTION_KEY=' "${APP_DIR}/.env" | cut -d'=' -f2- || true)"
-if [[ -z "${CURRENT_KEY}" || "${CURRENT_KEY}" == "replace_me" ]]; then
-  GENERATED_KEY="$(${APP_DIR}/.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
-else
-  GENERATED_KEY="${CURRENT_KEY}"
-fi
+get_env_value() {
+  local key="$1"
+  if [[ ! -f "${APP_DIR}/.env" ]]; then
+    return
+  fi
+  grep "^${key}=" "${APP_DIR}/.env" | head -n 1 | cut -d'=' -f2- || true
+}
 
-set_env_value "BOT_TOKEN" "${INPUT_BOT_TOKEN}"
-set_env_value "ADMIN_IDS" "${INPUT_ADMIN_IDS}"
-set_env_value "ENCRYPTION_KEY" "${GENERATED_KEY}"
-chown "${BOT_USER}:${BOT_USER}" "${APP_DIR}/.env"
+sync_env_template() {
+  local example_file="${APP_DIR}/.env.example"
+  local line
+  local key
 
-echo "[6/7] Installing systemd service..."
-cat >/etc/systemd/system/${SERVICE_NAME}.service <<EOF
+  if [[ ! -f "${example_file}" || ! -f "${APP_DIR}/.env" ]]; then
+    return
+  fi
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]]; then
+      continue
+    fi
+    if [[ "${line}" != *=* ]]; then
+      continue
+    fi
+    key="${line%%=*}"
+    if ! grep -q "^${key}=" "${APP_DIR}/.env"; then
+      echo "${line}" >> "${APP_DIR}/.env"
+      ADDED_ENV_KEYS+=("${key}")
+    fi
+  done < "${example_file}"
+}
+
+prompt_required_value() {
+  local label="$1"
+  local current_value="$2"
+  local prompt_text
+  local value
+
+  if [[ -n "${current_value}" ]]; then
+    prompt_text="Enter ${label} [leave empty to keep current]: "
+  else
+    prompt_text="Enter ${label}: "
+  fi
+
+  while true; do
+    read -r -p "${prompt_text}" value
+    if [[ -n "${value}" ]]; then
+      echo "${value}"
+      return
+    fi
+    if [[ -n "${current_value}" ]]; then
+      echo "${current_value}"
+      return
+    fi
+    echo "${label} cannot be empty."
+  done
+}
+
+prompt_optional_value() {
+  local label="$1"
+  local current_value="$2"
+  local value
+
+  if [[ -n "${current_value}" ]]; then
+    read -r -p "Enter ${label} [leave empty to keep current]: " value
+    if [[ -z "${value}" ]]; then
+      echo "${current_value}"
+      return
+    fi
+  else
+    read -r -p "Enter ${label} (optional): " value
+  fi
+
+  echo "${value}"
+}
+
+build_virtualenv() {
+  local venv_args=()
+  local venv_python="${APP_DIR}/.venv/bin/python"
+
+  if [[ "${INSTALL_MODE}" != "update" ]]; then
+    rm -rf "${APP_DIR}/.venv"
+  fi
+
+  if [[ ! -x "${venv_python}" ]]; then
+    if has_socks_proxy; then
+      # Allow venv pip bootstrap to reuse system-installed PySocks when the server
+      # can only reach the internet through SOCKS proxies.
+      venv_args+=(--system-site-packages)
+    fi
+
+    "${PYTHON_BIN}" -m venv "${venv_args[@]}" "${APP_DIR}/.venv"
+    "${venv_python}" -m pip install --upgrade pip
+  fi
+
+  "${venv_python}" -m pip install -r "${APP_DIR}/requirements.txt"
+  chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}/.venv"
+}
+
+prepare_environment_file() {
+  if [[ ! -f "${APP_DIR}/.env" ]]; then
+    cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
+  fi
+
+  sync_env_template
+
+  local current_bot_token
+  local current_admin_ids
+  local current_telegram_proxies
+  local current_key
+  local input_bot_token
+  local input_admin_ids
+  local input_telegram_proxies
+  local generated_key
+
+  current_bot_token="$(get_env_value "BOT_TOKEN")"
+  current_admin_ids="$(get_env_value "ADMIN_IDS")"
+  current_telegram_proxies="$(get_env_value "TELEGRAM_PROXIES")"
+  current_key="$(get_env_value "ENCRYPTION_KEY")"
+
+  if [[ "${INSTALL_MODE}" == "update" ]]; then
+    if [[ -z "${current_bot_token}" ]]; then
+      echo "BOT_TOKEN is missing in existing .env; update cannot continue safely."
+      exit 1
+    fi
+    if [[ -z "${current_admin_ids}" ]]; then
+      echo "ADMIN_IDS is missing in existing .env; update cannot continue safely."
+      exit 1
+    fi
+    input_bot_token="${current_bot_token}"
+    input_admin_ids="${current_admin_ids}"
+    input_telegram_proxies="${current_telegram_proxies}"
+  else
+    input_bot_token="$(prompt_required_value "BOT_TOKEN" "${current_bot_token}")"
+    input_admin_ids="$(prompt_required_value "ADMIN_IDS (comma-separated numeric Telegram IDs)" "${current_admin_ids}")"
+    if ! [[ "${input_admin_ids}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+      echo "ADMIN_IDS format invalid. Expected: 12345,67890"
+      exit 1
+    fi
+
+    echo "If Telegram is filtered on your server, enter one or more proxies."
+    echo "Example: http://user:pass@host:port,http://user:pass@host2:port2"
+    input_telegram_proxies="$(prompt_optional_value "TELEGRAM_PROXIES" "${current_telegram_proxies}")"
+  fi
+
+  if [[ -z "${current_key}" || "${current_key}" == "replace_me" ]]; then
+    generated_key="$(${APP_DIR}/.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+  else
+    generated_key="${current_key}"
+  fi
+
+  set_env_value "BOT_TOKEN" "${input_bot_token}"
+  set_env_value "ADMIN_IDS" "${input_admin_ids}"
+  set_env_value "TELEGRAM_PROXIES" "${input_telegram_proxies}"
+  set_env_value "ENCRYPTION_KEY" "${generated_key}"
+
+  UPDATED_ENV_KEYS=("BOT_TOKEN" "ADMIN_IDS" "TELEGRAM_PROXIES" "ENCRYPTION_KEY")
+  chown "${BOT_USER}:${BOT_USER}" "${APP_DIR}/.env"
+}
+
+install_service_file() {
+  cat >/etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=Telegram 3x-ui Bot (Python)
 After=network.target
@@ -111,12 +330,79 @@ MemoryDenyWriteExecute=true
 [Install]
 WantedBy=multi-user.target
 EOF
+}
 
-echo "[7/7] Enabling and starting service..."
-systemctl daemon-reload
-systemctl enable "${SERVICE_NAME}"
-systemctl restart "${SERVICE_NAME}"
-systemctl --no-pager --full status "${SERVICE_NAME}" || true
+start_service() {
+  systemctl daemon-reload
+  systemctl enable "${SERVICE_NAME}"
+  systemctl restart "${SERVICE_NAME}"
+}
 
-echo "Install complete."
-echo "Configured BOT_TOKEN and ADMIN_IDS in ${APP_DIR}/.env"
+print_report() {
+  local db_path="${APP_DIR}/data/bot.db"
+  local status_summary="unknown"
+  local db_summary="not found"
+
+  if systemctl is-active --quiet "${SERVICE_NAME}"; then
+    status_summary="active"
+  else
+    status_summary="inactive"
+  fi
+
+  if [[ -f "${db_path}" ]]; then
+    db_summary="preserved at ${db_path} ($(du -h "${db_path}" | awk '{print $1}'))"
+  elif [[ -d "${APP_DIR}/data" ]]; then
+    db_summary="data directory preserved at ${APP_DIR}/data"
+  fi
+
+  echo
+  echo "===== ${INSTALL_MODE^^} REPORT ====="
+  echo "Mode: ${INSTALL_MODE}"
+  echo "App dir: ${APP_DIR}"
+  echo "Service: ${SERVICE_NAME} (${status_summary})"
+  echo "Runtime user: ${BOT_USER}"
+  echo "Project files: synced from ${PROJECT_ROOT}"
+  echo "Database/data: ${db_summary}"
+  if [[ "${INSTALL_MODE}" == "update" ]]; then
+    echo "Backup: ${BACKUP_DIR}"
+    echo "Update behavior: bot files replaced, .env and data preserved"
+  fi
+  echo "Environment keys configured: ${UPDATED_ENV_KEYS[*]}"
+  if [[ "${#ADDED_ENV_KEYS[@]}" -gt 0 ]]; then
+    echo "New .env keys added from template: ${ADDED_ENV_KEYS[*]}"
+  else
+    echo "New .env keys added from template: none"
+  fi
+  echo "Migrations: applied automatically on bot startup"
+  echo "==================================="
+  systemctl --no-pager --full status "${SERVICE_NAME}" || true
+}
+
+prompt_install_mode
+
+log_step "1/8" "Installing dependencies..."
+apt-get update
+apt-get install -y "${PYTHON_BIN}" python3-venv python3-pip python3-socks rsync
+
+log_step "2/8" "Preparing runtime user..."
+ensure_runtime_user
+
+log_step "3/8" "Backing up existing state (update mode only)..."
+backup_existing_state
+
+log_step "4/8" "Syncing project to ${APP_DIR}..."
+sync_project_files
+
+log_step "5/8" "Building virtualenv..."
+build_virtualenv
+
+log_step "6/8" "Preparing environment..."
+prepare_environment_file
+
+log_step "7/8" "Installing systemd service..."
+install_service_file
+
+log_step "8/8" "Enabling and starting service..."
+start_service
+
+print_report

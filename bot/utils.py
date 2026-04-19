@@ -7,7 +7,7 @@ import jdatetime
 
 from bot.i18n import t
 
-PERSIAN_DIGITS = str.maketrans("0123456789", "0123456789")
+PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
 def to_persian_digits(value: str | int) -> str:
@@ -33,7 +33,30 @@ def bytes_to_gb(value: int) -> float:
 
 
 def format_gb(value: int, lang: str = "fa") -> str:
-    return f"{bytes_to_gb(value):.2f} {t('unit_gb', lang)}"
+    amount = f"{bytes_to_gb(value):.2f}"
+    if lang == "fa":
+        amount = to_persian_digits(amount)
+    return f"{amount} {t('unit_gb', lang)}"
+
+
+def format_bytes(value: int, lang: str = "fa") -> str:
+    size = float(max(0, value))
+    units = [
+        ("B", "بایت"),
+        ("KB", "کیلوبایت"),
+        ("MB", "مگابایت"),
+        ("GB", "گیگابایت"),
+        ("TB", "ترابایت"),
+    ]
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    amount = f"{size:.2f}"
+    unit = units[idx][0] if lang != "fa" else units[idx][1]
+    if lang == "fa":
+        amount = to_persian_digits(amount)
+    return f"{amount} {unit}"
 
 
 def to_jalali_date(epoch_seconds: int | None, tz_name: str) -> str:

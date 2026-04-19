@@ -230,6 +230,17 @@ class XUIClient:
             payload=None,
         )
 
+    async def get_default_settings(
+        self, conn: PanelConnection, cookies: Dict[str, str] | None
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        return await self.request(
+            conn=conn,
+            method="POST",
+            endpoint="/setting/defaultSettings",
+            cookies=cookies,
+            payload=None,
+        )
+
     async def get_online_clients(
         self, conn: PanelConnection, cookies: Dict[str, str] | None
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
@@ -279,6 +290,38 @@ class XUIClient:
             endpoint=endpoint,
             cookies=cookies,
             payload=payload,
+        )
+
+    async def add_client(
+        self,
+        conn: PanelConnection,
+        cookies: Dict[str, str] | None,
+        *,
+        payload: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        return await self.request(
+            conn=conn,
+            method="POST",
+            endpoint="/inbounds/addClient",
+            cookies=cookies,
+            payload=payload,
+        )
+
+    async def delete_client(
+        self,
+        conn: PanelConnection,
+        cookies: Dict[str, str] | None,
+        *,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        endpoint = f"/inbounds/{inbound_id}/delClient/{quote(client_uuid, safe='')}"
+        return await self.request(
+            conn=conn,
+            method="POST",
+            endpoint=endpoint,
+            cookies=cookies,
+            payload=None,
         )
 
     async def clear_client_ips(

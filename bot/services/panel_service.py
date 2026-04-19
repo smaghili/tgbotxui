@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
 import json
+import secrets
 import time
 from datetime import datetime
 from typing import Any, Dict, Awaitable, Callable
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 from bot.db import Database
 from bot.services.crypto import CryptoService
@@ -19,10 +20,19 @@ from bot.utils import parse_epoch
 
 
 class PanelService:
-    def __init__(self, db: Database, crypto: CryptoService, xui: XUIClient) -> None:
+    def __init__(
+        self,
+        db: Database,
+        crypto: CryptoService,
+        xui: XUIClient,
+        sub_url_strip_port_rules: dict[str, str] | None = None,
+        sub_url_base_overrides: dict[str, str] | None = None,
+    ) -> None:
         self.db = db
         self.crypto = crypto
         self.xui = xui
+        self.sub_url_strip_port_rules = sub_url_strip_port_rules or {}
+        self.sub_url_base_overrides = sub_url_base_overrides or {}
 
     async def _build_conn(self, panel_id: int) -> PanelConnection:
         panel = await self.db.get_panel(panel_id)
@@ -149,8 +159,19 @@ class PanelService:
             return [obj]
         return []
 
-    async def list_online_clients(self, panel_id: int) -> list[Dict[str, Any]]:
-        clients = await self.list_clients(panel_id, online_only=True)
+    async def list_online_clients(
+        self,
+        panel_id: int,
+        *,
+        owner_admin_user_id: int | None = None,
+        allowed_inbound_ids: set[int] | None = None,
+    ) -> list[Dict[str, Any]]:
+        clients = await self.list_clients(
+            panel_id,
+            online_only=True,
+            owner_admin_user_id=owner_admin_user_id,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
         clients.sort(key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"]))
         return clients
 
@@ -208,6 +229,8 @@ class PanelService:
         enabled: bool | None = None,
         email_query: str | None = None,
         include_last_online: bool = False,
+        owner_admin_user_id: int | None = None,
+        allowed_inbound_ids: set[int] | None = None,
     ) -> list[Dict[str, Any]]:
         online_keys: set[str] = set()
         if online_only:
@@ -227,11 +250,16 @@ class PanelService:
             inbound_id = int(inbound.get("id") or 0)
             if inbound_id <= 0:
                 continue
+            if allowed_inbound_ids is not None and inbound_id not in allowed_inbound_ids:
+                continue
             for client in self._extract_inbound_clients(inbound):
                 email = str(client.get("email") or "").strip()
                 uuid = str(client.get("uuid") or client.get("id") or "").strip()
                 sub_id = str(client.get("subId") or "").strip()
+                comment = str(client.get("comment") or "").strip()
                 if not email or not uuid:
+                    continue
+                if owner_admin_user_id is not None and comment != str(owner_admin_user_id):
                     continue
                 candidates = {email.lower(), uuid.lower(), sub_id.lower()}
                 if online_only and not any(c and c in online_keys for c in candidates):
@@ -258,24 +286,179 @@ class PanelService:
                         "uuid": uuid,
                         "email": email,
                         "enabled": is_enabled,
+                        "tg_id": str(client.get("tgId") or "").strip(),
                         "sub_id": sub_id,
+                        "comment": comment,
                         "last_online": last_online,
                     }
                 )
         return matched
 
-    async def search_clients_by_email(self, panel_id: int, query: str) -> list[Dict[str, Any]]:
-        rows = await self.list_clients(panel_id, email_query=query)
+    async def search_clients_by_email(
+        self,
+        panel_id: int,
+        query: str,
+        *,
+        owner_admin_user_id: int | None = None,
+        allowed_inbound_ids: set[int] | None = None,
+    ) -> list[Dict[str, Any]]:
+        rows = await self.list_clients(
+            panel_id,
+            email_query=query,
+            owner_admin_user_id=owner_admin_user_id,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
         rows.sort(key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"]))
         return rows
 
-    async def list_disabled_clients(self, panel_id: int) -> list[Dict[str, Any]]:
-        rows = await self.list_clients(panel_id, enabled=False)
+    async def list_disabled_clients(
+        self,
+        panel_id: int,
+        *,
+        owner_admin_user_id: int | None = None,
+        allowed_inbound_ids: set[int] | None = None,
+    ) -> list[Dict[str, Any]]:
+        rows = await self.list_clients(
+            panel_id,
+            owner_admin_user_id=owner_admin_user_id,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
+        inactive: list[Dict[str, Any]] = []
+        now = int(time.time())
+        for row in rows:
+            status = "active"
+            try:
+                detail = await self.get_client_detail(panel_id, int(row["inbound_id"]), str(row["uuid"]))
+                enabled = bool(detail.get("enabled", row.get("enabled", True)))
+                total = int(detail.get("total") or 0)
+                used = int(detail.get("used") or 0)
+                expiry = parse_epoch(detail.get("expiry"))
+            except Exception:
+                enabled = bool(row.get("enabled", True))
+                total = int(row.get("total") or 0)
+                used = int(row.get("used") or 0)
+                expiry = parse_epoch(row.get("expiry"))
+
+            if not enabled:
+                status = "suspended"
+            elif expiry and expiry <= now:
+                status = "expired"
+            elif total > 0 and used >= total:
+                status = "depleted"
+
+            if status != "active":
+                row["status"] = status
+                inactive.append(row)
+        rows = inactive
         rows.sort(key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"]))
         return rows
 
-    async def list_clients_with_last_online(self, panel_id: int) -> list[Dict[str, Any]]:
-        rows = await self.list_clients(panel_id, include_last_online=True)
+    async def cleanup_depleted_clients(self, delete_after_hours: int) -> dict[str, int]:
+        now = int(time.time())
+        threshold_seconds = max(0, int(delete_after_hours)) * 3600
+        scanned = 0
+        deleted = 0
+        failed = 0
+        skipped_no_last_online = 0
+
+        for panel in await self.list_panels():
+            panel_id = int(panel["id"])
+            try:
+                clients = await self.list_clients(panel_id, include_last_online=True)
+            except Exception:
+                failed += 1
+                continue
+            for client in clients:
+                scanned += 1
+                inbound_id = int(client.get("inbound_id") or 0)
+                client_uuid = str(client.get("uuid") or "").strip()
+                email = str(client.get("email") or "").strip()
+                if inbound_id <= 0 or not client_uuid:
+                    continue
+                try:
+                    detail = await self.get_client_detail(panel_id, inbound_id, client_uuid)
+                    total = int(detail.get("total") or 0)
+                    used = int(detail.get("used") or 0)
+                    expiry = parse_epoch(detail.get("expiry"))
+                    is_depleted = total > 0 and used >= total
+                    is_expired = bool(expiry and expiry <= now)
+                except Exception:
+                    failed += 1
+                    continue
+
+                if not (is_depleted or is_expired):
+                    continue
+
+                last_online = parse_epoch(client.get("last_online"))
+                if not last_online:
+                    skipped_no_last_online += 1
+                    continue
+                if now - last_online < threshold_seconds:
+                    continue
+
+                try:
+                    await self.delete_client(panel_id, inbound_id, client_uuid)
+                except Exception:
+                    failed += 1
+                    continue
+                deleted += 1
+
+        return {
+            "scanned": scanned,
+            "deleted": deleted,
+            "failed": failed,
+            "skipped_no_last_online": skipped_no_last_online,
+        }
+
+    async def bind_services_for_telegram_identity(
+        self,
+        *,
+        telegram_user_id: int,
+        username: str | None,
+    ) -> int:
+        candidates = {str(telegram_user_id)}
+        username_norm = (username or "").strip().lstrip("@").lower()
+        if username_norm:
+            candidates.add(username_norm)
+            candidates.add(f"@{username_norm}")
+
+        bound = 0
+        for panel in await self.list_panels():
+            panel_id = int(panel["id"])
+            try:
+                clients = await self.list_clients(panel_id)
+            except Exception:
+                continue
+            for client in clients:
+                tg_id = str(client.get("tg_id") or "").strip().lower()
+                if not tg_id or tg_id not in candidates:
+                    continue
+                try:
+                    await self.bind_service_to_user(
+                        panel_id=panel_id,
+                        telegram_user_id=telegram_user_id,
+                        client_email=str(client["email"]),
+                        service_name=None,
+                        inbound_id=int(client["inbound_id"]),
+                    )
+                except Exception:
+                    continue
+                bound += 1
+        return bound
+
+    async def list_clients_with_last_online(
+        self,
+        panel_id: int,
+        *,
+        owner_admin_user_id: int | None = None,
+        allowed_inbound_ids: set[int] | None = None,
+    ) -> list[Dict[str, Any]]:
+        rows = await self.list_clients(
+            panel_id,
+            include_last_online=True,
+            owner_admin_user_id=owner_admin_user_id,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
         rows = [row for row in rows if int(row.get("last_online") or 0) > 0]
         rows.sort(key=lambda item: (-int(item.get("last_online") or 0), item["email"].lower()))
         return rows
@@ -296,6 +479,8 @@ class PanelService:
                                 client["uuid"] = client.get("id")
                             if "email" not in client:
                                 client["email"] = ""
+                            if "comment" not in client:
+                                client["comment"] = ""
                             rows.append(client)
                     if rows:
                         return rows
@@ -319,12 +504,19 @@ class PanelService:
                             "subId": item.get("subId"),
                             "reset": item.get("reset", 0),
                             "tgId": item.get("tgId", ""),
+                            "comment": item.get("comment", ""),
                         }
                     )
             return rows
         return []
 
-    async def list_inbound_clients(self, panel_id: int, inbound_id: int) -> list[Dict[str, Any]]:
+    async def list_inbound_clients(
+        self,
+        panel_id: int,
+        inbound_id: int,
+        *,
+        owner_admin_user_id: int | None = None,
+    ) -> list[Dict[str, Any]]:
         inbounds = await self.list_inbounds(panel_id)
         inbound = next((x for x in inbounds if int(x.get("id") or -1) == inbound_id), None)
         if inbound is None:
@@ -334,10 +526,49 @@ class PanelService:
         for client in clients:
             uuid = str(client.get("uuid") or client.get("id") or "").strip()
             email = str(client.get("email") or "").strip()
+            comment = str(client.get("comment") or "").strip()
             if not uuid or not email:
                 continue
-            out.append({"uuid": uuid, "email": email})
+            if owner_admin_user_id is not None and comment != str(owner_admin_user_id):
+                continue
+            out.append({"uuid": uuid, "email": email, "comment": comment})
         return out
+
+    async def find_client_by_uuid(
+        self,
+        panel_id: int,
+        client_uuid: str,
+        *,
+        allowed_inbound_ids: set[int] | None = None,
+        owner_admin_user_id: int | None = None,
+    ) -> Dict[str, Any] | None:
+        target_uuid = client_uuid.strip()
+        if not target_uuid:
+            return None
+        inbounds = await self.list_inbounds(panel_id)
+        for inbound in inbounds:
+            inbound_id = int(inbound.get("id") or 0)
+            if inbound_id <= 0:
+                continue
+            if allowed_inbound_ids is not None and inbound_id not in allowed_inbound_ids:
+                continue
+            for client in self._extract_inbound_clients(inbound):
+                uuid = str(client.get("uuid") or client.get("id") or "").strip()
+                if uuid != target_uuid:
+                    continue
+                comment = str(client.get("comment") or "").strip()
+                if owner_admin_user_id is not None and comment != str(owner_admin_user_id):
+                    continue
+                return {
+                    "panel_id": panel_id,
+                    "inbound_id": inbound_id,
+                    "uuid": uuid,
+                    "email": str(client.get("email") or "").strip(),
+                    "sub_id": str(client.get("subId") or "").strip(),
+                    "enabled": bool(client.get("enable", True)),
+                    "comment": comment,
+                }
+        return None
 
     async def _get_client_config(
         self, panel_id: int, inbound_id: int, client_uuid: str
@@ -373,6 +604,7 @@ class PanelService:
             "id": changed.get("uuid") or changed.get("id"),
             "flow": changed.get("flow", ""),
             "email": changed.get("email", ""),
+            "comment": changed.get("comment", ""),
             "limitIp": int(changed.get("limitIp") or 0),
             "totalGB": int(changed.get("totalGB") or 0),
             "expiryTime": int(changed.get("expiryTime") or 0),
@@ -393,6 +625,107 @@ class PanelService:
                     cookies,
                     client_uuid=client_uuid,
                     payload=update_payload,
+                ),
+            )
+        except XUIError as exc:
+            await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
+            raise
+
+    @staticmethod
+    def _new_sub_id(length: int = 16) -> str:
+        raw = secrets.token_urlsafe(length)
+        safe = "".join(ch for ch in raw if ch.isalnum())
+        return (safe or secrets.token_hex(8))[:length]
+
+    async def create_client(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_email: str,
+        total_gb: int,
+        expiry_days: int,
+        enable: bool = True,
+        tg_id: str = "",
+        comment: str = "",
+    ) -> Dict[str, Any]:
+        inbounds = await self.list_inbounds(panel_id)
+        inbound = next((x for x in inbounds if int(x.get("id") or -1) == inbound_id), None)
+        if inbound is None:
+            raise ValueError("inbound not found.")
+
+        email = client_email.strip()
+        if not email:
+            raise ValueError("client email is empty.")
+
+        for existing in self._extract_inbound_clients(inbound):
+            if str(existing.get("email") or "").strip().lower() == email.lower():
+                raise ValueError("client email already exists on this inbound.")
+
+        try:
+            raw, _ = await self._with_auth_request(
+                panel_id,
+                lambda conn, cookies: self.xui.get_new_uuid(conn, cookies),
+            )
+        except XUIError as exc:
+            await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
+            raise
+
+        obj = raw.get("obj") if isinstance(raw, dict) else None
+        client_uuid = str((obj or {}).get("uuid") or "").strip() if isinstance(obj, dict) else ""
+        if not client_uuid:
+            raise ValueError("new UUID was not returned from server.")
+
+        flow = ""
+        for existing in self._extract_inbound_clients(inbound):
+            flow = str(existing.get("flow") or "").strip()
+            if flow:
+                break
+
+        total_bytes = max(0, int(total_gb)) * (1024**3)
+        expiry_ms = int((time.time() + (max(0, int(expiry_days)) * 86400)) * 1000)
+        payload_client = {
+            "id": client_uuid,
+            "flow": flow,
+            "email": email,
+            "comment": comment.strip(),
+            "limitIp": 0,
+            "totalGB": total_bytes,
+            "expiryTime": expiry_ms,
+            "enable": bool(enable),
+            "tgId": tg_id.strip(),
+            "subId": self._new_sub_id(),
+            "reset": 0,
+        }
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps({"clients": [payload_client]}, ensure_ascii=False),
+        }
+        try:
+            await self._with_auth_request(
+                panel_id,
+                lambda conn, cookies: self.xui.add_client(conn, cookies, payload=payload),
+            )
+        except XUIError as exc:
+            await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
+            raise
+        return {
+            "panel_id": panel_id,
+            "inbound_id": inbound_id,
+            "uuid": client_uuid,
+            "email": email,
+            "sub_id": payload_client["subId"],
+        }
+
+    async def delete_client(self, panel_id: int, inbound_id: int, client_uuid: str) -> None:
+        try:
+            await self._with_auth_request(
+                panel_id,
+                lambda conn, cookies: self.xui.delete_client(
+                    conn,
+                    cookies,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
                 ),
             )
         except XUIError as exc:
@@ -448,6 +781,7 @@ class PanelService:
             "total": total_bytes,
             "limit_ip": int(config.get("limitIp") or 0),
             "tg_id": str(config.get("tgId") or ""),
+            "comment": str(config.get("comment") or ""),
         }
 
     async def set_client_total_gb(
@@ -460,6 +794,22 @@ class PanelService:
             client_uuid=client_uuid,
             mutator=lambda c: {**c, "totalGB": total_bytes},
         )
+
+    async def add_client_total_gb(
+        self, panel_id: int, inbound_id: int, client_uuid: str, add_gb: int
+    ) -> int:
+        _, current, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
+        current_bytes = int(current.get("totalGB") or 0)
+        if current_bytes < 0:
+            current_bytes = 0
+        new_total = current_bytes + (max(0, int(add_gb)) * (1024**3))
+        await self._update_client_by_mutation(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            mutator=lambda c: {**c, "totalGB": new_total},
+        )
+        return new_total
 
     async def set_client_expiry_days(
         self, panel_id: int, inbound_id: int, client_uuid: str, days: int | None
@@ -474,6 +824,22 @@ class PanelService:
             client_uuid=client_uuid,
             mutator=lambda c: {**c, "expiryTime": expiry},
         )
+
+    async def extend_client_expiry_days(
+        self, panel_id: int, inbound_id: int, client_uuid: str, add_days: int
+    ) -> int:
+        _, current, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
+        now_ms = int(time.time() * 1000)
+        current_expiry = int(current.get("expiryTime") or 0)
+        base = current_expiry if current_expiry > now_ms else now_ms
+        new_expiry = base + (max(0, int(add_days)) * 86400 * 1000)
+        await self._update_client_by_mutation(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            mutator=lambda c: {**c, "expiryTime": new_expiry},
+        )
+        return new_expiry
 
     async def set_client_limit_ip(
         self, panel_id: int, inbound_id: int, client_uuid: str, limit_ip: int | None
@@ -551,30 +917,7 @@ class PanelService:
     async def rotate_client_uuid_by_email(
         self, panel_id: int, inbound_id: int | None, client_email: str
     ) -> str:
-        inbounds = await self.list_inbounds(panel_id)
-        email_norm = client_email.strip().lower()
-        target_inbound: Dict[str, Any] | None = None
-        target_client: Dict[str, Any] | None = None
-
-        if inbound_id is not None:
-            candidate = next((x for x in inbounds if int(x.get("id") or -1) == int(inbound_id)), None)
-            if candidate is not None:
-                for c in self._extract_inbound_clients(candidate):
-                    if str(c.get("email") or "").strip().lower() == email_norm:
-                        target_inbound = candidate
-                        target_client = c
-                        break
-
-        if target_client is None:
-            for inbound in inbounds:
-                for c in self._extract_inbound_clients(inbound):
-                    if str(c.get("email") or "").strip().lower() == email_norm:
-                        target_inbound = inbound
-                        target_client = c
-                        break
-                if target_client is not None:
-                    break
-
+        target_inbound, target_client = await self._find_client_on_panel(panel_id, inbound_id, client_email)
         if target_inbound is None or target_client is None:
             raise ValueError("client not found on panel.")
 
@@ -604,6 +947,64 @@ class PanelService:
         )
         return new_uuid
 
+    async def prepare_client_rotation_by_email(
+        self, panel_id: int, inbound_id: int | None, client_email: str
+    ) -> dict[str, Any]:
+        target_inbound, target_client = await self._find_client_on_panel(panel_id, inbound_id, client_email)
+        if target_inbound is None or target_client is None:
+            raise ValueError("client not found on panel.")
+
+        old_uuid = str(target_client.get("uuid") or target_client.get("id") or "").strip()
+        if not old_uuid:
+            raise ValueError("current client UUID is not identifiable.")
+
+        try:
+            raw, _ = await self._with_auth_request(
+                panel_id,
+                lambda conn, cookies: self.xui.get_new_uuid(conn, cookies),
+            )
+        except XUIError as exc:
+            await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
+            raise
+        obj = raw.get("obj") if isinstance(raw, dict) else None
+        new_uuid = str((obj or {}).get("uuid") or "").strip() if isinstance(obj, dict) else ""
+        if not new_uuid:
+            raise ValueError("new UUID was not returned from server.")
+
+        new_sub_id = self._new_sub_id()
+        preview_client = dict(target_client)
+        preview_client["uuid"] = new_uuid
+        preview_client["id"] = new_uuid
+        preview_client["subId"] = new_sub_id
+        vless_uri = await self._build_client_vless_uri(panel_id, target_inbound, preview_client, client_email)
+        sub_url = await self._build_client_subscription_url(panel_id, preview_client)
+        return {
+            "panel_id": panel_id,
+            "inbound_id": int(target_inbound.get("id") or inbound_id or 0),
+            "email": str(preview_client.get("email") or client_email).strip(),
+            "old_uuid": old_uuid,
+            "new_uuid": new_uuid,
+            "new_sub_id": new_sub_id,
+            "vless_uri": vless_uri,
+            "sub_url": sub_url,
+        }
+
+    async def apply_prepared_client_rotation(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        old_uuid: str,
+        new_uuid: str,
+        new_sub_id: str,
+    ) -> None:
+        await self._update_client_by_mutation(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=old_uuid,
+            mutator=lambda c: {**c, "uuid": new_uuid, "id": new_uuid, "subId": new_sub_id},
+        )
+
     @staticmethod
     def _parse_json_obj(value: Any) -> Dict[str, Any]:
         if isinstance(value, dict):
@@ -616,12 +1017,135 @@ class PanelService:
                 return {}
         return {}
 
-    async def get_client_vless_uri_by_email(
-        self, panel_id: int, inbound_id: int | None, client_email: str
+    @staticmethod
+    def _search_host(headers: Any) -> str:
+        if not isinstance(headers, dict):
+            return ""
+        for key, value in headers.items():
+            if str(key).lower() != "host":
+                continue
+            if isinstance(value, list):
+                return str(value[0] or "").strip() if value else ""
+            return str(value or "").strip()
+        return ""
+
+    @staticmethod
+    def _search_key(data: Any, key: str) -> Any:
+        if isinstance(data, dict):
+            for item_key, value in data.items():
+                if item_key == key:
+                    return value
+                found = PanelService._search_key(value, key)
+                if found is not None:
+                    return found
+        if isinstance(data, list):
+            for value in data:
+                found = PanelService._search_key(value, key)
+                if found is not None:
+                    return found
+        return None
+
+    @staticmethod
+    def _first_string(value: Any) -> str:
+        if isinstance(value, list):
+            for item in value:
+                text = str(item or "").strip()
+                if text:
+                    return text
+            return ""
+        return str(value or "").strip()
+
+    @staticmethod
+    def _parse_port(value: Any) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _gen_link_remark(inbound: Dict[str, Any], client: Dict[str, Any], client_email: str, extra: str = "") -> str:
+        parts = [
+            str(extra or "").strip(),
+            str(client.get("email") or client_email).strip(),
+        ]
+        return "-".join([part for part in parts if part])
+
+    @staticmethod
+    def _build_vless_uri(
+        *,
+        client_uuid: str,
+        host: str,
+        port: int,
+        params: Dict[str, str],
+        remark: str,
     ) -> str:
-        panel = await self.db.get_panel(panel_id)
-        if panel is None:
-            raise ValueError("panel not found.")
+        query = urlencode(params, doseq=False, safe=",:/")
+        return f"vless://{client_uuid}@{host}:{port}?{query}#{quote(remark)}"
+
+    def _normalize_subscription_url(self, panel: Dict[str, Any], sub_url: str) -> str:
+        parsed = urlparse(sub_url)
+        host = (parsed.hostname or "").strip().lower()
+        if not host or parsed.port is None:
+            return sub_url
+
+        panel_keys = {
+            str(panel.get("id") or "").strip().lower(),
+            str(panel.get("name") or "").strip().lower(),
+        }
+        strip_hosts: set[str] = set()
+        for panel_key in panel_keys:
+            if panel_key:
+                rule = self.sub_url_strip_port_rules.get(panel_key, "")
+                if rule:
+                    strip_hosts.add((urlparse(rule).hostname or "").strip().lower())
+        wildcard_rule = self.sub_url_strip_port_rules.get("*", "")
+        if wildcard_rule:
+            strip_hosts.add((urlparse(wildcard_rule).hostname or "").strip().lower())
+        if host not in strip_hosts:
+            return sub_url
+
+        netloc = parsed.hostname or ""
+        if ":" in netloc and not netloc.startswith("["):
+            netloc = f"[{netloc}]"
+        return urlunparse(parsed._replace(netloc=netloc))
+
+    def _panel_config_keys(self, panel: Dict[str, Any]) -> set[str]:
+        return {
+            value
+            for value in (
+                str(panel.get("id") or "").strip().lower(),
+                str(panel.get("name") or "").strip().lower(),
+            )
+            if value
+        }
+
+    def _subscription_base_override(self, panel: Dict[str, Any]) -> str:
+        for panel_key in self._panel_config_keys(panel):
+            rule = self.sub_url_strip_port_rules.get(panel_key)
+            if rule:
+                return rule.rstrip("/")
+            override = self.sub_url_base_overrides.get(panel_key)
+            if override:
+                return override.rstrip("/")
+        return (
+            self.sub_url_strip_port_rules.get("*", "")
+            or self.sub_url_base_overrides.get("*", "")
+        ).rstrip("/")
+
+    async def _get_panel_default_settings(self, panel_id: int) -> Dict[str, Any]:
+        try:
+            raw, _ = await self._with_auth_request(
+                panel_id,
+                lambda conn, cookies: self.xui.get_default_settings(conn, cookies),
+            )
+        except XUIError:
+            return {}
+        obj = raw.get("obj") if isinstance(raw, dict) else None
+        return obj if isinstance(obj, dict) else {}
+
+    async def _find_client_on_panel(
+        self, panel_id: int, inbound_id: int | None, client_email: str
+    ) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
         inbounds = await self.list_inbounds(panel_id)
         email_norm = client_email.strip().lower()
         target_inbound: Dict[str, Any] | None = None
@@ -638,19 +1162,26 @@ class PanelService:
             if candidate is not None:
                 found = _scan_inbound(candidate)
                 if found is not None:
-                    target_inbound = candidate
-                    target_client = found
+                    return candidate, found
 
-        if target_client is None:
-            for inbound in inbounds:
-                found = _scan_inbound(inbound)
-                if found is not None:
-                    target_inbound = inbound
-                    target_client = found
-                    break
+        for inbound in inbounds:
+            found = _scan_inbound(inbound)
+            if found is not None:
+                target_inbound = inbound
+                target_client = found
+                break
+        return target_inbound, target_client
 
-        if target_inbound is None or target_client is None:
-            raise ValueError("client not found on inbound.")
+    async def _build_client_vless_uri(
+        self,
+        panel_id: int,
+        target_inbound: Dict[str, Any],
+        target_client: Dict[str, Any],
+        client_email: str,
+    ) -> str:
+        panel = await self.db.get_panel(panel_id)
+        if panel is None:
+            raise ValueError("panel not found.")
 
         protocol = str(target_inbound.get("protocol") or "").strip().lower()
         if protocol != "vless":
@@ -660,7 +1191,11 @@ class PanelService:
         if not client_uuid:
             raise ValueError("client UUID not found.")
 
-        base_host = (urlparse(str(panel.get("base_url") or "")).hostname or "").strip()
+        listen = str(target_inbound.get("listen") or target_inbound.get("Listen") or "").strip()
+        if listen and listen not in {"0.0.0.0", "::", "::0"}:
+            base_host = listen
+        else:
+            base_host = (urlparse(str(panel.get("base_url") or "")).hostname or "").strip()
         port = int(target_inbound.get("port") or 0)
         if not base_host or port <= 0:
             raise ValueError("valid host/port for config generation was not found.")
@@ -671,7 +1206,7 @@ class PanelService:
         security = str(stream_obj.get("security") or "none")
 
         params: Dict[str, str] = {
-            "encryption": "none",
+            "encryption": str(settings_obj.get("encryption") or "none"),
             "security": security,
             "type": network,
         }
@@ -684,17 +1219,16 @@ class PanelService:
                 cid = str(c.get("id") or "").strip()
                 if cid == client_uuid:
                     flow = str(c.get("flow") or "").strip()
-                    if flow:
+                    if flow and network == "tcp" and security in {"tls", "reality"}:
                         params["flow"] = flow
                     break
 
         if network == "ws":
             ws = self._parse_json_obj(stream_obj.get("wsSettings"))
             path = str(ws.get("path") or "/")
-            host = ""
-            headers = ws.get("headers")
-            if isinstance(headers, dict):
-                host = str(headers.get("Host") or "").strip()
+            host = str(ws.get("host") or "").strip()
+            if not host:
+                host = self._search_host(ws.get("headers"))
             if host:
                 params["host"] = host
             params["path"] = path
@@ -703,14 +1237,57 @@ class PanelService:
             service_name = str(grpc.get("serviceName") or "").strip()
             if service_name:
                 params["serviceName"] = service_name
+            authority = str(grpc.get("authority") or "").strip()
+            if authority:
+                params["authority"] = authority
+            if bool(grpc.get("multiMode")):
+                params["mode"] = "multi"
         elif network == "tcp":
             tcp = self._parse_json_obj(stream_obj.get("tcpSettings"))
             header = self._parse_json_obj(tcp.get("header"))
             header_type = str(header.get("type") or "").strip()
             if header_type:
                 params["headerType"] = header_type
+            if header_type == "http":
+                request = self._parse_json_obj(header.get("request"))
+                path = self._first_string(request.get("path"))
+                if path:
+                    params["path"] = path
+                host = self._search_host(request.get("headers"))
+                if host:
+                    params["host"] = host
+        elif network == "kcp":
+            kcp = self._parse_json_obj(stream_obj.get("kcpSettings"))
+            header = self._parse_json_obj(kcp.get("header"))
+            header_type = str(header.get("type") or "").strip()
+            if header_type:
+                params["headerType"] = header_type
+            seed = str(kcp.get("seed") or "").strip()
+            if seed:
+                params["seed"] = seed
+        elif network == "httpupgrade":
+            httpupgrade = self._parse_json_obj(stream_obj.get("httpupgradeSettings"))
+            path = str(httpupgrade.get("path") or "/")
+            host = str(httpupgrade.get("host") or "").strip()
+            if not host:
+                host = self._search_host(httpupgrade.get("headers"))
+            if host:
+                params["host"] = host
+            params["path"] = path
+        elif network == "xhttp":
+            xhttp = self._parse_json_obj(stream_obj.get("xhttpSettings"))
+            path = str(xhttp.get("path") or "/")
+            host = str(xhttp.get("host") or "").strip()
+            if not host:
+                host = self._search_host(xhttp.get("headers"))
+            mode = str(xhttp.get("mode") or "").strip()
+            if host:
+                params["host"] = host
+            if mode:
+                params["mode"] = mode
+            params["path"] = path
 
-        if security in {"tls", "reality"}:
+        if security == "tls":
             tls_obj = self._parse_json_obj(stream_obj.get("tlsSettings"))
             server_name = str(tls_obj.get("serverName") or "").strip()
             if server_name:
@@ -718,29 +1295,123 @@ class PanelService:
             alpn = tls_obj.get("alpn")
             if isinstance(alpn, list) and alpn:
                 params["alpn"] = ",".join([str(x) for x in alpn if str(x).strip()])
+            fingerprint = str(self._search_key(tls_obj.get("settings"), "fingerprint") or "").strip()
+            if fingerprint:
+                params["fp"] = fingerprint
 
         if security == "reality":
             reality = self._parse_json_obj(stream_obj.get("realitySettings"))
-            pbk = str(reality.get("publicKey") or "").strip()
-            sid = str(reality.get("shortId") or "").strip()
-            fp = str(reality.get("fingerprint") or "").strip()
+            reality_settings = reality.get("settings")
+            pbk = str(self._search_key(reality_settings, "publicKey") or reality.get("publicKey") or "").strip()
+            sid = self._first_string(reality.get("shortIds") or reality.get("shortId"))
+            fp = str(self._search_key(reality_settings, "fingerprint") or reality.get("fingerprint") or "").strip()
+            pqv = str(self._search_key(reality_settings, "mldsa65Verify") or "").strip()
             sni = params.get("sni", "")
             if not sni:
-                server_names = reality.get("serverNames")
-                if isinstance(server_names, list) and server_names:
-                    sni = str(server_names[0] or "").strip()
+                sni = self._first_string(reality.get("serverNames"))
             if pbk:
                 params["pbk"] = pbk
             if sid:
                 params["sid"] = sid
             if fp:
                 params["fp"] = fp
+            if pqv:
+                params["pqv"] = pqv
             if sni:
                 params["sni"] = sni
+            spx = str(reality.get("spiderX") or "").strip()
+            if spx:
+                params["spx"] = spx
 
-        query = urlencode(params, doseq=False, safe=",:/")
-        remark = quote(str(target_client.get("email") or client_email))
-        return f"vless://{client_uuid}@{base_host}:{port}?{query}#{remark}"
+        external_proxies = stream_obj.get("externalProxy")
+        if isinstance(external_proxies, list) and external_proxies:
+            links: list[str] = []
+            for proxy in external_proxies:
+                if not isinstance(proxy, dict):
+                    continue
+                dest = str(proxy.get("dest") or "").strip()
+                proxy_port = self._parse_port(proxy.get("port"))
+                if not dest or proxy_port <= 0:
+                    continue
+                force_tls = str(proxy.get("forceTls") or "same").strip().lower()
+                link_params = dict(params)
+                if force_tls and force_tls != "same":
+                    link_params["security"] = force_tls
+                    if force_tls == "none":
+                        for key in ("alpn", "sni", "fp"):
+                            link_params.pop(key, None)
+                remark = self._gen_link_remark(
+                    target_inbound,
+                    target_client,
+                    client_email,
+                    str(proxy.get("remark") or "").strip(),
+                )
+                links.append(
+                    self._build_vless_uri(
+                        client_uuid=client_uuid,
+                        host=dest,
+                        port=proxy_port,
+                        params=link_params,
+                        remark=remark,
+                    )
+                )
+            if links:
+                return "\n".join(links)
+
+        remark = self._gen_link_remark(target_inbound, target_client, client_email)
+        return self._build_vless_uri(
+            client_uuid=client_uuid,
+            host=base_host,
+            port=port,
+            params=params,
+            remark=remark,
+        )
+
+    async def get_client_vless_uri_by_email(
+        self, panel_id: int, inbound_id: int | None, client_email: str
+    ) -> str:
+        target_inbound, target_client = await self._find_client_on_panel(panel_id, inbound_id, client_email)
+        if target_inbound is None or target_client is None:
+            raise ValueError("client not found on inbound.")
+        return await self._build_client_vless_uri(panel_id, target_inbound, target_client, client_email)
+
+    async def _build_client_subscription_url(self, panel_id: int, target_client: Dict[str, Any]) -> str:
+        panel = await self.db.get_panel(panel_id)
+        if panel is None:
+            raise ValueError("panel not found.")
+
+        sub_id = str(target_client.get("subId") or "").strip()
+        if not sub_id:
+            raise ValueError("subscription id not found for client.")
+
+        override = self._subscription_base_override(panel)
+        if override:
+            return self._normalize_subscription_url(
+                panel,
+                f"{override}/{quote(sub_id, safe='')}",
+            )
+
+        settings = await self._get_panel_default_settings(panel_id)
+        sub_uri = str(settings.get("subURI") or "").strip()
+        if sub_uri:
+            return self._normalize_subscription_url(
+                panel,
+                f"{sub_uri.rstrip('/')}/{quote(sub_id, safe='')}",
+            )
+
+        web_base_path = str(panel.get("web_base_path") or "").rstrip("/")
+        return self._normalize_subscription_url(
+            panel,
+            f"{panel['base_url']}{web_base_path}/sub/{quote(sub_id, safe='')}",
+        )
+
+    async def get_client_subscription_url_by_email(
+        self, panel_id: int, inbound_id: int | None, client_email: str
+    ) -> str:
+        _, target_client = await self._find_client_on_panel(panel_id, inbound_id, client_email)
+        if target_client is None:
+            raise ValueError("client not found on inbound.")
+        return await self._build_client_subscription_url(panel_id, target_client)
 
     @staticmethod
     def _pick_traffic_obj(raw: Dict[str, Any], client_email: str) -> Dict[str, Any]:

@@ -93,6 +93,317 @@ class Database:
         )
         await self.conn.commit()
 
+    async def get_app_setting(self, key: str, default: str | None = None) -> str | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            "SELECT value FROM app_settings WHERE key=? LIMIT 1;",
+            (key,),
+        )
+        row = await cur.fetchone()
+        return str(row["value"]) if row else default
+
+    async def set_app_setting(self, key: str, value: str) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO app_settings(key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (key, value),
+        )
+        await self.conn.commit()
+
+    async def get_user_by_telegram_id(self, telegram_user_id: int) -> Dict[str, Any] | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, telegram_user_id, full_name, username, is_admin, language
+            FROM users
+            WHERE telegram_user_id=?
+            LIMIT 1;
+            """,
+            (telegram_user_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def upsert_delegated_admin(
+        self,
+        *,
+        telegram_user_id: int,
+        title: str | None,
+        created_by: int,
+    ) -> int:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegated_admins (telegram_user_id, title, created_by, is_active, updated_at)
+            VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                title=excluded.title,
+                is_active=1,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (telegram_user_id, title, created_by),
+        )
+        await self.conn.commit()
+        cur = await self.conn.execute(
+            """
+            SELECT id
+            FROM delegated_admins
+            WHERE telegram_user_id=?
+            LIMIT 1;
+            """,
+            (telegram_user_id,),
+        )
+        row = await cur.fetchone()
+        return int(row["id"])
+
+    async def get_delegated_admin_by_user_id(self, telegram_user_id: int) -> Dict[str, Any] | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, telegram_user_id, title, created_by, is_active, created_at, updated_at
+            FROM delegated_admins
+            WHERE telegram_user_id=? AND is_active=1
+            LIMIT 1;
+            """,
+            (telegram_user_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def add_delegated_admin_inbound_access(
+        self,
+        *,
+        delegated_admin_id: int,
+        panel_id: int,
+        inbound_id: int,
+    ) -> int:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegated_admin_inbounds (delegated_admin_id, panel_id, inbound_id, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(delegated_admin_id, panel_id, inbound_id) DO UPDATE SET
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (delegated_admin_id, panel_id, inbound_id),
+        )
+        await self.conn.commit()
+        cur = await self.conn.execute(
+            """
+            SELECT id
+            FROM delegated_admin_inbounds
+            WHERE delegated_admin_id=? AND panel_id=? AND inbound_id=?
+            LIMIT 1;
+            """,
+            (delegated_admin_id, panel_id, inbound_id),
+        )
+        row = await cur.fetchone()
+        return int(row["id"])
+
+    async def revoke_delegated_admin_access(self, access_id: int) -> bool:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            "DELETE FROM delegated_admin_inbounds WHERE id=?;",
+            (access_id,),
+        )
+        await self.conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def list_delegated_admin_access_rows(self) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT
+                dai.id AS access_id,
+                da.id AS delegated_admin_id,
+                da.telegram_user_id,
+                da.title,
+                da.is_active,
+                da.created_by,
+                dai.panel_id,
+                p.name AS panel_name,
+                dai.inbound_id,
+                u.full_name,
+                u.username
+            FROM delegated_admin_inbounds AS dai
+            JOIN delegated_admins AS da ON da.id = dai.delegated_admin_id
+            JOIN panels AS p ON p.id = dai.panel_id
+            LEFT JOIN users AS u ON u.telegram_user_id = da.telegram_user_id
+            WHERE da.is_active=1
+            ORDER BY da.telegram_user_id ASC, dai.panel_id ASC, dai.inbound_id ASC;
+            """
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def list_admin_access_rows_for_user(self, telegram_user_id: int) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT
+                dai.id AS access_id,
+                da.id AS delegated_admin_id,
+                da.telegram_user_id,
+                da.title,
+                dai.panel_id,
+                p.name AS panel_name,
+                dai.inbound_id
+            FROM delegated_admin_inbounds AS dai
+            JOIN delegated_admins AS da ON da.id = dai.delegated_admin_id
+            JOIN panels AS p ON p.id = dai.panel_id
+            WHERE da.telegram_user_id=? AND da.is_active=1
+            ORDER BY dai.panel_id ASC, dai.inbound_id ASC;
+            """,
+            (telegram_user_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def has_admin_access_to_inbound(
+        self,
+        *,
+        telegram_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+    ) -> bool:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT 1
+            FROM delegated_admin_inbounds AS dai
+            JOIN delegated_admins AS da ON da.id = dai.delegated_admin_id
+            WHERE da.telegram_user_id=? AND da.is_active=1 AND dai.panel_id=? AND dai.inbound_id=?
+            LIMIT 1;
+            """,
+            (telegram_user_id, panel_id, inbound_id),
+        )
+        row = await cur.fetchone()
+        return row is not None
+
+    async def get_delegated_admin_client_alert_state(
+        self,
+        *,
+        delegated_admin_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> str | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT alert_state
+            FROM delegated_admin_client_alerts
+            WHERE delegated_admin_user_id=? AND panel_id=? AND inbound_id=? AND client_uuid=?
+            LIMIT 1;
+            """,
+            (delegated_admin_user_id, panel_id, inbound_id, client_uuid),
+        )
+        row = await cur.fetchone()
+        return str(row["alert_state"]) if row else None
+
+    async def get_delegated_admin_client_alert_states(
+        self,
+        *,
+        delegated_admin_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> tuple[str | None, str | None]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT traffic_alert_state, expiry_alert_state, alert_state
+            FROM delegated_admin_client_alerts
+            WHERE delegated_admin_user_id=? AND panel_id=? AND inbound_id=? AND client_uuid=?
+            LIMIT 1;
+            """,
+            (delegated_admin_user_id, panel_id, inbound_id, client_uuid),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None, None
+        traffic = row["traffic_alert_state"] if "traffic_alert_state" in row.keys() else row["alert_state"]
+        expiry = row["expiry_alert_state"] if "expiry_alert_state" in row.keys() else "normal"
+        return str(traffic), str(expiry)
+
+    async def upsert_delegated_admin_client_alert_state(
+        self,
+        *,
+        delegated_admin_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        alert_state: str,
+        mark_notified: bool,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegated_admin_client_alerts (
+                delegated_admin_user_id, panel_id, inbound_id, client_uuid, alert_state, last_notified_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END, CURRENT_TIMESTAMP)
+            ON CONFLICT(delegated_admin_user_id, panel_id, inbound_id, client_uuid) DO UPDATE SET
+                alert_state=excluded.alert_state,
+                last_notified_at=CASE WHEN excluded.last_notified_at IS NOT NULL THEN excluded.last_notified_at ELSE delegated_admin_client_alerts.last_notified_at END,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (
+                delegated_admin_user_id,
+                panel_id,
+                inbound_id,
+                client_uuid,
+                alert_state,
+                int(mark_notified),
+            ),
+        )
+        await self.conn.commit()
+
+    async def upsert_delegated_admin_client_alert_states(
+        self,
+        *,
+        delegated_admin_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        traffic_alert_state: str,
+        expiry_alert_state: str,
+        mark_notified: bool,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegated_admin_client_alerts (
+                delegated_admin_user_id, panel_id, inbound_id, client_uuid,
+                alert_state, traffic_alert_state, expiry_alert_state, last_notified_at, updated_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT(delegated_admin_user_id, panel_id, inbound_id, client_uuid) DO UPDATE SET
+                alert_state=excluded.alert_state,
+                traffic_alert_state=excluded.traffic_alert_state,
+                expiry_alert_state=excluded.expiry_alert_state,
+                last_notified_at=CASE WHEN excluded.last_notified_at IS NOT NULL THEN excluded.last_notified_at ELSE delegated_admin_client_alerts.last_notified_at END,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (
+                delegated_admin_user_id,
+                panel_id,
+                inbound_id,
+                client_uuid,
+                traffic_alert_state,
+                traffic_alert_state,
+                expiry_alert_state,
+                int(mark_notified),
+            ),
+        )
+        await self.conn.commit()
+
     async def add_panel(
         self,
         *,
@@ -282,6 +593,21 @@ class Database:
             ORDER BY id ASC;
             """,
             (telegram_user_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_user_services_by_panel_email(self, panel_id: int, client_email: str) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, telegram_user_id, panel_id, inbound_id, client_email, client_id, service_name,
+                   total_bytes, used_bytes, expire_at, status, last_synced_at
+            FROM user_services
+            WHERE panel_id=? AND LOWER(client_email)=LOWER(?)
+            ORDER BY id ASC;
+            """,
+            (panel_id, client_email),
         )
         rows = await cur.fetchall()
         return [dict(row) for row in rows]

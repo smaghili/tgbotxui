@@ -1,18 +1,18 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import logging
-from html import escape
-from io import BytesIO
-
-import qrcode
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.keyboards import main_keyboard
 from bot.services.container import ServiceContainer
+
+from .admin_shared import format_client_detail
+from .config_bundle import send_existing_config_bundle_for_email, send_rotation_preview_bundle_for_email
 
 router = Router(name="common")
 logger = logging.getLogger(__name__)
@@ -24,6 +24,10 @@ def _is_admin(user_id: int, settings: Settings) -> bool:
 
 async def _user_lang(services: ServiceContainer, user_id: int) -> str:
     return await services.db.get_user_language(user_id)
+
+
+async def _is_any_admin(user_id: int, settings: Settings, services: ServiceContainer) -> bool:
+    return await services.access_service.is_any_admin(user_id, settings)
 
 
 def _language_keyboard() -> InlineKeyboardMarkup:
@@ -48,6 +52,17 @@ def _status_service_keyboard(service_id: int, lang: str) -> InlineKeyboardMarkup
     )
 
 
+def _status_rotate_confirm_keyboard(service_id: int, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"status_rotate_yes:{service_id}"),
+                InlineKeyboardButton(text=t("btn_no", lang), callback_data=f"status_rotate_no:{service_id}"),
+            ]
+        ]
+    )
+
+
 async def _send_service_status(
     message: Message,
     *,
@@ -58,6 +73,23 @@ async def _send_service_status(
 ) -> None:
     user_id = target_user_id if target_user_id is not None else message.from_user.id
     lang = await _user_lang(services, user_id)
+    if message.from_user is not None and message.from_user.id == user_id:
+        # Keep user identity fresh and try auto-bind on demand, so users do not need /start again.
+        await services.db.upsert_user(
+            telegram_user_id=message.from_user.id,
+            full_name=message.from_user.full_name,
+            username=message.from_user.username,
+            is_admin=_is_admin(message.from_user.id, settings),
+        )
+        existing = await services.db.get_user_services(user_id)
+        if not existing:
+            try:
+                await services.panel_service.bind_services_for_telegram_identity(
+                    telegram_user_id=user_id,
+                    username=message.from_user.username,
+                )
+            except Exception:
+                logger.exception("auto-bind by telegram identity failed", extra={"telegram_user_id": user_id})
     try:
         status_messages = await services.usage_service.get_user_status_messages(user_id, force_refresh=force_refresh)
         service_rows = await services.db.get_user_services(user_id)
@@ -72,7 +104,7 @@ async def _send_service_status(
         )
         await message.answer(
             t("status_fetch_error", lang),
-            reply_markup=main_keyboard(_is_admin(user_id, settings), lang),
+            reply_markup=main_keyboard(await _is_any_admin(user_id, settings, services), lang),
         )
         return
 
@@ -86,7 +118,7 @@ async def _send_service_status(
         )
         await message.answer(
             t("status_empty", lang),
-            reply_markup=main_keyboard(_is_admin(user_id, settings), lang),
+            reply_markup=main_keyboard(await _is_any_admin(user_id, settings, services), lang),
         )
         return
 
@@ -97,6 +129,17 @@ async def _send_service_status(
         success=True,
     )
     for idx, card in enumerate(status_messages):
+        if idx < len(service_rows):
+            row = service_rows[idx]
+            try:
+                detail = await services.panel_service.get_client_detail(
+                    int(row["panel_id"]),
+                    int(row["inbound_id"] or 0),
+                    str(row["client_id"] or ""),
+                )
+                card = format_client_detail(detail, settings.timezone, lang)
+            except Exception:
+                pass
         await message.answer(
             card,
             reply_markup=_status_service_keyboard(int(service_rows[idx]["id"]), lang) if idx < len(service_rows) else None,
@@ -112,10 +155,14 @@ async def handle_start(message: Message, settings: Settings, services: ServiceCo
         username=user.username,
         is_admin=_is_admin(user.id, settings),
     )
+    await services.panel_service.bind_services_for_telegram_identity(
+        telegram_user_id=user.id,
+        username=user.username,
+    )
     lang = await _user_lang(services, user.id)
     await message.answer(
         t("welcome", lang),
-        reply_markup=main_keyboard(_is_admin(user.id, settings), lang),
+        reply_markup=main_keyboard(await _is_any_admin(user.id, settings, services), lang),
     )
 
 
@@ -135,7 +182,7 @@ async def handle_help(message: Message, settings: Settings, services: ServiceCon
         )
     await message.answer(
         "\n".join(lines),
-        reply_markup=main_keyboard(_is_admin(message.from_user.id, settings), lang),
+        reply_markup=main_keyboard(await _is_any_admin(message.from_user.id, settings, services), lang),
     )
 
 
@@ -172,12 +219,35 @@ async def set_language(callback: CallbackQuery, settings: Settings, services: Se
     if callback.message is not None:
         await callback.message.answer(
             t(text_key, lang),
-            reply_markup=main_keyboard(_is_admin(callback.from_user.id, settings), lang),
+            reply_markup=main_keyboard(await _is_any_admin(callback.from_user.id, settings, services), lang),
         )
 
 
 @router.callback_query(F.data.startswith("status_rotate_uuid:"))
 async def rotate_uuid_from_status(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    lang = await _user_lang(services, callback.from_user.id)
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    try:
+        service_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("status_invalid_id", lang), show_alert=True)
+        return
+    await callback.message.answer(
+        t("status_rotate_confirm", lang),
+        reply_markup=_status_rotate_confirm_keyboard(service_id, lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("status_rotate_no:"))
+async def rotate_uuid_cancel(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("status_rotate_yes:"))
+async def rotate_uuid_confirm(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     lang = await _user_lang(services, callback.from_user.id)
     if callback.data is None:
         await callback.answer()
@@ -196,10 +266,36 @@ async def rotate_uuid_from_status(callback: CallbackQuery, settings: Settings, s
         return
     await callback.answer(t("status_rotating", lang))
     try:
-        await services.panel_service.rotate_client_uuid_by_email(
-            panel_id=int(row["panel_id"]),
-            inbound_id=row.get("inbound_id"),
-            client_email=str(row["client_email"]),
+        if callback.message is not None:
+            fresh = await services.db.get_user_service_by_id(service_id) or row
+            await callback.message.answer(
+                f"{t('status_rotate_done_bundle', lang)}\n{settings.config_rotate_apply_delay_seconds} {t('unit_second', lang)}"
+            )
+            prepared = await send_rotation_preview_bundle_for_email(
+                callback.message,
+                services=services,
+                settings=settings,
+                panel_id=int(row["panel_id"]),
+                inbound_id=row.get("inbound_id"),
+                client_email=str(row["client_email"]),
+                config_name=str(fresh.get("service_name") or fresh.get("client_email") or row["client_email"]),
+                total_bytes=int(fresh.get("total_bytes", -1)),
+                expiry=fresh.get("expire_at"),
+                lang=lang,
+            )
+        else:
+            prepared = await services.panel_service.prepare_client_rotation_by_email(
+                panel_id=int(row["panel_id"]),
+                inbound_id=row.get("inbound_id"),
+                client_email=str(row["client_email"]),
+            )
+        await asyncio.sleep(max(0, int(settings.config_rotate_apply_delay_seconds)))
+        await services.panel_service.apply_prepared_client_rotation(
+            panel_id=int(prepared["panel_id"]),
+            inbound_id=int(prepared["inbound_id"]),
+            old_uuid=str(prepared["old_uuid"]),
+            new_uuid=str(prepared["new_uuid"]),
+            new_sub_id=str(prepared["new_sub_id"]),
         )
         await services.panel_service.bind_service_to_user(
             panel_id=int(row["panel_id"]),
@@ -216,7 +312,7 @@ async def rotate_uuid_from_status(callback: CallbackQuery, settings: Settings, s
 
 
 @router.callback_query(F.data.startswith("status_get_config:"))
-async def get_config_from_status(callback: CallbackQuery, services: ServiceContainer) -> None:
+async def get_config_from_status(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     lang = await _user_lang(services, callback.from_user.id)
     if callback.data is None:
         await callback.answer()
@@ -235,24 +331,20 @@ async def get_config_from_status(callback: CallbackQuery, services: ServiceConta
         return
     await callback.answer(t("status_prepare_config", lang))
     try:
-        uri = await services.panel_service.get_client_vless_uri_by_email(
-            panel_id=int(row["panel_id"]),
-            inbound_id=row.get("inbound_id"),
-            client_email=str(row["client_email"]),
-        )
+        if callback.message is not None:
+            await send_existing_config_bundle_for_email(
+                callback.message,
+                services=services,
+                settings=settings,
+                panel_id=int(row["panel_id"]),
+                inbound_id=row.get("inbound_id"),
+                client_email=str(row["client_email"]),
+                config_name=str(row.get("service_name") or row.get("client_email")),
+                total_bytes=int(row.get("total_bytes", -1)),
+                expiry=row.get("expire_at"),
+                lang=lang,
+            )
     except Exception as exc:
         await callback.answer(f"{t('error_prefix', lang)}: {exc}", show_alert=True)
         return
-
-    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
-    qr.add_data(uri)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="#0B5ED7", back_color="#F7F7E8")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    file = BufferedInputFile(buf.getvalue(), filename="config_qr.png")
-
-    if callback.message is not None:
-        caption = t("config_caption", lang, uri=escape(uri))
-        await callback.message.answer_photo(file, caption=caption, parse_mode="HTML")
 

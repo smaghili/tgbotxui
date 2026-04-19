@@ -22,13 +22,21 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "btn_search_user": {"fa": "🔎 جستجوی کاربر", "en": "🔎 Search User"},
     "btn_disabled_users": {"fa": "🚫 کاربران غیرفعال", "en": "🚫 Disabled Users"},
     "btn_last_online_users": {"fa": "🕘 آخرین آنلاین", "en": "🕘 Last Online"},
+    "btn_inbounds_overview": {"fa": "📋 اطلاعات کلی اینباندها", "en": "📋 Inbounds Overview"},
+    "btn_create_user": {"fa": "➕ ساخت کاربر", "en": "➕ Create User"},
+    "btn_edit_config": {"fa": "🛠 ویرایش کانفیگ", "en": "🛠 Edit Config"},
+    "btn_manage_admins": {"fa": "👥 مدیریت ادمین‌ها", "en": "👥 Manage Admins"},
+    "btn_cleanup_settings": {"fa": "⏱ تنظیم حذف خودکار", "en": "⏱ Auto cleanup"},
+    "btn_bulk_operations": {"fa": "عملیات گروهی", "en": "Bulk Operations"},
     "btn_cancel": {"fa": "لغو", "en": "Cancel"},
+    "btn_cancel_operation": {"fa": "لغو عملیات", "en": "Cancel Operation"},
     "btn_bind_service": {"fa": "اتصال سرویس به کاربر", "en": "Bind Service to User"},
     "btn_sync_usage": {"fa": "همگام‌سازی مصرف", "en": "Sync Usage"},
-    "btn_rotate_link": {"fa": "تغییر لینک ⚙️", "en": "Rotate Link ⚙️"},
+    "btn_rotate_link": {"fa": "تغییر کانفیگ ⚙️", "en": "Change Config ⚙️"},
     "btn_get_config": {"fa": "دریافت کانفیگ 📥", "en": "Get Config 📥"},
     "btn_yes": {"fa": "بله", "en": "Yes"},
     "btn_no": {"fa": "خیر", "en": "No"},
+    "btn_confirm": {"fa": "تایید", "en": "Confirm"},
 
     "menu_management": {"fa": "پنل مدیریت:", "en": "Management Panel:"},
     "menu_main": {"fa": "منوی اصلی", "en": "Main Menu"},
@@ -62,6 +70,14 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "status_rotating": {"fa": "در حال تغییر لینک...", "en": "Rotating link..."},
     "status_rotated": {"fa": "✅ لینک با UUID جدید بروزرسانی شد.", "en": "✅ Link was refreshed with a new UUID."},
     "status_prepare_config": {"fa": "در حال آماده‌سازی کانفیگ...", "en": "Preparing config..."},
+    "status_rotate_confirm": {
+        "fa": "با این عملیات کانفیگ فعلی شما قطع می‌شود و کانفیگ و لینک اشتراک جدید دریافت می‌کنید. مطمئن هستید؟",
+        "en": "This will invalidate your current config and issue a new config and subscription link. Are you sure?",
+    },
+    "status_rotate_done_bundle": {
+        "fa": "کانفیگ جدید شما آماده شد.",
+        "en": "Your new config is ready.",
+    },
     "error_prefix": {"fa": "خطا", "en": "Error"},
 
     "bind_invalid_default_panel": {
@@ -112,6 +128,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     },
 
     "unit_gb": {"fa": "گیگابایت", "en": "GB"},
+    "unit_day": {"fa": "روز", "en": "days"},
+    "unit_second": {"fa": "ثانیه", "en": "seconds"},
     "na_value": {"fa": "ندارد", "en": "N/A"},
     "unknown_value": {"fa": "نامشخص", "en": "Unknown"},
     "expired_value": {"fa": "منقضی شده", "en": "Expired"},
@@ -143,8 +161,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     },
 
     "admin_panels_list": {
-        "fa": "پنل‌های ثبت‌شده:\nبرای حذف روی آیکون سطل کلیک کنید.\nپنل پیش‌فرض با ستاره مشخص شده.",
-        "en": "Registered panels:\nTap trash icon to delete.\nDefault panel is marked with a star.",
+        "fa": "پنل‌های ثبت‌شده:\nبرای حذف روی آیکون سطل کلیک کنید.\nبرای تنظیم یا برداشتن پنل پیش‌فرض روی نام پنل بزنید.\nپنل پیش‌فرض با ستاره مشخص شده.",
+        "en": "Registered panels:\nTap trash icon to delete.\nTap panel name to set or unset the default panel.\nDefault panel is marked with a star.",
     },
     "admin_none": {"fa": "هیچ موردی ثبت نشده است.", "en": "No records found."},
     "admin_panel_not_found": {"fa": "پنل پیدا نشد.", "en": "Panel not found."},
@@ -181,7 +199,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_clear_ip_log": {"fa": "🧹 پاکسازی لاگ IP", "en": "🧹 Clear IP logs"},
 
     "admin_inbounds_title": {"fa": "📥 لیست ورودی‌ها", "en": "📥 Inbound List"},
+    "admin_inbounds_overview_title": {"fa": "📋 اطلاعات کلی اینباند‌ها", "en": "📋 Inbounds Overview"},
     "admin_panel_label": {"fa": "پنل", "en": "Panel"},
+    "admin_panel_total_usage": {"fa": "📦 مصرف کل پنل", "en": "📦 Total panel usage"},
+    "admin_inbounds_count": {"fa": "🧩 تعداد اینباند", "en": "🧩 Inbounds count"},
     "admin_inbound_name": {"fa": "📍 نام‌ورودی", "en": "📍 Inbound"},
     "admin_port": {"fa": "🔌 پورت", "en": "🔌 Port"},
     "admin_traffic": {"fa": "🚦 ترافیک", "en": "🚦 Traffic"},
@@ -326,6 +347,201 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "panel_already_deleted": {"fa": "این پنل قبلا حذف شده است.", "en": "This panel is already deleted."},
     "panel_delete_confirm": {"fa": "نام پنل: {name}\nوضعیت اتصال: {status}\n\nآیا از حذف مطمئن هستید؟", "en": "Panel: {name}\nConnection: {status}\n\nAre you sure to delete?"},
     "inbounds_select_panel": {"fa": "پنل پیش‌فرض انتخاب نشده است.\nبرای دریافت لیست ورودی‌ها، پنل را انتخاب کنید:", "en": "Default panel is not selected.\nSelect a panel to view inbounds:"},
+
+    "admin_manage_admins_title": {
+        "fa": "مدیریت ادمین‌های محدود:\n- افزودن دسترسی جدید\n- مشاهده و حذف دسترسی‌ها",
+        "en": "Delegated admin management:\n- Add new access\n- View and revoke accesses",
+    },
+    "admin_add_delegated": {"fa": "➕ افزودن ادمین محدود", "en": "➕ Add delegated admin"},
+    "admin_list_delegated": {"fa": "📋 لیست ادمین‌های محدود", "en": "📋 Delegated admins list"},
+    "admin_enter_delegated_target": {
+        "fa": "آیدی عددی یا یوزرنیم ادمین محدود را وارد کنید:",
+        "en": "Enter delegated admin numeric ID or username:",
+    },
+    "admin_enter_delegated_title": {
+        "fa": "یک نام نمایشی برای این ادمین وارد کنید. اگر نمی‌خواهید، `-` بفرستید:",
+        "en": "Enter a display title for this admin. Send - to skip:",
+    },
+    "admin_pick_inbound_for_delegated": {
+        "fa": "اینباندی که این ادمین به آن دسترسی دارد را انتخاب کنید:",
+        "en": "Select inbound that this admin can access:",
+    },
+    "admin_delegated_saved": {
+        "fa": "✅ دسترسی ادمین محدود ذخیره شد.",
+        "en": "✅ Delegated admin access saved.",
+    },
+    "admin_delegated_pick_one": {
+        "fa": "حداقل یک اینباند را انتخاب کنید.",
+        "en": "Select at least one inbound.",
+    },
+    "admin_delegated_empty": {
+        "fa": "هیچ ادمین محدودی ثبت نشده است.",
+        "en": "No delegated admin access is registered.",
+    },
+    "admin_delegated_list_header": {
+        "fa": "لیست دسترسی‌های ادمین محدود:",
+        "en": "Delegated admin accesses:",
+    },
+    "admin_delegated_removed": {
+        "fa": "✅ دسترسی حذف شد.",
+        "en": "✅ Access removed.",
+    },
+    "admin_delegated_target_unknown": {
+        "fa": "این یوزرنیم در دیتابیس ربات پیدا نشد. کاربر باید حداقل یک‌بار /start بزند یا آیدی عددی وارد شود.",
+        "en": "Username was not found in bot database. User should run /start once or use numeric ID.",
+    },
+    "admin_bulk_actions": {"fa": "عملیات گروهی", "en": "Bulk Actions"},
+    "admin_bulk_add_traffic": {"fa": "افزودن حجم به تمامی کاربران", "en": "Add traffic to all users"},
+    "admin_bulk_add_days": {"fa": "افزودن روز به تمامی کاربران", "en": "Add days to all users"},
+    "admin_back_to_users": {"fa": "بازگشت به لیست کاربران", "en": "Back to users list"},
+    "admin_bulk_menu_text": {
+        "fa": "عملیات گروهی برای کل پنل را انتخاب کنید:",
+        "en": "Choose a bulk action for the whole panel:",
+    },
+    "admin_bulk_pick_panel": {
+        "fa": "برای عملیات گروهی، پنل را انتخاب کنید:",
+        "en": "Select a panel for bulk operations:",
+    },
+    "admin_bulk_enter_traffic": {
+        "fa": "مقدار حجمی که باید به همه کاربران این پنل اضافه شود را به گیگابایت وارد کنید:",
+        "en": "Enter traffic in GB to add to all clients in this panel:",
+    },
+    "admin_bulk_enter_days": {
+        "fa": "تعداد روزی که باید به همه کاربران این پنل اضافه شود را وارد کنید:",
+        "en": "Enter days to add to all clients in this panel:",
+    },
+    "admin_bulk_started": {
+        "fa": "در حال اعمال عملیات گروهی...",
+        "en": "Applying bulk action...",
+    },
+    "admin_bulk_done": {
+        "fa": "عملیات گروهی انجام شد.\nموفق: {success}\nناموفق: {failed}",
+        "en": "Bulk action completed.\nSuccess: {success}\nFailed: {failed}",
+    },
+    "admin_bulk_empty": {
+        "fa": "هیچ کاربری در این پنل برای اعمال عملیات پیدا نشد.",
+        "en": "No clients were found in this panel for bulk action.",
+    },
+    "admin_create_user_pick_inbound": {
+        "fa": "برای ساخت کاربر، اینباند مقصد را انتخاب کنید:",
+        "en": "Select target inbound to create client:",
+    },
+    "admin_create_user_no_access": {
+        "fa": "هیچ اینباند مجازی برای شما ثبت نشده است.",
+        "en": "No allowed inbound is registered for you.",
+    },
+    "admin_create_enter_email": {
+        "fa": "نام/ایمیل کاربر را وارد کنید:",
+        "en": "Enter client name/email:",
+    },
+    "admin_create_enter_traffic": {
+        "fa": "حجم کاربر را به گیگابایت وارد کنید:",
+        "en": "Enter traffic in GB:",
+    },
+    "admin_create_enter_days": {
+        "fa": "تعداد روز کاربر را وارد کنید:",
+        "en": "Enter number of days:",
+    },
+    "admin_create_set_tg_title": {
+        "fa": "تنظیم ایدی تلگرام",
+        "en": "Set Telegram ID",
+    },
+    "admin_create_set_tg_text": {
+        "fa": "آیا می‌خواهید برای این کاربر آیدی تلگرام تنظیم شود؟",
+        "en": "Do you want to set a Telegram ID for this client?",
+    },
+    "admin_create_enter_tg": {
+        "fa": "آیدی تلگرام را وارد کنید. هم عددی و هم با @ قابل قبول است:",
+        "en": "Enter Telegram ID. Both numeric IDs and @usernames are accepted:",
+    },
+    "admin_tgid_invalid": {
+        "fa": "آیدی تلگرام باید عددی باشد یا با @ شروع شود.",
+        "en": "Telegram ID must be numeric or start with @.",
+    },
+    "admin_create_success": {
+        "fa": "✅ کاربر ساخته شد.\n📧 ایمیل: {email}\n🔑 UUID: <code>{uuid}</code>\n🔗 ساب: <code>{sub_url}</code>\n\nلینک VLESS:\n<code>{vless_uri}</code>",
+        "en": "✅ Client created.\n📧 Email: {email}\n🔑 UUID: <code>{uuid}</code>\n🔗 Sub: <code>{sub_url}</code>\n\nVLESS link:\n<code>{vless_uri}</code>",
+    },
+    "admin_create_preparing": {
+        "fa": "در حال ساخت کاربر و تولید کانفیگ...",
+        "en": "Creating client and generating config...",
+    },
+    "admin_edit_config_prompt": {
+        "fa": "لطفا کانفیگ VLESS یا بخشی از نام کاربر را ارسال کنید:",
+        "en": "Please send the VLESS config or part of the client name:",
+    },
+    "admin_edit_config_resolved": {
+        "fa": "کاربر پیدا شد:\nپنل: {panel}\nاینباند: {inbound}\nایمیل: {email}",
+        "en": "Client resolved:\nPanel: {panel}\nInbound: {inbound}\nEmail: {email}",
+    },
+    "admin_edit_config_error": {
+        "fa": "در پردازش کانفیگ خطا رخ داد:\n{error}",
+        "en": "Failed to process config:\n{error}",
+    },
+    "admin_edit_search_pick_panel": {
+        "fa": "برای جستجو و ویرایش کانفیگ، پنل را انتخاب کنید:",
+        "en": "Choose a panel to search and edit config:",
+    },
+    "admin_edit_search_result_header": {
+        "fa": "پنل: {panel}\nجستجو برای ویرایش: {query}\nتعداد نتیجه: {count}",
+        "en": "Panel: {panel}\nEdit search: {query}\nResults: {count}",
+    },
+    "admin_edit_add_traffic": {"fa": "➕ افزودن حجم", "en": "➕ Add traffic"},
+    "admin_edit_add_days": {"fa": "➕ افزودن روز", "en": "➕ Add days"},
+    "admin_edit_delete_client": {"fa": "🗑 حذف کاربر", "en": "🗑 Delete client"},
+    "admin_edit_show_detail": {"fa": "🔎 نمایش جزئیات", "en": "🔎 Show detail"},
+    "admin_edit_enter_add_traffic": {
+        "fa": "مقدار حجمی که باید اضافه شود را به گیگابایت وارد کنید:",
+        "en": "Enter GB amount to add:",
+    },
+    "admin_edit_enter_add_days": {
+        "fa": "تعداد روزی که باید اضافه شود را وارد کنید:",
+        "en": "Enter number of days to add:",
+    },
+    "admin_edit_deleted": {
+        "fa": "✅ کاربر حذف شد.",
+        "en": "✅ Client deleted.",
+    },
+    "admin_edit_traffic_added": {
+        "fa": "✅ حجم اضافه شد.",
+        "en": "✅ Traffic added.",
+    },
+    "admin_edit_days_added": {
+        "fa": "✅ روز اضافه شد.",
+        "en": "✅ Days added.",
+    },
+    "admin_edit_rotate_confirm": {
+        "fa": "با این عملیات کانفیگ فعلی کاربر قطع می‌شود و کانفیگ جدید ساخته می‌شود. مطمئن هستید؟",
+        "en": "This will invalidate the current config and generate a new one. Are you sure?",
+    },
+    "admin_edit_rotate_done": {
+        "fa": "کانفیگ جدید کاربر آماده شد.",
+        "en": "The client's new config is ready.",
+    },
+    "admin_invalid_positive_number": {
+        "fa": "عدد معتبر و بزرگ‌تر از صفر وارد کنید.",
+        "en": "Enter a valid positive number.",
+    },
+    "admin_delegated_min_create_traffic": {
+        "fa": "برای ادمین فرعی حداقل حجم ساخت کاربر {minimum} گیگابایت است.",
+        "en": "For delegated admins, the minimum traffic for client creation is {minimum} GB.",
+    },
+    "admin_delegated_min_create_days": {
+        "fa": "برای ادمین فرعی حداقل زمان ساخت کاربر {minimum} روز است.",
+        "en": "For delegated admins, the minimum client duration is {minimum} days.",
+    },
+    "admin_cleanup_hours_prompt": {
+        "fa": "حذف خودکار کاربران اتمام‌حجم یا منقضی بعد از چند ساعت از آخرین آنلاین انجام شود؟\nپیش‌فرض فعلی: {hours} ساعت",
+        "en": "Delete depleted or expired users after how many hours since last online?\nCurrent default: {hours} hours",
+    },
+    "admin_cleanup_hours_saved": {
+        "fa": "تنظیم حذف خودکار روی {hours} ساعت ذخیره شد.",
+        "en": "Automatic cleanup is now set to {hours} hours.",
+    },
+    "config_full_caption": {
+        "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>\n\nلینک ساب:\n<code>{sub_url}</code>",
+        "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>\n\nSubscription link:\n<code>{sub_url}</code>",
+    },
 }
 
 

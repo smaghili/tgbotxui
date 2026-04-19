@@ -19,6 +19,7 @@ class BindServiceStates(StatesGroup):
 
 class InboundsListStates(StatesGroup):
     waiting_panel_select = State()
+    waiting_overview_panel_select = State()
 
 
 class ClientManageStates(StatesGroup):
@@ -27,3 +28,28 @@ class ClientManageStates(StatesGroup):
     waiting_custom_ip_limit = State()
     waiting_tg_id = State()
     waiting_online_search_query = State()
+    waiting_bulk_add_traffic_gb = State()
+    waiting_bulk_add_expiry_days = State()
+
+
+class AdminSettingsStates(StatesGroup):
+    waiting_depleted_cleanup_hours = State()
+
+
+class DelegatedAdminStates(StatesGroup):
+    waiting_target = State()
+    waiting_title = State()
+    waiting_inbound_selection = State()
+
+
+class ProvisioningStates(StatesGroup):
+    waiting_create_email = State()
+    waiting_create_traffic_gb = State()
+    waiting_create_expiry_days = State()
+    waiting_create_tg_id_choice = State()
+    waiting_create_tg_id = State()
+    waiting_edit_tg_id = State()
+    waiting_vless_config = State()
+    waiting_edit_search_panel = State()
+    waiting_edit_add_traffic_gb = State()
+    waiting_edit_add_expiry_days = State()

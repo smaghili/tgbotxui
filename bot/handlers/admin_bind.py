@@ -44,7 +44,7 @@ async def start_bind(message: Message, state: FSMContext, settings: Settings, se
         return
     panels = await services.panel_service.list_panels()
     if not panels:
-        await message.answer(t("bind_no_panel", lang), reply_markup=admin_keyboard(lang))
+        await message.answer(t("bind_no_panel", lang), reply_markup=admin_keyboard(lang=lang))
         return
     await state.set_state(BindServiceStates.waiting_panel_select)
     await message.answer(t("bind_select_panel", lang), reply_markup=bind_panel_select_keyboard(panels))
@@ -127,11 +127,11 @@ async def bind_finalize(message: Message, state: FSMContext, services: ServiceCo
         )
     except Exception as exc:
         logger.exception("bind service failed")
-        await message.answer(f"{t('bind_failed', lang)}:\n{exc}", reply_markup=admin_keyboard(lang))
+        await message.answer(f"{t('bind_failed', lang)}:\n{exc}", reply_markup=admin_keyboard(lang=lang))
         return
     await message.answer(
         t("bind_success", lang, service=usage["service_name"], status=usage["status"]),
-        reply_markup=admin_keyboard(lang),
+        reply_markup=admin_keyboard(lang=lang),
     )
 
 
@@ -143,7 +143,7 @@ async def sync_all(message: Message, settings: Settings, services: ServiceContai
     lang = await services.db.get_user_language(message.from_user.id)
     await message.answer(t("sync_start", lang))
     await services.usage_service.refresh_all_services()
-    await message.answer(t("sync_done", lang), reply_markup=admin_keyboard(lang))
+    await message.answer(t("sync_done", lang), reply_markup=admin_keyboard(lang=lang))
 
 
 @router.message(Command("bind"))
@@ -181,9 +181,9 @@ async def bind_by_command(message: Message, settings: Settings, services: Servic
             service_name=service_name,
         )
     except Exception as exc:
-        await message.answer(f"Error in bind:\n{exc}", reply_markup=admin_keyboard(lang))
+        await message.answer(f"Error in bind:\n{exc}", reply_markup=admin_keyboard(lang=lang))
         return
     await message.answer(
         f"Bind success:\nService: {usage['service_name']}\nStatus: {usage['status']}",
-        reply_markup=admin_keyboard(lang),
+        reply_markup=admin_keyboard(lang=lang),
     )

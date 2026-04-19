@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from typing import TypeVar
+
+T = TypeVar("T")
+
 
 def paginate_window(total: int, page: int, per_page: int) -> tuple[int, int, int, int]:
     total_pages = max(1, (max(0, total) + per_page - 1) // per_page)
@@ -9,7 +13,7 @@ def paginate_window(total: int, page: int, per_page: int) -> tuple[int, int, int
     return safe_page, total_pages, start, end
 
 
-def chunk_buttons[T](items: list[T], columns: int = 2) -> list[list[T]]:
+def chunk_buttons(items: list[T], columns: int = 2) -> list[list[T]]:
     rows: list[list[T]] = []
     current: list[T] = []
     for item in items:

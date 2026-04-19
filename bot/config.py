@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Set
+from urllib.parse import urlparse, urlunparse
 
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
@@ -19,6 +20,61 @@ def _parse_admin_ids(raw: str) -> Set[int]:
         except ValueError:
             continue
     return ids
+
+
+def _parse_proxy_list(raw: str) -> tuple[str, ...]:
+    values: list[str] = []
+    for chunk in raw.replace("\r", "\n").replace(",", "\n").split("\n"):
+        proxy = chunk.strip()
+        if proxy:
+            values.append(proxy)
+    return tuple(values)
+
+
+def _normalize_sub_url_base(raw_base: str) -> str:
+    value = raw_base.strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = f"http://{value}"
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    path = parsed.path.rstrip("/") or "/sub"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def _parse_sub_url_strip_port_rules(raw: str) -> dict[str, str]:
+    rules: dict[str, str] = {}
+    for chunk in raw.replace("\r", "\n").replace(",", "\n").split("\n"):
+        value = chunk.strip()
+        if not value or ":" not in value:
+            continue
+        panel_key, host = value.split(":", 1)
+        panel_key = panel_key.strip().lower()
+        base_url = _normalize_sub_url_base(host)
+        if not panel_key or not base_url:
+            continue
+        rules[panel_key] = base_url
+    return rules
+
+
+def _parse_sub_url_base_overrides(raw: str) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for chunk in raw.replace("\r", "\n").replace(",", "\n").split("\n"):
+        value = chunk.strip()
+        if not value:
+            continue
+        sep = "=" if "=" in value else "|"
+        if sep not in value:
+            continue
+        panel_key, base_url = value.split(sep, 1)
+        panel_key = panel_key.strip().lower()
+        base_url = base_url.strip().rstrip("/")
+        if not panel_key or not base_url:
+            continue
+        overrides[panel_key] = base_url
+    return overrides
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -44,6 +100,13 @@ class Settings:
     metrics_port: int
     admin_rate_limit_count: int
     admin_rate_limit_window_seconds: int
+    depleted_client_delete_after_hours: int
+    config_rotate_apply_delay_seconds: int
+    delegated_admin_min_create_gb: int
+    delegated_admin_min_create_days: int
+    telegram_proxies: tuple[str, ...]
+    sub_url_strip_port_rules: dict[str, str]
+    sub_url_base_overrides: dict[str, str]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -68,7 +131,7 @@ class Settings:
             database_path=os.getenv("DATABASE_PATH", "data/bot.db").strip(),
             encryption_key=encryption_key,
             request_timeout_seconds=int(os.getenv("REQUEST_TIMEOUT_SECONDS", "20")),
-            sync_interval_seconds=int(os.getenv("SYNC_INTERVAL_SECONDS", "180")),
+            sync_interval_seconds=int(os.getenv("SYNC_INTERVAL_SECONDS", "120")),
             timezone=os.getenv("TIMEZONE", "Asia/Tehran").strip() or "Asia/Tehran",
             log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
             log_json=_env_bool("LOG_JSON", True),
@@ -78,5 +141,24 @@ class Settings:
             admin_rate_limit_count=int(os.getenv("ADMIN_RATE_LIMIT_COUNT", "10")),
             admin_rate_limit_window_seconds=int(
                 os.getenv("ADMIN_RATE_LIMIT_WINDOW_SECONDS", "60")
+            ),
+            depleted_client_delete_after_hours=int(
+                os.getenv("DEPLETED_CLIENT_DELETE_AFTER_HOURS", "48")
+            ),
+            config_rotate_apply_delay_seconds=int(
+                os.getenv("CONFIG_ROTATE_APPLY_DELAY_SECONDS", "4")
+            ),
+            delegated_admin_min_create_gb=int(
+                os.getenv("DELEGATED_ADMIN_MIN_CREATE_GB", "2")
+            ),
+            delegated_admin_min_create_days=int(
+                os.getenv("DELEGATED_ADMIN_MIN_CREATE_DAYS", "15")
+            ),
+            telegram_proxies=_parse_proxy_list(os.getenv("TELEGRAM_PROXIES", "")),
+            sub_url_strip_port_rules=_parse_sub_url_strip_port_rules(
+                os.getenv("SUB_URL_STRIP_PORT_RULES", "")
+            ),
+            sub_url_base_overrides=_parse_sub_url_base_overrides(
+                os.getenv("SUB_URL_BASE_OVERRIDES", "")
             ),
         )
