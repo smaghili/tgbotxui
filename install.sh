@@ -10,14 +10,63 @@ APP_DIR="${APP_DIR:-/opt/tgbot}"
 SERVICE_NAME="${SERVICE_NAME:-tgbot}"
 BOT_USER="${BOT_USER:-tgbot}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+REPO_SLUG="${REPO_SLUG:-smaghili/tgbotxui}"
+REPO_BRANCH="${REPO_BRANCH:-main}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}"
+PROJECT_SOURCE="${PROJECT_ROOT}"
+TEMP_PROJECT_DIR=""
 BACKUP_STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${APP_DIR}/backups/${BACKUP_STAMP}"
-INSTALL_MODE="install"
+INSTALL_MODE="auto"
 UPDATED_ENV_KEYS=()
 ADDED_ENV_KEYS=()
+
+cleanup() {
+  if [[ -n "${TEMP_PROJECT_DIR}" && -d "${TEMP_PROJECT_DIR}" ]]; then
+    rm -rf "${TEMP_PROJECT_DIR}"
+  fi
+}
+trap cleanup EXIT
+
+usage() {
+  cat <<'EOF'
+Usage:
+  sudo bash install.sh [install|update|auto|help]
+
+Modes:
+  install  Fresh install
+  update   Update existing install and preserve .env/data
+  auto     Detect existing install and ask interactively
+  help     Show this help
+
+Environment overrides:
+  REPO_SLUG   GitHub repo slug (default: smaghili/tgbotxui)
+  REPO_BRANCH GitHub branch/tag to download when source files are not local
+EOF
+}
+
+case "${1:-auto}" in
+  install)
+    INSTALL_MODE="install"
+    ;;
+  update)
+    INSTALL_MODE="update"
+    ;;
+  auto|"")
+    INSTALL_MODE="auto"
+    ;;
+  help|-h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "Invalid mode: ${1}"
+    usage
+    exit 1
+    ;;
+esac
 
 log_step() {
   echo
@@ -51,11 +100,67 @@ run_as_bot() {
   runuser -u "${BOT_USER}" -- env "${env_args[@]}" "$@"
 }
 
+project_files_present() {
+  [[ -f "${PROJECT_ROOT}/main.py" && -f "${PROJECT_ROOT}/requirements.txt" && -f "${PROJECT_ROOT}/.env.example" ]]
+}
+
+download_project_archive() {
+  local archive_url="https://codeload.github.com/${REPO_SLUG}/tar.gz/refs/heads/${REPO_BRANCH}"
+  local archive_path
+  local extracted_dir
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required to download project files."
+    exit 1
+  fi
+  if ! command -v tar >/dev/null 2>&1; then
+    echo "tar is required to extract project files."
+    exit 1
+  fi
+  if ! command -v mktemp >/dev/null 2>&1; then
+    echo "mktemp is required to prepare temporary project files."
+    exit 1
+  fi
+
+  TEMP_PROJECT_DIR="$(mktemp -d)"
+  archive_path="${TEMP_PROJECT_DIR}/repo.tar.gz"
+
+  echo "Local project files were not found. Downloading ${REPO_SLUG} (${REPO_BRANCH})..."
+  curl -fsSL "${archive_url}" -o "${archive_path}"
+  tar -xzf "${archive_path}" -C "${TEMP_PROJECT_DIR}"
+
+  extracted_dir="$(find "${TEMP_PROJECT_DIR}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  if [[ -z "${extracted_dir}" ]]; then
+    echo "Failed to extract downloaded project archive."
+    exit 1
+  fi
+
+  PROJECT_ROOT="${extracted_dir}"
+  PROJECT_SOURCE="github:${REPO_SLUG}@${REPO_BRANCH}"
+
+  if ! project_files_present; then
+    echo "Downloaded archive is missing required project files."
+    exit 1
+  fi
+}
+
+ensure_project_root() {
+  if project_files_present; then
+    PROJECT_SOURCE="${PROJECT_ROOT}"
+    return
+  fi
+  download_project_archive
+}
+
 detect_existing_install() {
   [[ -d "${APP_DIR}" && ( -f "${APP_DIR}/main.py" || -f "${APP_DIR}/.env" || -d "${APP_DIR}/data" ) ]]
 }
 
 prompt_install_mode() {
+  if [[ "${INSTALL_MODE}" == "install" || "${INSTALL_MODE}" == "update" ]]; then
+    return
+  fi
+
   if ! detect_existing_install; then
     INSTALL_MODE="install"
     return
@@ -227,8 +332,6 @@ build_virtualenv() {
 
   if [[ ! -x "${venv_python}" ]]; then
     if has_socks_proxy; then
-      # Allow venv pip bootstrap to reuse system-installed PySocks when the server
-      # can only reach the internet through SOCKS proxies.
       venv_args+=(--system-site-packages)
     fi
 
@@ -361,7 +464,7 @@ print_report() {
   echo "App dir: ${APP_DIR}"
   echo "Service: ${SERVICE_NAME} (${status_summary})"
   echo "Runtime user: ${BOT_USER}"
-  echo "Project files: synced from ${PROJECT_ROOT}"
+  echo "Project files: synced from ${PROJECT_SOURCE}"
   echo "Database/data: ${db_summary}"
   if [[ "${INSTALL_MODE}" == "update" ]]; then
     echo "Backup: ${BACKUP_DIR}"
@@ -379,6 +482,8 @@ print_report() {
 }
 
 prompt_install_mode
+
+ensure_project_root
 
 log_step "1/8" "Installing dependencies..."
 apt-get update
