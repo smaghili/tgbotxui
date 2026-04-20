@@ -255,6 +255,7 @@ class Database:
                 min_expiry_days,
                 max_expiry_days,
                 charge_basis,
+                allow_negative_wallet,
                 is_active,
                 expires_at,
                 created_at,
@@ -277,6 +278,7 @@ class Database:
             "min_expiry_days": 1,
             "max_expiry_days": 0,
             "charge_basis": "allocated",
+            "allow_negative_wallet": 0,
             "is_active": 1,
             "expires_at": None,
         }
@@ -292,6 +294,7 @@ class Database:
         min_expiry_days: int | None = None,
         max_expiry_days: int | None = None,
         charge_basis: str | None = None,
+        allow_negative_wallet: int | None = None,
         is_active: int | None = None,
         expires_at: int | None = None,
     ) -> Dict[str, Any]:
@@ -306,6 +309,10 @@ class Database:
             "min_expiry_days": int(current.get("min_expiry_days") or 1) if min_expiry_days is None else min_expiry_days,
             "max_expiry_days": int(current.get("max_expiry_days") or 0) if max_expiry_days is None else max_expiry_days,
             "charge_basis": str(current.get("charge_basis") or "allocated") if charge_basis is None else charge_basis,
+            "allow_negative_wallet": (
+                int(current.get("allow_negative_wallet") or 0)
+                if allow_negative_wallet is None else int(allow_negative_wallet)
+            ),
             "is_active": int(current.get("is_active") or 1) if is_active is None else is_active,
             "expires_at": current.get("expires_at") if expires_at is None else expires_at,
         }
@@ -321,6 +328,8 @@ class Database:
             raise ValueError("delegated min traffic cannot exceed max traffic.")
         if payload["max_expiry_days"] > 0 and payload["min_expiry_days"] > payload["max_expiry_days"]:
             raise ValueError("delegated min expiry cannot exceed max expiry.")
+        if payload["allow_negative_wallet"] not in {0, 1}:
+            raise ValueError("delegated allow_negative_wallet must be 0 or 1.")
         await self.conn.execute(
             """
             UPDATE delegated_admin_profiles
@@ -332,6 +341,7 @@ class Database:
                 min_expiry_days=?,
                 max_expiry_days=?,
                 charge_basis=?,
+                allow_negative_wallet=?,
                 is_active=?,
                 expires_at=?,
                 updated_at=CURRENT_TIMESTAMP
@@ -345,6 +355,7 @@ class Database:
                 payload["min_expiry_days"],
                 payload["max_expiry_days"],
                 payload["charge_basis"],
+                payload["allow_negative_wallet"],
                 payload["is_active"],
                 payload["expires_at"],
                 telegram_user_id,

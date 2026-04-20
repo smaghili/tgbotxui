@@ -90,3 +90,78 @@ async def test_root_admin_is_not_charged() -> None:
     await db.close()
     if db_path.exists():
         db_path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_charge_rejects_negative_wallet_balance_for_untrusted_delegate() -> None:
+    db_path = _db_path(".test-finance-negative-restricted.sqlite3")
+    db = Database(str(db_path))
+    await db.connect()
+    await db.init_schema()
+    await db.upsert_user(telegram_user_id=2101, full_name="Delegated Restricted", username="delegated_res", is_admin=False)
+
+    access_service = AccessService(db)
+    financial_service = FinancialService(db=db, access_service=access_service)
+
+    await financial_service.set_pricing(
+        actor_user_id=1,
+        telegram_user_id=2101,
+        price_per_gb=200_000,
+        price_per_day=50_000,
+    )
+
+    with pytest.raises(ValueError, match="insufficient wallet balance"):
+        await financial_service.charge_operation(
+            actor_user_id=2101,
+            settings=SimpleNamespace(admin_ids=[]),
+            operation="create_client",
+            traffic_gb=1,
+            expiry_days=1,
+        )
+
+    wallet = await financial_service.get_wallet(2101)
+    assert int(wallet["balance"]) == 0
+
+    await db.close()
+    if db_path.exists():
+        db_path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_charge_allows_negative_wallet_balance_for_trusted_delegate() -> None:
+    db_path = _db_path(".test-finance-negative.sqlite3")
+    db = Database(str(db_path))
+    await db.connect()
+    await db.init_schema()
+    await db.upsert_user(telegram_user_id=2001, full_name="Delegated Negative", username="delegated_neg", is_admin=False)
+
+    access_service = AccessService(db)
+    financial_service = FinancialService(db=db, access_service=access_service)
+
+    await financial_service.set_pricing(
+        actor_user_id=1,
+        telegram_user_id=2001,
+        price_per_gb=200_000,
+        price_per_day=50_000,
+    )
+    await db.update_delegated_admin_profile(
+        telegram_user_id=2001,
+        allow_negative_wallet=1,
+    )
+
+    tx = await financial_service.charge_operation(
+        actor_user_id=2001,
+        settings=SimpleNamespace(admin_ids=[]),
+        operation="create_client",
+        traffic_gb=1,
+        expiry_days=1,
+    )
+
+    assert tx is not None
+    assert int(tx["amount"]) == -250_000
+    wallet = await financial_service.get_wallet(2001)
+    assert int(wallet["balance"]) == -250_000
+
+    await db.close()
+    if db_path.exists():
+        db_path.unlink()

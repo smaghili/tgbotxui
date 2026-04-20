@@ -216,6 +216,7 @@ class FinancialService:
         details: str | None,
         metadata: dict[str, Any] | None = None,
         reference_transaction_id: int | None = None,
+        allow_negative_balance: bool = False,
     ) -> dict[str, Any]:
         assert self.db.conn is not None
         await self.ensure_wallet(telegram_user_id)
@@ -236,7 +237,7 @@ class FinancialService:
             current_balance = int(wallet["balance"] or 0)
             currency = str(wallet["currency"] or await self._default_currency())
             new_balance = current_balance + delta
-            if new_balance < 0:
+            if new_balance < 0 and not allow_negative_balance:
                 raise ValueError("insufficient wallet balance.")
             await self.db.conn.execute(
                 """
@@ -416,6 +417,7 @@ class FinancialService:
         amount = int(charge["amount"] or 0)
         if amount <= 0:
             return None
+        allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
         return await self._apply_balance_change(
             telegram_user_id=actor_user_id,
             actor_user_id=actor_user_id,
@@ -430,6 +432,7 @@ class FinancialService:
                 "price_per_gb": int(charge["price_per_gb"] or 0),
                 "price_per_day": int(charge["price_per_day"] or 0),
             },
+            allow_negative_balance=allow_negative_wallet,
         )
 
     async def refund_transaction(

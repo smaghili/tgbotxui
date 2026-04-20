@@ -103,6 +103,7 @@ def _delegated_detail_keyboard(
     is_active: bool,
     charge_basis: str,
     admin_scope: str,
+    allow_negative_wallet: bool,
     lang: str | None = None,
 ) -> InlineKeyboardMarkup:
     scope_value = str(admin_scope or "limited").strip().lower()
@@ -120,6 +121,11 @@ def _delegated_detail_keyboard(
         t("admin_delegated_scope_full", lang)
         if scope_value == "full"
         else t("admin_delegated_scope_limited", lang)
+    )
+    wallet_mode_label = (
+        t("admin_delegated_buy_without_balance_yes", lang)
+        if allow_negative_wallet
+        else t("admin_delegated_buy_without_balance_no", lang)
     )
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text=t("admin_delegated_update", lang), callback_data=f"dag:detail:{user_id}")],
@@ -164,6 +170,12 @@ def _delegated_detail_keyboard(
                     callback_data=f"dag:toggle_basis:{user_id}",
                 ),
                 InlineKeyboardButton(text=t("admin_delegated_wallet", lang), callback_data=f"fin:wallet:show:{user_id}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=wallet_mode_label,
+                    callback_data=f"dag:toggle_wallet_mode:{user_id}",
+                ),
             ],
             [InlineKeyboardButton(text=t("admin_delegated_report", lang), callback_data=f"dag:report:{user_id}")],
         ]
@@ -287,6 +299,7 @@ async def _render_delegated_detail(
     profile = overview["profile"]
     pricing = overview["pricing"]
     wallet = overview["wallet"]
+    sales_report = await services.financial_service.get_sales_report(target_user_id)
     title = (
         str(user.get("username") or "").strip()
         or str(user.get("full_name") or "").strip()
@@ -301,6 +314,7 @@ async def _render_delegated_detail(
     status_text = t("admin_delegated_status_active", lang) if is_active else t("admin_delegated_status_inactive", lang)
     charge_basis = str(pricing.get("charge_basis") or "allocated")
     charge_basis_key = "admin_delegated_charge_allocated" if charge_basis == "allocated" else "admin_delegated_charge_consumed"
+    allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
     text = t(
         "admin_delegated_details_text",
         lang,
@@ -316,6 +330,7 @@ async def _render_delegated_detail(
         currency=str(wallet.get("currency") or "تومان"),
         charge_basis=t(charge_basis_key, lang),
         balance=_format_amount(int(wallet.get("balance") or 0)),
+        total_sales=_format_amount(int(sales_report.get("total_sales") or 0)),
         expires_at=expires_text,
         status=status_text,
         owned_clients=int(overview["owned_clients_count"] or 0),
@@ -325,6 +340,7 @@ async def _render_delegated_detail(
         is_active=is_active,
         charge_basis=charge_basis,
         admin_scope=str(overview["delegated"].get("admin_scope") or "limited"),
+        allow_negative_wallet=allow_negative_wallet,
         lang=lang,
     )
     message = target.message if isinstance(target, CallbackQuery) else target
@@ -922,6 +938,37 @@ async def delegated_admin_toggle_basis(callback: CallbackQuery, settings: Settin
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("dag:toggle_wallet_mode:"))
+async def delegated_admin_toggle_wallet_mode(
+    callback: CallbackQuery, settings: Settings, services: ServiceContainer
+) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        target_user_id = int(callback.data.split(":", 2)[2])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    profile = await services.db.get_delegated_admin_profile(target_user_id)
+    next_value = 0 if int(profile.get("allow_negative_wallet") or 0) == 1 else 1
+    await services.db.update_delegated_admin_profile(
+        telegram_user_id=target_user_id,
+        allow_negative_wallet=next_value,
+    )
+    await _render_delegated_detail(
+        callback,
+        services=services,
+        settings=settings,
+        target_user_id=target_user_id,
+        lang=lang,
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("dag:report:"))
 async def delegated_admin_report(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
@@ -965,7 +1012,6 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
             price_gb=_format_amount(int(report["pricing"]["price_per_gb"] or 0)),
             price_day=_format_amount(int(report["pricing"]["price_per_day"] or 0)),
             sales=_format_amount(int(report["total_sales"] or 0)),
-            refunds=_format_amount(int(report["total_refunds"] or 0)),
             transactions=int(report["total_transactions"] or 0),
             owned_clients=int(overview["owned_clients_count"] or 0),
             wallet_lines="\n\n".join(wallet_lines) if wallet_lines else "تراکنشی ثبت نشده است.",
