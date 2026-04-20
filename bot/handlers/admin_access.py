@@ -986,7 +986,11 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         telegram_user_id=target_user_id,
         settings=settings,
     )
-    report = await services.financial_service.get_sales_report(target_user_id)
+    summary = await services.admin_provisioning_service.get_admin_scope_financial_summary(
+        actor_user_id=target_user_id,
+        settings=settings,
+    )
+    report = {"wallet": summary["wallet"]}
     wallet_lines = [
         _format_wallet_entry(item, settings=settings, lang=lang)
         for item in await services.db.list_recent_wallet_transactions(telegram_user_id=target_user_id, limit=10)
@@ -1002,18 +1006,28 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         or str(user.get("full_name") or "").strip()
         or str(target_user_id)
     )
+    extra_lines = ""
+    if str(summary["pricing"].get("charge_basis") or "allocated") == "consumed":
+        extra_lines = t(
+            "finance_credit_consumed_lines",
+            lang,
+            consumed_gb=int(summary["consumed_gb"] or 0),
+            debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+            currency=str(summary["wallet"]["currency"] or "ØªÙˆÙ…Ø§Ù†"),
+        )
     await callback.message.edit_text(
         t(
             "admin_delegated_report_text",
             lang,
             title=title,
-            balance=_format_amount(int(report["wallet"]["balance"] or 0)),
+            balance=_format_amount(int(summary["wallet"]["balance"] or 0)),
             currency=str(report["wallet"]["currency"] or "تومان"),
-            price_gb=_format_amount(int(report["pricing"]["price_per_gb"] or 0)),
-            price_day=_format_amount(int(report["pricing"]["price_per_day"] or 0)),
-            sales=_format_amount(int(report["total_sales"] or 0)),
-            transactions=int(report["total_transactions"] or 0),
-            owned_clients=int(overview["owned_clients_count"] or 0),
+            price_gb=_format_amount(int(summary["pricing"]["price_per_gb"] or 0)),
+            price_day=_format_amount(int(summary["pricing"]["price_per_day"] or 0)),
+            sales=_format_amount(int(summary["sale_amount"] or 0)),
+            transactions=int(summary["total_transactions"] or 0),
+            owned_clients=int(summary["clients_count"] or 0),
+            extra_lines=extra_lines,
             wallet_lines="\n\n".join(wallet_lines) if wallet_lines else "تراکنشی ثبت نشده است.",
             activity_lines="\n\n".join(activity_lines) if activity_lines else "فعالیت مهمی ثبت نشده است.",
         )

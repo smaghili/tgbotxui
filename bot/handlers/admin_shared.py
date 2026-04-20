@@ -246,7 +246,6 @@ async def notify_delegated_admin_activity(
     text: str,
 ) -> None:
     actor_id = source.from_user.id
-    context = await services.access_service.get_admin_context(actor_id, settings)
     stamped_text = f"{text}\nزمان: {now_jalali_datetime(settings.timezone)}"
     await services.db.add_audit_log(
         actor_user_id=actor_id,
@@ -256,17 +255,32 @@ async def notify_delegated_admin_activity(
         success=True,
         details=stamped_text,
     )
-    if not context.is_delegated_admin:
+    delegated = await services.db.get_delegated_admin_by_user_id(actor_id)
+    if delegated is None:
         return
     recipients = set(settings.admin_ids)
-    delegated = await services.db.get_delegated_admin_by_user_id(actor_id)
-    parent_user_id = int(delegated.get("parent_user_id") or 0) if delegated is not None else 0
-    if parent_user_id > 0:
+    # Notify the full manager chain, not only direct parent.
+    parent_user_id = int(delegated.get("parent_user_id") or 0)
+    seen_parents: set[int] = set()
+    while parent_user_id > 0 and parent_user_id not in seen_parents:
+        seen_parents.add(parent_user_id)
         recipients.add(parent_user_id)
+        parent_row = await services.db.get_delegated_admin_by_user_id(parent_user_id)
+        if parent_row is None:
+            break
+        parent_user_id = int(parent_row.get("parent_user_id") or 0)
     for admin_id in sorted(recipients):
         try:
             await source.bot.send_message(admin_id, stamped_text)
-        except Exception:
+        except Exception as exc:
+            await services.db.add_audit_log(
+                actor_user_id=actor_id,
+                action="admin_activity_notify_failed",
+                target_type="admin",
+                target_id=str(admin_id),
+                success=False,
+                details=f"send_message_failed:{exc}",
+            )
             continue
 
 

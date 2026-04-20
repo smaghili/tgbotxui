@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardRemove
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
@@ -18,9 +18,8 @@ router = Router(name="admin_finance")
 def _finance_root_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=t("finance_wallet_manage", lang), callback_data="fin:wallet")],
-            [InlineKeyboardButton(text=t("finance_pricing_manage", lang), callback_data="fin:pricing")],
-            [InlineKeyboardButton(text=t("finance_overall_report", lang), callback_data="fin:report:overall")],
+            [InlineKeyboardButton(text=t("finance_delegates_list", lang), callback_data="fin:delegates:list")],
+            [InlineKeyboardButton(text=t("btn_back", lang), callback_data="fin:root:back")],
         ]
     )
 
@@ -28,9 +27,32 @@ def _finance_root_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
 def _finance_delegated_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=t("finance_my_sales_report", lang), callback_data="fin:report:me")]
+            [InlineKeyboardButton(text=t("finance_view_credit", lang), callback_data="fin:credit:me")],
+            [InlineKeyboardButton(text=t("finance_delegates_list", lang), callback_data="fin:delegates:mine")],
+            [InlineKeyboardButton(text=t("btn_back", lang), callback_data="fin:delegated:back")],
         ]
     )
+
+
+def _finance_delegates_keyboard(
+    rows: list[dict],
+    *,
+    back_callback: str,
+    lang: str | None = None,
+) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
+    seen_users: set[int] = set()
+    for row in rows:
+        user_id = int(row["telegram_user_id"])
+        if user_id in seen_users:
+            continue
+        seen_users.add(user_id)
+        title = str(row.get("title") or row.get("full_name") or row.get("username") or user_id)
+        buttons.append([InlineKeyboardButton(text=title[:48], callback_data=f"dag:detail:{user_id}")])
+    if not buttons:
+        buttons.append([InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")])
+    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _wallet_action_keyboard(target_user_id: int, lang: str | None = None) -> InlineKeyboardMarkup:
@@ -61,6 +83,22 @@ def _pricing_history_choice_keyboard(lang: str | None = None) -> InlineKeyboardM
 
 def _format_amount(value: int) -> str:
     return f"{value:,}"
+
+
+async def _is_primary_delegated_admin(
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+) -> bool:
+    context = await services.access_service.get_admin_context(user_id, settings)
+    if not context.is_delegated_admin or context.delegated_scope != "full":
+        return False
+    delegated = await services.db.get_delegated_admin_by_user_id(user_id)
+    if delegated is None:
+        return False
+    parent_user_id = int(delegated.get("parent_user_id") or 0)
+    return parent_user_id in set(settings.admin_ids)
 
 
 def _display_title(user: dict | None, fallback_user_id: int) -> str:
@@ -120,24 +158,29 @@ async def _answer_sales_report(
     wallet = summary["wallet"]
     pricing = summary["pricing"]
     context = await services.access_service.get_admin_context(report_user_id, settings)
-    basis_label = (
-        t("admin_delegated_charge_consumed", lang)
-        if str(pricing.get("charge_basis") or "allocated") == "consumed"
-        else t("admin_delegated_charge_allocated", lang)
-    )
+    charge_basis = str(pricing.get("charge_basis") or "allocated")
+    extra_lines = ""
+    if charge_basis == "consumed":
+        extra_lines = t(
+            "finance_credit_consumed_lines",
+            lang,
+            consumed_gb=int(summary["consumed_gb"] or 0),
+            debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+            currency=str(wallet["currency"] or "تومان"),
+        )
     if context.delegated_scope == "full":
         text = t(
-            "finance_master_report_text",
+            "finance_credit_report_text",
             lang,
+            title=_display_title(await services.db.get_user_by_telegram_id(report_user_id), report_user_id),
             balance=_format_amount(int(wallet["balance"] or 0)),
             currency=str(wallet["currency"] or "تومان"),
             price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
-            basis_label=basis_label,
+            price_day=_format_amount(int(pricing["price_per_day"] or 0)),
             clients=int(summary["clients_count"] or 0),
-            allocated_gb=int(summary["allocated_gb"] or 0),
             sale_amount=_format_amount(int(summary["sale_amount"] or 0)),
-            consumed_gb=int(summary["consumed_gb"] or 0),
-            debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+            transactions=int(summary["total_transactions"] or 0),
+            extra_lines=extra_lines,
         )
     else:
         text = t(
@@ -199,15 +242,131 @@ async def manage_finance_menu(message: Message, settings: Settings, services: Se
         return
     lang = await services.db.get_user_language(message.from_user.id)
     if services.access_service.is_root_admin(message.from_user.id, settings):
+        await message.answer(t("finance_root_delegate_menu", lang), reply_markup=ReplyKeyboardRemove())
         await message.answer(
-            t("finance_root_title", lang),
+            t("finance_root_delegate_menu", lang),
             reply_markup=_finance_root_keyboard(lang),
         )
         return
     await message.answer(
         t("finance_delegated_title", lang),
-        reply_markup=_finance_delegated_keyboard(lang),
+        reply_markup=(
+            _finance_delegated_keyboard(lang)
+            if await _is_primary_delegated_admin(user_id=message.from_user.id, settings=settings, services=services)
+            else None
+        ),
     )
+
+
+@router.callback_query(F.data == "fin:root:menu")
+async def finance_root_menu(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not services.access_service.is_root_admin(callback.from_user.id, settings):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.message is not None:
+        await callback.message.edit_text(
+            t("finance_root_delegate_menu", lang),
+            reply_markup=_finance_root_keyboard(lang),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fin:delegates:list")
+async def finance_delegates_list(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not services.access_service.is_root_admin(callback.from_user.id, settings):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
+    filtered_rows = [row for row in rows if int(row.get("telegram_user_id") or 0) not in set(settings.admin_ids)]
+    text = t("admin_delegated_empty", lang) if not filtered_rows else t("finance_delegates_list_header", lang)
+    if callback.message is not None:
+        await callback.message.edit_text(
+            text,
+            reply_markup=_finance_delegates_keyboard(filtered_rows, back_callback="fin:root:menu", lang=lang),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fin:delegates:mine")
+async def finance_my_delegates_list(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not await _is_primary_delegated_admin(user_id=callback.from_user.id, settings=settings, services=services):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=callback.from_user.id)
+    text = t("admin_delegated_empty", lang) if not rows else t("finance_delegates_list_header", lang)
+    if callback.message is not None:
+        await callback.message.edit_text(
+            text,
+            reply_markup=_finance_delegates_keyboard(rows, back_callback="fin:delegated:menu", lang=lang),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fin:root:back")
+async def finance_root_back(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not services.access_service.is_root_admin(callback.from_user.id, settings):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.message is not None:
+        await callback.message.answer(
+            t("menu_main", lang),
+            reply_markup=await _main_menu_markup(
+                user_id=callback.from_user.id,
+                settings=settings,
+                services=services,
+                lang=lang,
+            ),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fin:delegated:menu")
+async def finance_delegated_menu(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not await _is_primary_delegated_admin(user_id=callback.from_user.id, settings=settings, services=services):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.message is not None:
+        await callback.message.edit_text(
+            t("finance_delegated_title", lang),
+            reply_markup=_finance_delegated_keyboard(lang),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fin:delegated:back")
+async def finance_delegated_back(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not await _is_primary_delegated_admin(user_id=callback.from_user.id, settings=settings, services=services):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.message is not None:
+        await callback.message.answer(
+            t("menu_main", lang),
+            reply_markup=await _main_menu_markup(
+                user_id=callback.from_user.id,
+                settings=settings,
+                services=services,
+                lang=lang,
+            ),
+        )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "fin:wallet")
@@ -255,7 +414,6 @@ async def finance_overall_report(callback: CallbackQuery, settings: Settings, se
         balance=_format_amount(int(report["total_balance"] or 0)),
         currency=str(report["currency"] or "تومان"),
         sales=_format_amount(int(report["total_sales"] or 0)),
-        refunds=_format_amount(int(report["total_refunds"] or 0)),
         sales_count=int(report["sales_count"]),
         transactions=int(report["total_transactions"]),
         pricing_profiles=int(report["pricing_profiles"]),
@@ -265,9 +423,12 @@ async def finance_overall_report(callback: CallbackQuery, settings: Settings, se
     await callback.answer()
 
 
-@router.callback_query(F.data == "fin:report:me")
+@router.callback_query(F.data == "fin:credit:me")
 async def finance_my_sales_report(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not await _is_primary_delegated_admin(user_id=callback.from_user.id, settings=settings, services=services):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     await _answer_sales_report(

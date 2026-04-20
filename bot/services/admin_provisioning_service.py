@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 from urllib.parse import urlparse
 import uuid as uuid_lib
@@ -368,44 +369,95 @@ class AdminProvisioningService:
                 "clients_count": 0,
                 "allocated_bytes": 0,
                 "consumed_bytes": 0,
+                "allocated_gb": 0,
+                "consumed_gb": 0,
                 "sale_amount": 0,
                 "debt_amount": 0,
+                "total_transactions": 0,
                 "scope_user_ids": [],
             }
+        owner_id_set = {str(owner_id) for owner_id in owner_ids}
         seen: set[tuple[int, int, str]] = set()
         clients_count = 0
         allocated_bytes = 0
         consumed_bytes = 0
+        panel_total_consumed_bytes = 0
+        root_created_consumed_bytes = 0
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
-            for owner_id in owner_ids:
-                try:
-                    clients = await self.panel_service.list_clients(panel_id, owner_admin_user_id=owner_id)
-                except Exception:
+            try:
+                inbounds = await self.panel_service.list_inbounds(panel_id)
+            except Exception:
+                continue
+            for inbound in inbounds:
+                inbound_id = int(inbound.get("id") or 0)
+                if inbound_id <= 0:
                     continue
+                panel_total_consumed_bytes += max(0, int(inbound.get("up") or 0)) + max(0, int(inbound.get("down") or 0))
+
+                stats_by_uuid: dict[str, dict[str, int]] = {}
+                for stat in inbound.get("clientStats") or []:
+                    if not isinstance(stat, dict):
+                        continue
+                    stat_uuid = str(stat.get("uuid") or stat.get("id") or "").strip()
+                    if not stat_uuid:
+                        continue
+                    stats_by_uuid[stat_uuid] = {
+                        "used": max(0, int(stat.get("up") or 0)) + max(0, int(stat.get("down") or 0)),
+                        "total": max(0, int(stat.get("total") or 0)),
+                    }
+
+                settings_raw = inbound.get("settings")
+                settings_obj: dict[str, Any] = {}
+                if isinstance(settings_raw, str) and settings_raw.strip():
+                    try:
+                        parsed = json.loads(settings_raw)
+                        if isinstance(parsed, dict):
+                            settings_obj = parsed
+                    except Exception:
+                        settings_obj = {}
+                clients = settings_obj.get("clients") if isinstance(settings_obj.get("clients"), list) else []
                 for client in clients:
-                    key = (panel_id, int(client.get("inbound_id") or 0), str(client.get("uuid") or ""))
+                    if not isinstance(client, dict):
+                        continue
+                    client_uuid = str(client.get("id") or client.get("uuid") or "").strip()
+                    if not client_uuid:
+                        continue
+                    comment = str(client.get("comment") or "").strip()
+                    usage = stats_by_uuid.get(client_uuid, {"used": 0, "total": 0})
+
+                    if comment == "":
+                        root_created_consumed_bytes += int(usage.get("used") or 0)
+
+                    if comment not in owner_id_set:
+                        continue
+                    key = (panel_id, inbound_id, client_uuid)
                     if key in seen:
                         continue
                     seen.add(key)
                     clients_count += 1
-                    allocated_bytes += max(0, int(client.get("total") or 0))
-                    consumed_bytes += max(0, int(client.get("used") or 0))
+                    allocated_bytes += max(0, int(client.get("totalGB") or 0))
+                    consumed_bytes += int(usage.get("used") or 0)
         price_per_gb = int(pricing.get("price_per_gb") or 0)
         allocated_gb = allocated_bytes // (1024 ** 3)
         if allocated_bytes % (1024 ** 3):
             allocated_gb += 1
+        charge_basis = str(pricing.get("charge_basis") or "allocated")
+        if charge_basis == "consumed":
+            consumed_bytes = max(0, panel_total_consumed_bytes - root_created_consumed_bytes)
         consumed_gb = consumed_bytes // (1024 ** 3)
         if consumed_bytes % (1024 ** 3):
             consumed_gb += 1
-        charge_basis = str(pricing.get("charge_basis") or "allocated")
-        if int(pricing.get("apply_price_to_past_reports") or 1) == 1 or self.financial_service is None:
-            sale_amount = allocated_gb * price_per_gb
-            debt_amount = (consumed_gb if charge_basis == "consumed" else allocated_gb) * price_per_gb
-        else:
-            scope_totals = await self.financial_service.get_scope_sales_totals(owner_ids)
-            sale_amount = int(scope_totals["total_sales"] or 0)
-            debt_amount = int(scope_totals["net_sales"] or 0)
+        scope_totals = (
+            await self.financial_service.get_scope_sales_totals(owner_ids)
+            if self.financial_service is not None
+            else {
+                "total_sales": 0,
+                "total_transactions": 0,
+            }
+        )
+        sale_amount = int(scope_totals.get("total_sales") or 0)
+        debt_amount = (consumed_gb if charge_basis == "consumed" else allocated_gb) * price_per_gb
         return {
             "wallet": wallet,
             "pricing": pricing,
@@ -416,6 +468,7 @@ class AdminProvisioningService:
             "consumed_gb": consumed_gb,
             "sale_amount": sale_amount,
             "debt_amount": debt_amount,
+            "total_transactions": int(scope_totals.get("total_transactions") or 0),
             "scope_user_ids": owner_ids,
         }
 

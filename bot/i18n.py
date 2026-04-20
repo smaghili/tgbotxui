@@ -65,14 +65,21 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "مدیریت مالی:\n- کیف پول کاربران\n- قیمت‌گذاری کاربران/مدیران\n- گزارش مالی کلی",
         "en": "Financial management:\n- User wallets\n- User/admin pricing\n- Overall financial report",
     },
+    "finance_root_delegate_menu": {
+        "fa": "مدیریت مالی مدیر اصلی:\n- نمایندگی‌ها",
+        "en": "Root financial management:\n- Delegates",
+    },
     "finance_delegated_title": {
-        "fa": "مدیریت مالی:\n- گزارش مالی کلی\n- کیف پول شما",
-        "en": "Financial management:\n- Overall financial report\n- Your wallet",
+        "fa": "مدیریت مالی:\n- مشاهده اعتبار\n- نمایندگی‌ها\n- بازگشت",
+        "en": "Financial management:\n- View credit\n- Delegates\n- Back",
     },
     "finance_wallet_manage": {"fa": "👛 کیف پول کاربران", "en": "👛 User Wallets"},
     "finance_pricing_manage": {"fa": "💳 تنظیم قیمت کاربران", "en": "💳 User Pricing"},
     "finance_overall_report": {"fa": "📊 گزارش مالی کلی", "en": "📊 Overall Financial Report"},
     "finance_my_sales_report": {"fa": "📈 گزارش فروش من", "en": "📈 My Sales Report"},
+    "finance_view_credit": {"fa": "💰 مشاهده اعتبار", "en": "💰 View Credit"},
+    "finance_delegates_list": {"fa": "👥 نمایندگی‌ها", "en": "👥 Delegates"},
+    "finance_delegates_list_header": {"fa": "لیست نمایندگی‌ها:", "en": "Delegates list:"},
     "finance_enter_target": {
         "fa": "آیدی عددی یا @username کاربر را وارد کنید.",
         "en": "Enter numeric user id or @username.",
@@ -110,12 +117,20 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Previous per-GB price was {old_price_gb} {currency}.\nNew price: {new_price_gb} {currency}\n\nDo you want to apply the new price to previous reports as well?",
     },
     "finance_overall_report_text": {
-        "fa": "گزارش مالی کلی\n\nتعداد کیف پول: {wallets}\nمجموع موجودی: {balance} {currency}\nفروش کل: {sales} {currency}\nبازگشت وجه کل: {refunds} {currency}\nتعداد فروش‌ها: {sales_count}\nتعداد تراکنش‌ها: {transactions}\nپروفایل‌های قیمت‌گذاری: {pricing_profiles}",
-        "en": "Overall financial report\n\nWallets: {wallets}\nTotal balance: {balance} {currency}\nTotal sales: {sales} {currency}\nTotal refunds: {refunds} {currency}\nSales count: {sales_count}\nTransactions: {transactions}\nPricing profiles: {pricing_profiles}",
+        "fa": "گزارش مالی کلی\n\nتعداد کیف پول: {wallets}\nمجموع موجودی: {balance} {currency}\nفروش کل: {sales} {currency}\nتعداد فروش‌ها: {sales_count}\nتعداد تراکنش‌ها: {transactions}\nپروفایل‌های قیمت‌گذاری: {pricing_profiles}",
+        "en": "Overall financial report\n\nWallets: {wallets}\nTotal balance: {balance} {currency}\nTotal sales: {sales} {currency}\nSales count: {sales_count}\nTransactions: {transactions}\nPricing profiles: {pricing_profiles}",
     },
     "finance_sales_report_text": {
-        "fa": "گزارش فروش\n\nموجودی فعلی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nفروش کل: {sales} {currency}\nبازگشت وجه: {refunds} {currency}\nتعداد تراکنش‌ها: {transactions}",
-        "en": "Sales report\n\nCurrent balance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nTotal sales: {sales} {currency}\nRefunds: {refunds} {currency}\nTransactions: {transactions}",
+        "fa": "گزارش فروش\n\nموجودی فعلی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nفروش کل: {sales} {currency}\nتعداد تراکنش‌ها: {transactions}",
+        "en": "Sales report\n\nCurrent balance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nTotal sales: {sales} {currency}\nTransactions: {transactions}",
+    },
+    "finance_credit_report_text": {
+        "fa": "گزارش نمایندگی\n\nنماینده: {title}\nموجودی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nکل فروش نمایندگی‌ها: {sale_amount} {currency}\nتعداد تراکنش‌ها: {transactions}\nکاربران ساخته‌شده: {clients}{extra_lines}",
+        "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nTotal sales: {sale_amount} {currency}\nTransactions: {transactions}\nCreated users: {clients}{extra_lines}",
+    },
+    "finance_credit_consumed_lines": {
+        "fa": "\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}",
+        "en": "\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}",
     },
     "finance_master_report_text": {
         "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nقیمت هر گیگ {basis_label}: {price_gb} {currency}\nتعداد کاربران: {clients}\nحجم تخصیص‌یافته: {allocated_gb} گیگ\nمبلغ کل فروش: {sale_amount} {currency}\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری: {debt_amount} {currency}",
@@ -479,8 +494,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_enter_expiry": {"fa": "تعداد روز تا انقضای نماینده را وارد کنید. 0 یعنی نامحدود.", "en": "Enter days until delegate expiry. 0 means unlimited."},
     "admin_delegated_profile_saved": {"fa": "تنظیمات نمایندگی ذخیره شد.", "en": "Delegated profile saved."},
     "admin_delegated_report_text": {
-        "fa": "گزارش نمایندگی\n\nنماینده: {title}\nموجودی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nکل فروش: {sales} {currency}\nتعداد تراکنش‌ها: {transactions}\nکاربران ساخته‌شده: {owned_clients}\n\nآخرین تراکنش‌ها:\n{wallet_lines}\n\nآخرین فعالیت‌ها:\n{activity_lines}",
-        "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nSales: {sales} {currency}\nTransactions: {transactions}\nOwned clients: {owned_clients}\n\nRecent wallet transactions:\n{wallet_lines}\n\nRecent activities:\n{activity_lines}",
+        "fa": "گزارش نمایندگی\n\nنماینده: {title}\nموجودی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nکل فروش: {sales} {currency}\nتعداد تراکنش‌ها: {transactions}\nکاربران ساخته‌شده: {owned_clients}{extra_lines}\n\nآخرین تراکنش‌ها:\n{wallet_lines}\n\nآخرین فعالیت‌ها:\n{activity_lines}",
+        "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nSales: {sales} {currency}\nTransactions: {transactions}\nOwned clients: {owned_clients}{extra_lines}\n\nRecent wallet transactions:\n{wallet_lines}\n\nRecent activities:\n{activity_lines}",
     },
     "admin_delegated_details_text": {
         "fa": "📋 جزئیات نمایندگی\n\nنام کاربری: {title}\nپیشوند نام کاربری: {prefix}\n\nحداکثر کاربران قابل ساخت: {max_users}\nحداقل/حداکثر خرید حجم: {min_traffic}GB / {max_traffic}GB\nحداقل/حداکثر خرید زمان: {min_days} روز / {max_days} روز\n\nقیمت هر روز زمان: {price_day} {currency}\nقیمت هر گیگ حجم: {price_gb} {currency}\nنوع فروش: {charge_basis}\nموجودی: {balance} {currency}\nفروش کل: {total_sales} {currency}\n\nتاریخ انقضای نماینده: {expires_at}\nوضعیت نماینده: {status}\nکاربران ساخته‌شده: {owned_clients}",
