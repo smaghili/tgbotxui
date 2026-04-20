@@ -445,7 +445,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_details": {"fa": "📋 جزئیات نمایندگی", "en": "📋 Delegated Details"},
     "admin_delegated_update": {"fa": "بروزرسانی ♻️", "en": "Refresh ♻️"},
     "admin_delegated_delete": {"fa": "حذف نماینده 🗑️", "en": "Delete Delegate 🗑️"},
-    "admin_delegated_access": {"fa": "دسترسی‌ها 👥", "en": "Access 👥"},
+    "admin_delegated_access": {"fa": "سطح دسترسی 👥", "en": "Access Level 👥"},
     "admin_delegated_prefix": {"fa": "پیشوند نام کاربری 🏷", "en": "Username Prefix 🏷"},
     "admin_delegated_max_users": {"fa": "محدودیت کاربران 👥", "en": "User Limit 👥"},
     "admin_delegated_expiry": {"fa": "تاریخ انقضا ⏳", "en": "Expiry Date ⏳"},

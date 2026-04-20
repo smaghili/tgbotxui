@@ -144,20 +144,20 @@ def _delegated_detail_keyboard(
             InlineKeyboardButton(text=t("admin_delegated_max_days", lang), callback_data=f"dag:field:max_expiry_days:{user_id}"),
         ],
     ]
+    rows.append(
+        [
+            InlineKeyboardButton(text=status_label, callback_data=f"dag:toggle_status:{user_id}"),
+            InlineKeyboardButton(text=f"{t('admin_delegated_scope', lang)}: {scope_label}", callback_data=f"dag:toggle_scope:{user_id}"),
+        ]
+    )
     if scope_value == "limited":
         rows.append(
             [
-                InlineKeyboardButton(text=status_label, callback_data=f"dag:toggle_status:{user_id}"),
-                InlineKeyboardButton(text=f"{t('admin_delegated_scope', lang)}: {scope_label}", callback_data=f"dag:toggle_scope:{user_id}"),
+                InlineKeyboardButton(text=t("admin_delegated_access", lang), callback_data=f"dag:edit:{user_id}"),
             ]
         )
-    else:
-        rows.append([InlineKeyboardButton(text=status_label, callback_data=f"dag:toggle_status:{user_id}")])
     rows.extend(
         [
-            [
-                InlineKeyboardButton(text=t("admin_delegated_access", lang), callback_data=f"dag:edit:{user_id}"),
-            ],
             [
                 InlineKeyboardButton(
                     text=f"{t('admin_delegated_charge_basis', lang)}: {basis_label}",
