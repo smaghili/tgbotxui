@@ -48,6 +48,17 @@ def _wallet_action_keyboard(target_user_id: int, lang: str | None = None) -> Inl
     )
 
 
+def _pricing_history_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("btn_yes", lang), callback_data="fin:pricing:history:apply"),
+                InlineKeyboardButton(text=t("btn_no", lang), callback_data="fin:pricing:history:keep"),
+            ]
+        ]
+    )
+
+
 def _format_amount(value: int) -> str:
     return f"{value:,}"
 
@@ -98,26 +109,88 @@ async def _answer_sales_report(
     target: Message | CallbackQuery,
     *,
     report_user_id: int,
+    settings: Settings,
     services: ServiceContainer,
     lang: str | None,
 ) -> None:
-    report = await services.financial_service.get_sales_report(report_user_id)
-    wallet = report["wallet"]
-    pricing = report["pricing"]
-    text = t(
-        "finance_sales_report_text",
-        lang,
-        balance=_format_amount(int(wallet["balance"] or 0)),
-        currency=str(wallet["currency"] or "تومان"),
-        price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
-        price_day=_format_amount(int(pricing["price_per_day"] or 0)),
-        sales=_format_amount(int(report["total_sales"] or 0)),
-        refunds=_format_amount(int(report["total_refunds"] or 0)),
-        transactions=int(report["total_transactions"] or 0),
+    summary = await services.admin_provisioning_service.get_admin_scope_financial_summary(
+        actor_user_id=report_user_id,
+        settings=settings,
     )
+    wallet = summary["wallet"]
+    pricing = summary["pricing"]
+    context = await services.access_service.get_admin_context(report_user_id, settings)
+    basis_label = (
+        t("admin_delegated_charge_consumed", lang)
+        if str(pricing.get("charge_basis") or "allocated") == "consumed"
+        else t("admin_delegated_charge_allocated", lang)
+    )
+    if context.delegated_scope == "full":
+        text = t(
+            "finance_master_report_text",
+            lang,
+            balance=_format_amount(int(wallet["balance"] or 0)),
+            currency=str(wallet["currency"] or "تومان"),
+            price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
+            basis_label=basis_label,
+            clients=int(summary["clients_count"] or 0),
+            allocated_gb=int(summary["allocated_gb"] or 0),
+            sale_amount=_format_amount(int(summary["sale_amount"] or 0)),
+            consumed_gb=int(summary["consumed_gb"] or 0),
+            debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+        )
+    else:
+        text = t(
+            "finance_limited_report_text",
+            lang,
+            balance=_format_amount(int(wallet["balance"] or 0)),
+            currency=str(wallet["currency"] or "تومان"),
+            clients=int(summary["clients_count"] or 0),
+            allocated_gb=int(summary["allocated_gb"] or 0),
+            sale_amount=_format_amount(int(summary["sale_amount"] or 0)),
+        )
     message = target.message if isinstance(target, CallbackQuery) else target
     if message is not None:
-        await message.answer(text)
+        if isinstance(target, CallbackQuery):
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
+
+
+async def _save_pricing_and_answer(
+    message: Message,
+    *,
+    actor_user_id: int,
+    target_user_id: int,
+    price_gb: int,
+    price_day: int,
+    apply_to_past_reports: bool | None,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+) -> None:
+    pricing = await services.financial_service.set_pricing(
+        actor_user_id=actor_user_id,
+        telegram_user_id=target_user_id,
+        price_per_gb=price_gb,
+        price_per_day=price_day,
+        apply_price_to_past_reports=apply_to_past_reports,
+    )
+    await message.answer(
+        t(
+            "finance_pricing_saved",
+            lang,
+            price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
+            price_day=_format_amount(int(pricing["price_per_day"] or 0)),
+            currency=str(pricing["currency"] or "تومان"),
+        ),
+        reply_markup=await _main_menu_markup(
+            user_id=actor_user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
+        ),
+    )
 
 
 @router.message(F.text.in_(button_variants("btn_manage_finance")))
@@ -197,7 +270,13 @@ async def finance_my_sales_report(callback: CallbackQuery, settings: Settings, s
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
-    await _answer_sales_report(callback, report_user_id=callback.from_user.id, services=services, lang=lang)
+    await _answer_sales_report(
+        callback,
+        report_user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
     await callback.answer()
 
 
@@ -370,27 +449,95 @@ async def finance_pricing_day_input(message: Message, state: FSMContext, setting
         await answer_with_cancel(message, t("finance_invalid_amount", lang), lang=lang)
         return
     data = await state.get_data()
-    await state.clear()
     target_user_id = int(data["finance_pricing_target_user_id"])
     price_gb = int(data["finance_price_per_gb"])
-    pricing = await services.financial_service.set_pricing(
+    current_pricing = await services.financial_service.get_pricing(target_user_id)
+    old_price_gb = int(current_pricing.get("price_per_gb") or 0)
+    if old_price_gb != price_gb:
+        await state.update_data(
+            finance_price_per_day=price_day,
+            finance_old_price_per_gb=old_price_gb,
+            finance_pricing_currency=str(current_pricing.get("currency") or "تومان"),
+        )
+        await state.set_state(FinanceStates.waiting_pricing_history_choice)
+        await message.answer(
+            t(
+                "finance_pricing_history_confirm",
+                lang,
+                old_price_gb=_format_amount(old_price_gb),
+                new_price_gb=_format_amount(price_gb),
+                currency=str(current_pricing.get("currency") or "تومان"),
+            ),
+            reply_markup=_pricing_history_choice_keyboard(lang),
+        )
+        return
+    await state.clear()
+    await _save_pricing_and_answer(
+        message,
         actor_user_id=message.from_user.id,
-        telegram_user_id=target_user_id,
-        price_per_gb=price_gb,
-        price_per_day=price_day,
+        target_user_id=target_user_id,
+        price_gb=price_gb,
+        price_day=price_day,
+        apply_to_past_reports=None,
+        settings=settings,
+        services=services,
+        lang=lang,
     )
-    await message.answer(
-        t(
-            "finance_pricing_saved",
-            lang,
-            price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
-            price_day=_format_amount(int(pricing["price_per_day"] or 0)),
-            currency=str(pricing["currency"] or "تومان"),
-        ),
-        reply_markup=await _main_menu_markup(
-            user_id=message.from_user.id,
-            settings=settings,
-            services=services,
-            lang=lang,
-        ),
+
+
+@router.callback_query(FinanceStates.waiting_pricing_history_choice, F.data == "fin:pricing:history:apply")
+async def finance_pricing_history_apply(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer
+) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not services.access_service.is_root_admin(callback.from_user.id, settings):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    data = await state.get_data()
+    await state.clear()
+    await _save_pricing_and_answer(
+        callback.message,
+        actor_user_id=callback.from_user.id,
+        target_user_id=int(data["finance_pricing_target_user_id"]),
+        price_gb=int(data["finance_price_per_gb"]),
+        price_day=int(data["finance_price_per_day"]),
+        apply_to_past_reports=True,
+        settings=settings,
+        services=services,
+        lang=lang,
     )
+    await callback.answer()
+
+
+@router.callback_query(FinanceStates.waiting_pricing_history_choice, F.data == "fin:pricing:history:keep")
+async def finance_pricing_history_keep(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer
+) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if not services.access_service.is_root_admin(callback.from_user.id, settings):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    data = await state.get_data()
+    await state.clear()
+    await _save_pricing_and_answer(
+        callback.message,
+        actor_user_id=callback.from_user.id,
+        target_user_id=int(data["finance_pricing_target_user_id"]),
+        price_gb=int(data["finance_price_per_gb"]),
+        price_day=int(data["finance_price_per_day"]),
+        apply_to_past_reports=False,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+    await callback.answer()

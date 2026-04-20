@@ -41,6 +41,7 @@ class DelegatedAdminStates(StatesGroup):
     waiting_title = State()
     waiting_inbound_selection = State()
     waiting_profile_value = State()
+    waiting_price_history_choice = State()
 
 
 class ProvisioningStates(StatesGroup):
@@ -62,3 +63,4 @@ class FinanceStates(StatesGroup):
     waiting_pricing_target = State()
     waiting_pricing_gb = State()
     waiting_pricing_day = State()
+    waiting_pricing_history_choice = State()

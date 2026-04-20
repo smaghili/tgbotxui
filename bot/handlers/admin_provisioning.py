@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -231,6 +233,62 @@ def _resolved_client_email(before: dict, after: dict) -> str:
     return str(after.get("email") or before.get("email") or "")
 
 
+def _activity_details_block(details: list[str]) -> str:
+    if not details:
+        return ""
+    return "\n" + "\n".join(details)
+
+
+def _build_admin_activity_notice(
+    *,
+    lang: str | None,
+    actor: str,
+    action_key: str,
+    user: str,
+    panel: str,
+    inbound: str,
+    details: list[str] | None = None,
+) -> str:
+    return t(
+        "admin_activity_notify_template",
+        lang,
+        actor=actor,
+        action=t(action_key, lang),
+        user=user,
+        panel=panel,
+        inbound=inbound,
+        details=_activity_details_block(details or []),
+    )
+
+
+async def _notify_admin_activity(
+    source: Message | CallbackQuery,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+    action_key: str,
+    user: str,
+    panel: str,
+    inbound: str,
+    details: list[str] | None = None,
+) -> None:
+    await _notify_root_admins_if_delegated(
+        source,
+        settings=settings,
+        services=services,
+        text=_build_admin_activity_notice(
+            lang=lang,
+            actor=_actor_display_name(source),
+            action_key=action_key,
+            user=user,
+            panel=panel,
+            inbound=inbound,
+            details=details,
+        ),
+    )
+
+
 def _delegated_min_create_error(
     *,
     is_delegated_admin: bool,
@@ -252,26 +310,30 @@ async def _notify_added_traffic(
     *,
     settings: Settings,
     services: ServiceContainer,
+    lang: str | None,
     panel_id: int,
     inbound_id: int,
     before: dict,
     after: dict,
 ) -> None:
     panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_root_admins_if_delegated(
+    await _notify_admin_activity(
         source,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(source)}\n"
-            "عملیات: افزایش حجم کاربر\n"
-            f"کاربر: {_resolved_client_email(before, after)}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}\n"
-            f"حجم از {format_gb(int(before.get('total') or 0), 'fa')} "
-            f"به {format_gb(int(after.get('total') or 0), 'fa')} افزایش یافت"
-        ),
+        lang=lang,
+        action_key="admin_activity_action_add_traffic",
+        user=_resolved_client_email(before, after),
+        panel=panel_name,
+        inbound=inbound_name,
+        details=[
+            t(
+                "admin_activity_detail_traffic_change",
+                lang,
+                before=format_gb(int(before.get("total") or 0), lang or "fa"),
+                after=format_gb(int(after.get("total") or 0), lang or "fa"),
+            )
+        ],
     )
     added_bytes = max(0, int(after.get("total") or 0) - int(before.get("total") or 0))
     if added_bytes > 0:
@@ -288,6 +350,7 @@ async def _notify_added_expiry_days(
     *,
     settings: Settings,
     services: ServiceContainer,
+    lang: str | None,
     panel_id: int,
     inbound_id: int,
     before: dict,
@@ -295,21 +358,24 @@ async def _notify_added_expiry_days(
     added_days: int,
 ) -> None:
     panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_root_admins_if_delegated(
+    await _notify_admin_activity(
         source,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(source)}\n"
-            "عملیات: افزایش روز کاربر\n"
-            f"کاربر: {_resolved_client_email(before, after)}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}\n"
-            f"تاریخ از {to_local_date(before.get('expiry'), settings.timezone, 'fa')} "
-            f"به {to_local_date(after.get('expiry'), settings.timezone, 'fa')} تغییر کرد\n"
-            f"روز افزوده‌شده: {added_days}"
-        ),
+        lang=lang,
+        action_key="admin_activity_action_add_days",
+        user=_resolved_client_email(before, after),
+        panel=panel_name,
+        inbound=inbound_name,
+        details=[
+            t(
+                "admin_activity_detail_expiry_change",
+                lang,
+                before=to_local_date(before.get("expiry"), settings.timezone, lang),
+                after=to_local_date(after.get("expiry"), settings.timezone, lang),
+            ),
+            t("admin_activity_detail_amount_days", lang, value=added_days),
+        ],
     )
     await services.usage_service.notify_user_expiry_extended(
         panel_id=panel_id,
@@ -713,20 +779,19 @@ async def _finish_create_user(
         panel_id=int(result["panel_id"]),
         inbound_id=int(result["inbound_id"]),
     )
-    await _notify_root_admins_if_delegated(
+    await _notify_admin_activity(
         message,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(message)}\n"
-            f"عملیات: ساخت کاربر جدید\n"
-            f"کاربر: {result['email']}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}\n"
-            f"حجم: {int(data['create_total_gb'])} گیگابایت\n"
-            f"روز: {int(data['create_expiry_days'])}"
-        ),
+        lang=lang,
+        action_key="admin_activity_action_create_client",
+        user=str(result["email"]),
+        panel=panel_name,
+        inbound=inbound_name,
+        details=[
+            t("admin_activity_detail_amount_gb", lang, value=int(data["create_total_gb"])),
+            t("admin_activity_detail_amount_days", lang, value=int(data["create_expiry_days"])),
+        ],
     )
     await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
 
@@ -1012,19 +1077,24 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
         await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
         return
     panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_root_admins_if_delegated(
+    await _notify_admin_activity(
         callback,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(callback)}\n"
-            "عملیات: تغییر وضعیت کاربر\n"
-            f"کاربر: {detail.get('email')}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}\n"
-            f"وضعیت جدید: {'فعال' if enabled else 'غیرفعال'}"
-        ),
+        lang=lang,
+        action_key="admin_activity_action_toggle_client",
+        user=str(detail.get("email") or "-"),
+        panel=panel_name,
+        inbound=inbound_name,
+        details=[
+            t(
+                "admin_activity_detail_new_status",
+                lang,
+                value=t("admin_activity_status_active", lang)
+                if enabled
+                else t("admin_activity_status_inactive", lang),
+            )
+        ],
     )
     await callback.answer(t("admin_enable_on", lang) if enabled else t("admin_enable_off", lang))
 
@@ -1184,18 +1254,16 @@ async def edit_config_rotate_yes(callback: CallbackQuery, settings: Settings, se
     except Exception as exc:
         await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
         return
-    await _notify_root_admins_if_delegated(
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_admin_activity(
         callback,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(callback)}\n"
-            "عملیات: چرخش کانفیگ کاربر\n"
-            f"کاربر: {client_email}\n"
-            f"پنل: {panel_id}\n"
-            f"اینباند: {inbound_id}"
-        ),
+        lang=lang,
+        action_key="admin_activity_action_rotate_client",
+        user=client_email,
+        panel=panel_name,
+        inbound=inbound_name,
     )
     await callback.message.answer(t("admin_edit_rotate_done", lang))
 
@@ -1281,19 +1349,16 @@ async def edit_config_set_tg_value(message: Message, state: FSMContext, settings
             return
     detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_root_admins_if_delegated(
+    await _notify_admin_activity(
         message,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(message)}\n"
-            "عملیات: تغییر tgId کاربر\n"
-            f"کاربر: {detail.get('email')}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}\n"
-            f"مقدار جدید: {tg_id or '-'}"
-        ),
+        lang=lang,
+        action_key="admin_activity_action_set_tg_id",
+        user=str(detail.get("email") or "-"),
+        panel=panel_name,
+        inbound=inbound_name,
+        details=[t("admin_activity_detail_new_value", lang, value=tg_id or "-")],
     )
     await message.answer(
         t("admin_tg_done", lang),
@@ -1444,30 +1509,16 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
         client_uuid=client_uuid,
         lang=lang,
     )
-    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_root_admins_if_delegated(
+    await _notify_added_traffic(
         message,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(message)}\n"
-            f"عملیات: افزایش حجم کاربر\n"
-            f"کاربر: {after.get('email') or before.get('email')}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}\n"
-            f"حجم از {format_gb(int(before.get('total') or 0), 'fa')} "
-            f"به {format_gb(int(after.get('total') or 0), 'fa')} افزایش یافت"
-        ),
+        lang=lang,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        before=before,
+        after=after,
     )
-    added_bytes = max(0, int(after.get("total") or 0) - int(before.get("total") or 0))
-    if added_bytes > 0:
-        await services.usage_service.notify_user_traffic_increased(
-            panel_id=panel_id,
-            client_email=str(after.get("email") or before.get("email") or ""),
-            added_bytes=added_bytes,
-            new_total_bytes=int(after.get("total") or 0),
-        )
 
 
 @router.callback_query(F.data.startswith("pec:days_input:"))
@@ -1568,28 +1619,16 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
         t("admin_edit_days_added", lang),
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
     )
-    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_root_admins_if_delegated(
+    await _notify_added_expiry_days(
         message,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(message)}\n"
-            f"عملیات: افزایش روز کاربر\n"
-            f"کاربر: {after.get('email') or before.get('email')}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}\n"
-            f"تاریخ از {to_local_date(before.get('expiry'), settings.timezone, 'fa')} "
-            f"به {to_local_date(after.get('expiry'), settings.timezone, 'fa')} تغییر کرد\n"
-            f"روز افزوده‌شده: {days}"
-        ),
-    )
-    await services.usage_service.notify_user_expiry_extended(
+        lang=lang,
         panel_id=panel_id,
-        client_email=str(after.get("email") or before.get("email") or ""),
+        inbound_id=inbound_id,
+        before=before,
+        after=after,
         added_days=days,
-        new_expiry=after.get("expiry"),
     )
 
 
@@ -1651,17 +1690,14 @@ async def edit_config_delete_yes(callback: CallbackQuery, settings: Settings, se
     await services.panel_service.delete_client(panel_id, inbound_id, client_uuid)
     await callback.message.edit_text(t("admin_edit_deleted", lang))
     panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_root_admins_if_delegated(
+    await _notify_admin_activity(
         callback,
         settings=settings,
         services=services,
-        text=(
-            "اطلاع مدیر:\n"
-            f"ادمین: {_actor_display_name(callback)}\n"
-            f"عملیات: حذف کاربر\n"
-            f"کاربر: {before.get('email')}\n"
-            f"پنل: {panel_name}\n"
-            f"اینباند: {inbound_name}"
-        ),
+        lang=lang,
+        action_key="admin_activity_action_delete_client",
+        user=str(before.get("email") or "-"),
+        panel=panel_name,
+        inbound=inbound_name,
     )
     await callback.answer()

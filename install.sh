@@ -512,23 +512,23 @@ prompt_install_mode
 
 ensure_project_root
 
-log_step "1/8" "Installing dependencies..."
+log_step "1/9" "Installing dependencies..."
 apt-get update
 apt-get install -y "${PYTHON_BIN}" python3-venv python3-pip python3-socks rsync
 
-log_step "2/8" "Preparing runtime user..."
+log_step "2/9" "Preparing runtime user..."
 ensure_runtime_user
 
-log_step "3/8" "Backing up existing state (update mode only)..."
+log_step "3/9" "Backing up existing state (update mode only)..."
 backup_existing_state
 
-log_step "4/8" "Syncing project to ${APP_DIR}..."
+log_step "4/9" "Syncing project to ${APP_DIR}..."
 sync_project_files
 
-log_step "5/8" "Building virtualenv..."
+log_step "5/9" "Building virtualenv..."
 build_virtualenv
 
-log_step "6/8" "Preparing environment..."
+log_step "6/9" "Preparing environment..."
 prepare_environment_file
 
 log_step "7/9" "Installing systemd service..."

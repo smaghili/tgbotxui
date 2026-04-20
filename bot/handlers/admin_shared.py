@@ -258,7 +258,12 @@ async def notify_delegated_admin_activity(
     )
     if not context.is_delegated_admin:
         return
-    for admin_id in settings.admin_ids:
+    recipients = set(settings.admin_ids)
+    delegated = await services.db.get_delegated_admin_by_user_id(actor_id)
+    parent_user_id = int(delegated.get("parent_user_id") or 0) if delegated is not None else 0
+    if parent_user_id > 0:
+        recipients.add(parent_user_id)
+    for admin_id in sorted(recipients):
         try:
             await source.bot.send_message(admin_id, stamped_text)
         except Exception:

@@ -66,8 +66,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Financial management:\n- User wallets\n- User/admin pricing\n- Overall financial report",
     },
     "finance_delegated_title": {
-        "fa": "مدیریت مالی:\n- گزارش فروش و کیف پول شما",
-        "en": "Financial management:\n- Your sales and wallet report",
+        "fa": "مدیریت مالی:\n- گزارش مالی کلی\n- کیف پول شما",
+        "en": "Financial management:\n- Overall financial report\n- Your wallet",
     },
     "finance_wallet_manage": {"fa": "👛 کیف پول کاربران", "en": "👛 User Wallets"},
     "finance_pricing_manage": {"fa": "💳 تنظیم قیمت کاربران", "en": "💳 User Pricing"},
@@ -105,6 +105,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "قیمت‌گذاری ذخیره شد.\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}",
         "en": "Pricing saved.\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}",
     },
+    "finance_pricing_history_confirm": {
+        "fa": "قبلا قیمت هر گیگ {old_price_gb} {currency} بوده است.\nقیمت جدید: {new_price_gb} {currency}\n\nآیا می‌خواهید قیمت جدید برای گزارش‌های قبلی هم اعمال شود؟",
+        "en": "Previous per-GB price was {old_price_gb} {currency}.\nNew price: {new_price_gb} {currency}\n\nDo you want to apply the new price to previous reports as well?",
+    },
     "finance_overall_report_text": {
         "fa": "گزارش مالی کلی\n\nتعداد کیف پول: {wallets}\nمجموع موجودی: {balance} {currency}\nفروش کل: {sales} {currency}\nبازگشت وجه کل: {refunds} {currency}\nتعداد فروش‌ها: {sales_count}\nتعداد تراکنش‌ها: {transactions}\nپروفایل‌های قیمت‌گذاری: {pricing_profiles}",
         "en": "Overall financial report\n\nWallets: {wallets}\nTotal balance: {balance} {currency}\nTotal sales: {sales} {currency}\nTotal refunds: {refunds} {currency}\nSales count: {sales_count}\nTransactions: {transactions}\nPricing profiles: {pricing_profiles}",
@@ -112,6 +116,14 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "finance_sales_report_text": {
         "fa": "گزارش فروش\n\nموجودی فعلی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nفروش کل: {sales} {currency}\nبازگشت وجه: {refunds} {currency}\nتعداد تراکنش‌ها: {transactions}",
         "en": "Sales report\n\nCurrent balance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nTotal sales: {sales} {currency}\nRefunds: {refunds} {currency}\nTransactions: {transactions}",
+    },
+    "finance_master_report_text": {
+        "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nقیمت هر گیگ {basis_label}: {price_gb} {currency}\nتعداد کاربران: {clients}\nحجم تخصیص‌یافته: {allocated_gb} گیگ\nمبلغ کل فروش: {sale_amount} {currency}\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری: {debt_amount} {currency}",
+        "en": "Overall financial report\n\nWallet: {balance} {currency}\nPer-GB {basis_label}: {price_gb} {currency}\nClients: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal sales: {sale_amount} {currency}\nConsumed traffic: {consumed_gb} GB\nDebt: {debt_amount} {currency}",
+    },
+    "finance_limited_report_text": {
+        "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nکاربر ساخته‌شده: {clients}\nگیگ تخصیصی: {allocated_gb} گیگ\nقیمت کل: {sale_amount} {currency}",
+        "en": "Overall financial report\n\nWallet: {balance} {currency}\nCreated users: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal price: {sale_amount} {currency}",
     },
     "finance_target_unknown": {
         "fa": "کاربر در دیتابیس ربات پیدا نشد.",
@@ -449,6 +461,9 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_charge_basis": {"fa": "نوع فروش 📦", "en": "Charge Basis 📦"},
     "admin_delegated_charge_allocated": {"fa": "بر اساس حجم تخصیصی", "en": "Allocated Traffic"},
     "admin_delegated_charge_consumed": {"fa": "بر اساس حجم مصرفی", "en": "Consumed Traffic"},
+    "admin_delegated_scope": {"fa": "سطح دسترسی", "en": "Access Scope"},
+    "admin_delegated_scope_full": {"fa": "کامل", "en": "Full"},
+    "admin_delegated_scope_limited": {"fa": "محدود", "en": "Limited"},
     "admin_delegated_status_active": {"fa": "فعال", "en": "Active"},
     "admin_delegated_status_inactive": {"fa": "غیرفعال", "en": "Inactive"},
     "admin_delegated_unlimited": {"fa": "نامحدود", "en": "Unlimited"},
@@ -640,6 +655,25 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "کانفیگ جدید کاربر آماده شد.",
         "en": "The client's new config is ready.",
     },
+    "admin_activity_notify_template": {
+        "fa": "اطلاع مدیر:\nادمین: {actor}\nعملیات: {action}\nکاربر: {user}\nپنل: {panel}\nاینباند: {inbound}{details}",
+        "en": "Manager notice:\nAdmin: {actor}\nOperation: {action}\nUser: {user}\nPanel: {panel}\nInbound: {inbound}{details}",
+    },
+    "admin_activity_action_create_client": {"fa": "ساخت کاربر جدید", "en": "Create client"},
+    "admin_activity_action_toggle_client": {"fa": "تغییر وضعیت کاربر", "en": "Toggle client status"},
+    "admin_activity_action_rotate_client": {"fa": "چرخش کانفیگ کاربر", "en": "Rotate client config"},
+    "admin_activity_action_set_tg_id": {"fa": "تغییر tgId کاربر", "en": "Set client tgId"},
+    "admin_activity_action_add_traffic": {"fa": "افزایش حجم کاربر", "en": "Increase client traffic"},
+    "admin_activity_action_add_days": {"fa": "افزایش روز کاربر", "en": "Extend client expiry"},
+    "admin_activity_action_delete_client": {"fa": "حذف کاربر", "en": "Delete client"},
+    "admin_activity_status_active": {"fa": "فعال", "en": "active"},
+    "admin_activity_status_inactive": {"fa": "غیرفعال", "en": "inactive"},
+    "admin_activity_detail_amount_gb": {"fa": "مقدار: {value} گیگ", "en": "Amount: {value} GB"},
+    "admin_activity_detail_amount_days": {"fa": "مقدار: {value} روز", "en": "Amount: {value} days"},
+    "admin_activity_detail_traffic_change": {"fa": "حجم از {before} به {after} افزایش یافت", "en": "Traffic increased from {before} to {after}"},
+    "admin_activity_detail_expiry_change": {"fa": "تاریخ از {before} به {after} تغییر کرد", "en": "Expiry changed from {before} to {after}"},
+    "admin_activity_detail_new_value": {"fa": "مقدار جدید: {value}", "en": "New value: {value}"},
+    "admin_activity_detail_new_status": {"fa": "وضعیت جدید: {value}", "en": "New status: {value}"},
     "admin_invalid_positive_number": {
         "fa": "عدد معتبر و بزرگ‌تر از صفر وارد کنید.",
         "en": "Enter a valid positive number.",

@@ -85,15 +85,19 @@ class AdminProvisioningService:
         self,
         *,
         actor_user_id: int,
+        settings: Settings,
         telegram_user_id: int,
         title: str | None,
         panel_id: int,
         inbound_id: int,
+        admin_scope: str = "limited",
     ) -> int:
         delegated_admin_id = await self.db.upsert_delegated_admin(
             telegram_user_id=telegram_user_id,
             title=title,
             created_by=actor_user_id,
+            parent_user_id=None if self.access_service.is_root_admin(actor_user_id, settings) else actor_user_id,
+            admin_scope=admin_scope,
         )
         access_id = await self.db.add_delegated_admin_inbound_access(
             delegated_admin_id=delegated_admin_id,
@@ -173,7 +177,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
     ) -> list[InboundAccess]:
-        if self.access_service.is_root_admin(actor_user_id, settings):
+        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
             return await self.list_all_inbounds()
 
         access_rows = await self.db.list_admin_access_rows_for_user(actor_user_id)
@@ -204,7 +208,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
     ) -> list[InboundAccess]:
-        if self.access_service.is_root_admin(actor_user_id, settings):
+        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
             return await self.list_all_inbounds()
 
         panel_rows = await self.panel_service.list_panels()
@@ -247,7 +251,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
     ) -> list[InboundAccess]:
-        if self.access_service.is_root_admin(actor_user_id, settings):
+        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
             return await self.list_all_inbounds()
 
         rows: dict[tuple[int, int], InboundAccess] = {}
@@ -263,8 +267,8 @@ class AdminProvisioningService:
             rows.setdefault((owned.panel_id, owned.inbound_id), owned)
         return sorted(rows.values(), key=lambda item: (item.panel_id, item.inbound_id))
 
-    async def list_delegated_admin_accesses(self) -> list[dict[str, Any]]:
-        rows = await self.db.list_delegated_admin_access_rows()
+    async def list_delegated_admin_accesses(self, manager_user_id: int | None = None) -> list[dict[str, Any]]:
+        rows = await self.db.list_delegated_admin_access_rows(manager_user_id=manager_user_id)
         inbound_maps: dict[int, dict[int, str]] = {}
         for row in rows:
             panel_id = int(row["panel_id"])
@@ -311,6 +315,7 @@ class AdminProvisioningService:
             "price_per_day": 0,
             "currency": "تومان",
             "charge_basis": "allocated",
+            "apply_price_to_past_reports": 1,
         }
         user = await self.db.get_user_by_telegram_id(telegram_user_id)
         access_rows = await self.db.list_admin_access_rows_for_user(telegram_user_id)
@@ -323,6 +328,95 @@ class AdminProvisioningService:
             "user": user,
             "access_rows": access_rows,
             "owned_clients_count": owned_count,
+        }
+
+    async def financial_scope_user_ids(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+    ) -> list[int]:
+        context = await self.access_service.get_admin_context(actor_user_id, settings)
+        if context.is_root_admin:
+            return []
+        if context.delegated_scope == "full":
+            return await self.db.get_delegated_admin_subtree_user_ids(manager_user_id=actor_user_id, include_self=True)
+        return [actor_user_id]
+
+    async def get_admin_scope_financial_summary(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+    ) -> dict[str, Any]:
+        wallet = await self.financial_service.get_wallet(actor_user_id) if self.financial_service is not None else {
+            "balance": 0,
+            "currency": "تومان",
+        }
+        pricing = await self.financial_service.get_pricing(actor_user_id) if self.financial_service is not None else {
+            "price_per_gb": 0,
+            "price_per_day": 0,
+            "currency": "تومان",
+            "charge_basis": "allocated",
+            "apply_price_to_past_reports": 1,
+        }
+        owner_ids = await self.financial_scope_user_ids(actor_user_id=actor_user_id, settings=settings)
+        if not owner_ids:
+            return {
+                "wallet": wallet,
+                "pricing": pricing,
+                "clients_count": 0,
+                "allocated_bytes": 0,
+                "consumed_bytes": 0,
+                "sale_amount": 0,
+                "debt_amount": 0,
+                "scope_user_ids": [],
+            }
+        seen: set[tuple[int, int, str]] = set()
+        clients_count = 0
+        allocated_bytes = 0
+        consumed_bytes = 0
+        for panel in await self.panel_service.list_panels():
+            panel_id = int(panel["id"])
+            for owner_id in owner_ids:
+                try:
+                    clients = await self.panel_service.list_clients(panel_id, owner_admin_user_id=owner_id)
+                except Exception:
+                    continue
+                for client in clients:
+                    key = (panel_id, int(client.get("inbound_id") or 0), str(client.get("uuid") or ""))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    clients_count += 1
+                    allocated_bytes += max(0, int(client.get("total") or 0))
+                    consumed_bytes += max(0, int(client.get("used") or 0))
+        price_per_gb = int(pricing.get("price_per_gb") or 0)
+        allocated_gb = allocated_bytes // (1024 ** 3)
+        if allocated_bytes % (1024 ** 3):
+            allocated_gb += 1
+        consumed_gb = consumed_bytes // (1024 ** 3)
+        if consumed_bytes % (1024 ** 3):
+            consumed_gb += 1
+        charge_basis = str(pricing.get("charge_basis") or "allocated")
+        if int(pricing.get("apply_price_to_past_reports") or 1) == 1 or self.financial_service is None:
+            sale_amount = allocated_gb * price_per_gb
+            debt_amount = (consumed_gb if charge_basis == "consumed" else allocated_gb) * price_per_gb
+        else:
+            scope_totals = await self.financial_service.get_scope_sales_totals(owner_ids)
+            sale_amount = int(scope_totals["total_sales"] or 0)
+            debt_amount = int(scope_totals["net_sales"] or 0)
+        return {
+            "wallet": wallet,
+            "pricing": pricing,
+            "clients_count": clients_count,
+            "allocated_bytes": allocated_bytes,
+            "consumed_bytes": consumed_bytes,
+            "allocated_gb": allocated_gb,
+            "consumed_gb": consumed_gb,
+            "sale_amount": sale_amount,
+            "debt_amount": debt_amount,
+            "scope_user_ids": owner_ids,
         }
 
     async def create_client_for_actor(
@@ -350,7 +444,7 @@ class AdminProvisioningService:
         )
         if not allowed:
             raise ValueError("you do not have access to this inbound.")
-        if not self.access_service.is_root_admin(actor_user_id, settings):
+        if not (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
             profile = await self.db.get_delegated_admin_profile(actor_user_id)
             max_clients = int(profile.get("max_clients") or 0)
             if max_clients > 0:
@@ -470,7 +564,7 @@ class AdminProvisioningService:
     ) -> ManagedClientRef:
         client_uuid = self.extract_uuid_from_vless_uri(vless_uri)
 
-        if self.access_service.is_root_admin(actor_user_id, settings):
+        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
             panels = await self.panel_service.list_panels()
             for panel in panels:
                 panel_id = int(panel["id"])

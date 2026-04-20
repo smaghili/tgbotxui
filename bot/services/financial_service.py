@@ -62,7 +62,15 @@ class FinancialService:
         profile = await self.db.get_delegated_admin_profile(telegram_user_id)
         cur = await self.db.conn.execute(
             """
-            SELECT telegram_user_id, price_per_gb, price_per_day, currency, charge_basis, created_at, updated_at
+            SELECT
+                telegram_user_id,
+                price_per_gb,
+                price_per_day,
+                currency,
+                charge_basis,
+                apply_price_to_past_reports,
+                created_at,
+                updated_at
             FROM user_pricing
             WHERE telegram_user_id=?
             LIMIT 1;
@@ -78,6 +86,7 @@ class FinancialService:
             "price_per_day": 0,
             "currency": default_currency,
             "charge_basis": str(profile.get("charge_basis") or "allocated"),
+            "apply_price_to_past_reports": 1,
         }
 
     async def set_pricing(
@@ -89,24 +98,45 @@ class FinancialService:
         price_per_day: int,
         currency: str | None = None,
         charge_basis: str = "allocated",
+        apply_price_to_past_reports: bool | None = None,
     ) -> dict[str, Any]:
         assert self.db.conn is not None
         if price_per_gb < 0 or price_per_day < 0:
             raise ValueError("pricing values must be zero or positive.")
         pricing_currency = currency or await self._default_currency()
+        current_pricing = await self.get_pricing(telegram_user_id)
+        apply_to_past = (
+            int(current_pricing.get("apply_price_to_past_reports") or 1)
+            if apply_price_to_past_reports is None
+            else int(bool(apply_price_to_past_reports))
+        )
         await self.db.conn.execute(
             """
             INSERT INTO user_pricing (
-                telegram_user_id, price_per_gb, price_per_day, currency, charge_basis, updated_at
-            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                telegram_user_id,
+                price_per_gb,
+                price_per_day,
+                currency,
+                charge_basis,
+                apply_price_to_past_reports,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(telegram_user_id) DO UPDATE SET
                 price_per_gb=excluded.price_per_gb,
                 price_per_day=excluded.price_per_day,
                 currency=excluded.currency,
                 charge_basis=excluded.charge_basis,
+                apply_price_to_past_reports=excluded.apply_price_to_past_reports,
                 updated_at=CURRENT_TIMESTAMP;
             """,
-            (telegram_user_id, price_per_gb, price_per_day, pricing_currency, charge_basis),
+            (
+                telegram_user_id,
+                price_per_gb,
+                price_per_day,
+                pricing_currency,
+                charge_basis,
+                apply_to_past,
+            ),
         )
         await self.db.conn.commit()
         await self.db.add_audit_log(
@@ -115,9 +145,43 @@ class FinancialService:
             target_type="user_pricing",
             target_id=str(telegram_user_id),
             success=True,
-            details=f"gb={price_per_gb};day={price_per_day};currency={pricing_currency};basis={charge_basis}",
+            details=(
+                f"gb={price_per_gb};day={price_per_day};currency={pricing_currency};"
+                f"basis={charge_basis};apply_to_past={apply_to_past}"
+            ),
         )
         return await self.get_pricing(telegram_user_id)
+
+    async def get_scope_sales_totals(self, telegram_user_ids: list[int]) -> dict[str, int]:
+        assert self.db.conn is not None
+        if not telegram_user_ids:
+            return {
+                "total_sales": 0,
+                "total_refunds": 0,
+                "net_sales": 0,
+                "total_transactions": 0,
+            }
+        placeholders = ",".join("?" for _ in telegram_user_ids)
+        cur = await self.db.conn.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN kind='charge' THEN ABS(amount) ELSE 0 END), 0) AS total_sales,
+                COALESCE(SUM(CASE WHEN kind='refund' THEN amount ELSE 0 END), 0) AS total_refunds,
+                COALESCE(COUNT(*), 0) AS total_transactions
+            FROM wallet_transactions
+            WHERE telegram_user_id IN ({placeholders});
+            """,
+            tuple(telegram_user_ids),
+        )
+        row = await cur.fetchone()
+        total_sales = int(row["total_sales"] or 0)
+        total_refunds = int(row["total_refunds"] or 0)
+        return {
+            "total_sales": total_sales,
+            "total_refunds": total_refunds,
+            "net_sales": total_sales - total_refunds,
+            "total_transactions": int(row["total_transactions"] or 0),
+        }
 
     async def calculate_charge(
         self,

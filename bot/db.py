@@ -136,18 +136,25 @@ class Database:
         telegram_user_id: int,
         title: str | None,
         created_by: int,
+        parent_user_id: int | None = None,
+        admin_scope: str = "limited",
     ) -> int:
         assert self.conn is not None
+        scope = admin_scope if admin_scope in {"limited", "full"} else "limited"
         await self.conn.execute(
             """
-            INSERT INTO delegated_admins (telegram_user_id, title, created_by, is_active, updated_at)
-            VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+            INSERT INTO delegated_admins (
+                telegram_user_id, title, created_by, parent_user_id, admin_scope, is_active, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
             ON CONFLICT(telegram_user_id) DO UPDATE SET
                 title=excluded.title,
+                parent_user_id=COALESCE(excluded.parent_user_id, delegated_admins.parent_user_id),
+                admin_scope=excluded.admin_scope,
                 is_active=1,
                 updated_at=CURRENT_TIMESTAMP;
             """,
-            (telegram_user_id, title, created_by),
+            (telegram_user_id, title, created_by, parent_user_id, scope),
         )
         await self.conn.commit()
         cur = await self.conn.execute(
@@ -166,7 +173,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT id, telegram_user_id, title, created_by, is_active, created_at, updated_at
+            SELECT id, telegram_user_id, title, created_by, parent_user_id, admin_scope, is_active, created_at, updated_at
             FROM delegated_admins
             WHERE telegram_user_id=? AND is_active=1
             LIMIT 1;
@@ -175,6 +182,50 @@ class Database:
         )
         row = await cur.fetchone()
         return dict(row) if row else None
+
+    async def set_delegated_admin_scope(self, *, telegram_user_id: int, admin_scope: str) -> bool:
+        assert self.conn is not None
+        scope = admin_scope if admin_scope in {"limited", "full"} else "limited"
+        cur = await self.conn.execute(
+            """
+            UPDATE delegated_admins
+            SET admin_scope=?, updated_at=CURRENT_TIMESTAMP
+            WHERE telegram_user_id=?;
+            """,
+            (scope, telegram_user_id),
+        )
+        await self.conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def get_delegated_admin_subtree_user_ids(
+        self,
+        *,
+        manager_user_id: int,
+        include_self: bool = True,
+    ) -> List[int]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            WITH RECURSIVE admin_tree(telegram_user_id) AS (
+                SELECT telegram_user_id
+                FROM delegated_admins
+                WHERE telegram_user_id=? AND is_active=1
+                UNION ALL
+                SELECT da.telegram_user_id
+                FROM delegated_admins AS da
+                JOIN admin_tree AS at ON da.parent_user_id = at.telegram_user_id
+                WHERE da.is_active=1
+            )
+            SELECT DISTINCT telegram_user_id
+            FROM admin_tree;
+            """,
+            (manager_user_id,),
+        )
+        rows = await cur.fetchall()
+        user_ids = [int(row["telegram_user_id"]) for row in rows]
+        if not include_self:
+            user_ids = [item for item in user_ids if item != manager_user_id]
+        return user_ids
 
     async def ensure_delegated_admin_profile(self, telegram_user_id: int) -> None:
         assert self.conn is not None
@@ -403,7 +454,7 @@ class Database:
         await self.conn.commit()
         return (cur.rowcount or 0) > 0
 
-    async def list_delegated_admin_access_rows(self) -> List[Dict[str, Any]]:
+    async def list_delegated_admin_access_rows(self, manager_user_id: int | None = None) -> List[Dict[str, Any]]:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
@@ -412,6 +463,8 @@ class Database:
                 da.id AS delegated_admin_id,
                 da.telegram_user_id,
                 da.title,
+                da.parent_user_id,
+                da.admin_scope,
                 da.is_active,
                 da.created_by,
                 dai.panel_id,
@@ -428,7 +481,11 @@ class Database:
             """
         )
         rows = await cur.fetchall()
-        return [dict(row) for row in rows]
+        mapped = [dict(row) for row in rows]
+        if manager_user_id is None:
+            return mapped
+        subtree_ids = set(await self.get_delegated_admin_subtree_user_ids(manager_user_id=manager_user_id))
+        return [row for row in mapped if int(row["telegram_user_id"]) in subtree_ids and int(row["telegram_user_id"]) != manager_user_id]
 
     async def list_admin_access_rows_for_user(self, telegram_user_id: int) -> List[Dict[str, Any]]:
         assert self.conn is not None

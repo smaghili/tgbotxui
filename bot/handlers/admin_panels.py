@@ -1,28 +1,24 @@
 ﻿from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
-from bot.keyboards import cancel_only_keyboard, main_keyboard
+from bot.keyboards import main_keyboard
 from bot.services.container import ServiceContainer
 from bot.states import AddPanelStates, AdminSettingsStates, InboundsListStates
 
 from .admin_shared import (
     answer_with_admin_menu,
     answer_with_cancel,
-    admin_keyboard_for_user,
     inbounds_panel_select_keyboard,
     panel_delete_confirm_keyboard,
     panels_glass_keyboard,
     panels_list_text,
     refresh_panels_message,
     reject_if_not_any_admin,
-    reject_callback_if_not_admin,
-    reject_if_not_admin,
     show_inbounds_for_panel,
     show_inbounds_overview_for_panel,
     two_factor_keyboard,
@@ -31,18 +27,18 @@ from .admin_shared import (
 router = Router(name="admin_panels")
 
 
-@router.message(Command("cancel"), StateFilter("*"))
-@router.message(F.text.in_(button_variants("btn_cancel_operation")), StateFilter("*"))
-@router.message(F.text.in_(button_variants("btn_cancel")), StateFilter("*"))
-async def handle_cancel(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    await state.clear()
-    is_admin = await services.access_service.is_any_admin(message.from_user.id, settings)
-    await message.answer(
-        t("operation_cancelled", None),
-        reply_markup=await admin_keyboard_for_user(user_id=message.from_user.id, settings=settings, services=services)
-        if is_admin
-        else main_keyboard(False),
-    )
+async def _reject_if_not_full_admin(message: Message, settings: Settings, services: ServiceContainer) -> bool:
+    if await services.access_service.can_manage_panels(user_id=message.from_user.id, settings=settings):
+        return False
+    await message.answer(t("no_admin_access", None))
+    return True
+
+
+async def _reject_callback_if_not_full_admin(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> bool:
+    if await services.access_service.can_manage_panels(user_id=callback.from_user.id, settings=settings):
+        return False
+    await callback.answer(t("no_admin_access", None), show_alert=True)
+    return True
 
 
 @router.message(F.text.in_(button_variants("btn_manage")))
@@ -62,7 +58,7 @@ async def handle_back(message: Message, settings: Settings, services: ServiceCon
 
 @router.message(F.text.in_(button_variants("btn_cleanup_settings")))
 async def start_cleanup_settings(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     current = await services.db.get_app_setting(
         "depleted_client_delete_after_hours",
@@ -74,7 +70,7 @@ async def start_cleanup_settings(message: Message, state: FSMContext, settings: 
 
 @router.message(AdminSettingsStates.waiting_depleted_cleanup_hours)
 async def save_cleanup_hours(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     try:
         hours = int((message.text or "").strip())
@@ -94,8 +90,8 @@ async def save_cleanup_hours(message: Message, state: FSMContext, settings: Sett
 
 
 @router.message(F.text.in_(button_variants("btn_add_panel")))
-async def start_add_panel(message: Message, state: FSMContext, settings: Settings) -> None:
-    if await reject_if_not_admin(message, settings):
+async def start_add_panel(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     await state.set_state(AddPanelStates.waiting_name)
     await answer_with_cancel(message, t("panel_add_enter_name", None))
@@ -227,7 +223,7 @@ async def add_panel_get_two_factor_code(message: Message, state: FSMContext, set
 
 @router.message(F.text.in_(button_variants("btn_list_panels")))
 async def list_panels(message: Message, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     panels = await services.panel_service.list_panels()
     if not panels:
@@ -238,7 +234,7 @@ async def list_panels(message: Message, settings: Settings, services: ServiceCon
 
 @router.callback_query(F.data.startswith("panel_default_toggle:"))
 async def panel_default_toggle(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None:
         await callback.answer()
@@ -261,7 +257,7 @@ async def panel_default_toggle(callback: CallbackQuery, settings: Settings, serv
 
 @router.callback_query(F.data.startswith("panel_delete_ask:"))
 async def panel_delete_ask(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
         await callback.answer()
@@ -286,7 +282,7 @@ async def panel_delete_ask(callback: CallbackQuery, settings: Settings, services
 
 @router.callback_query(F.data.startswith("panel_delete_yes:"))
 async def panel_delete_yes(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
         await callback.answer()
@@ -306,7 +302,7 @@ async def panel_delete_yes(callback: CallbackQuery, settings: Settings, services
 
 @router.callback_query(F.data == "panel_delete_no")
 async def panel_delete_no(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     await refresh_panels_message(callback, services)
     await callback.answer()
@@ -314,7 +310,7 @@ async def panel_delete_no(callback: CallbackQuery, settings: Settings, services:
 
 @router.message(F.text.in_(button_variants("btn_list_inbounds")))
 async def start_inbounds_list(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     try:
         panel_id = await services.panel_service.resolve_panel_id(None)
@@ -336,7 +332,7 @@ async def start_inbounds_list(message: Message, state: FSMContext, settings: Set
 
 @router.message(F.text.in_(button_variants("btn_inbounds_overview")))
 async def start_inbounds_overview(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     try:
         panel_id = await services.panel_service.resolve_panel_id(None)
@@ -363,7 +359,7 @@ async def inbounds_pick_panel(
     settings: Settings,
     services: ServiceContainer,
 ) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
         await callback.answer()
@@ -390,7 +386,7 @@ async def inbounds_overview_pick_panel(
     settings: Settings,
     services: ServiceContainer,
 ) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
         await callback.answer()

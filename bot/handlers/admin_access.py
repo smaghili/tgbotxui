@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import time
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -10,11 +12,23 @@ from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
 from bot.states import DelegatedAdminStates
-from bot.utils import relative_remaining_time, to_local_date
-
-from .admin_shared import reject_callback_if_not_admin, reject_if_not_admin
+from bot.utils import relative_remaining_time, to_jalali_datetime, to_local_date, to_persian_digits
 
 router = Router(name="admin_access")
+
+
+async def _reject_if_not_full_admin(message: Message, settings: Settings, services: ServiceContainer) -> bool:
+    if await services.access_service.can_manage_admins(user_id=message.from_user.id, settings=settings):
+        return False
+    await message.answer(t("no_admin_access", None))
+    return True
+
+
+async def _reject_callback_if_not_full_admin(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> bool:
+    if await services.access_service.can_manage_admins(user_id=callback.from_user.id, settings=settings):
+        return False
+    await callback.answer(t("no_admin_access", None), show_alert=True)
+    return True
 
 
 def _manage_admins_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
@@ -33,8 +47,7 @@ def _delegated_inbound_select_keyboard(
 ) -> InlineKeyboardMarkup:
     buttons: list[list[InlineKeyboardButton]] = []
     for row in rows:
-        is_selected = (row.panel_id, row.inbound_id) in selected
-        mark = "✅ " if is_selected else ""
+        mark = "✅ " if (row.panel_id, row.inbound_id) in selected else ""
         buttons.append(
             [
                 InlineKeyboardButton(
@@ -73,7 +86,40 @@ def _delegated_access_list_keyboard(rows: list[dict], lang: str | None = None) -
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _delegated_detail_keyboard(user_id: int, lang: str | None = None) -> InlineKeyboardMarkup:
+def _pricing_history_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("btn_yes", lang), callback_data="dag:pricing:history:apply"),
+                InlineKeyboardButton(text=t("btn_no", lang), callback_data="dag:pricing:history:keep"),
+            ]
+        ]
+    )
+
+
+def _delegated_detail_keyboard(
+    user_id: int,
+    *,
+    is_active: bool,
+    charge_basis: str,
+    admin_scope: str,
+    lang: str | None = None,
+) -> InlineKeyboardMarkup:
+    status_label = (
+        f"{t('admin_delegated_status', lang)}: {t('admin_delegated_status_active', lang)}"
+        if is_active else
+        f"{t('admin_delegated_status', lang)}: {t('admin_delegated_status_inactive', lang)}"
+    )
+    basis_label = (
+        t("admin_delegated_charge_allocated", lang)
+        if charge_basis == "allocated"
+        else t("admin_delegated_charge_consumed", lang)
+    )
+    scope_label = (
+        t("admin_delegated_scope_full", lang)
+        if admin_scope == "full"
+        else t("admin_delegated_scope_limited", lang)
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=t("admin_delegated_update", lang), callback_data=f"dag:detail:{user_id}")],
@@ -98,11 +144,17 @@ def _delegated_detail_keyboard(user_id: int, lang: str | None = None) -> InlineK
                 InlineKeyboardButton(text=t("admin_delegated_max_days", lang), callback_data=f"dag:field:max_expiry_days:{user_id}"),
             ],
             [
-                InlineKeyboardButton(text=t("admin_delegated_status", lang), callback_data=f"dag:toggle_status:{user_id}"),
+                InlineKeyboardButton(text=status_label, callback_data=f"dag:toggle_status:{user_id}"),
+                InlineKeyboardButton(text=f"{t('admin_delegated_scope', lang)}: {scope_label}", callback_data=f"dag:toggle_scope:{user_id}"),
+            ],
+            [
                 InlineKeyboardButton(text=t("admin_delegated_access", lang), callback_data=f"dag:edit:{user_id}"),
             ],
             [
-                InlineKeyboardButton(text=t("admin_delegated_charge_basis", lang), callback_data=f"dag:toggle_basis:{user_id}"),
+                InlineKeyboardButton(
+                    text=f"{t('admin_delegated_charge_basis', lang)}: {basis_label}",
+                    callback_data=f"dag:toggle_basis:{user_id}",
+                ),
                 InlineKeyboardButton(text=t("admin_delegated_wallet", lang), callback_data=f"fin:wallet:show:{user_id}"),
             ],
             [InlineKeyboardButton(text=t("admin_delegated_report", lang), callback_data=f"dag:report:{user_id}")],
@@ -116,6 +168,90 @@ def _format_amount(value: int) -> str:
 
 def _value_or_unlimited(value: int, lang: str | None) -> str:
     return t("admin_delegated_unlimited", lang) if value <= 0 else str(value)
+
+
+def _format_db_timestamp(raw: str | None, *, settings: Settings, lang: str | None) -> str:
+    if not raw:
+        return t("na_value", lang)
+    try:
+        dt = datetime.fromisoformat(str(raw).replace(" ", "T"))
+    except ValueError:
+        return str(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if lang == "fa":
+        return to_jalali_datetime(int(dt.timestamp()), settings.timezone)
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for part in str(raw or "").split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result
+
+
+def _wallet_operation_title(operation: str, email: str | None) -> str:
+    if operation == "create_client":
+        return f"ساخت کاربر جدید {email or '-'}"
+    if operation == "add_client_total_gb":
+        return f"افزایش حجم کاربر {email or '-'}"
+    if operation == "extend_client_expiry_days":
+        return f"افزایش تاریخ انقضای کاربر {email or '-'}"
+    if operation == "set_client_total_gb":
+        return f"تنظیم حجم کاربر {email or '-'}"
+    if operation == "set_client_expiry_days":
+        return f"تنظیم تاریخ انقضای کاربر {email or '-'}"
+    if operation == "wallet_set_balance":
+        return "تنظیم موجودی کیف پول"
+    if operation == "wallet_adjust_balance":
+        return "تغییر دستی موجودی"
+    return operation or "تراکنش"
+
+
+def _format_wallet_entry(item: dict, *, settings: Settings, lang: str | None) -> str:
+    created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
+    amount = _format_amount(abs(int(item.get("amount") or 0)))
+    currency = str(item.get("currency") or "تومان")
+    operation = str(item.get("operation") or item.get("kind") or "")
+    details = _parse_detail_pairs(item.get("details"))
+    email = details.get("email") or details.get("client_email")
+    try:
+        metadata = json.loads(item.get("metadata_json") or "{}")
+    except Exception:
+        metadata = {}
+    traffic_gb = int(metadata.get("traffic_gb") or 0)
+    expiry_days = int(metadata.get("expiry_days") or 0)
+    parts = [f"- {created_at}", _wallet_operation_title(operation, email)]
+    if traffic_gb > 0:
+        parts.append(f"مقدار: {to_persian_digits(traffic_gb) if lang == 'fa' else traffic_gb} گیگ")
+    if expiry_days > 0:
+        parts.append(f"مقدار: {to_persian_digits(expiry_days) if lang == 'fa' else expiry_days} روز")
+    parts.append(f"قیمت: {amount} {currency}")
+    return "\n".join(parts)
+
+
+def _format_activity_entry(item: dict, *, settings: Settings, lang: str | None) -> str | None:
+    action = str(item.get("action") or "")
+    if action == "view_status":
+        return None
+    if action == "admin_activity":
+        details = str(item.get("details") or "").strip()
+        return f"- {details}" if details else None
+    details = _parse_detail_pairs(item.get("details"))
+    created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
+    if action == "create_client":
+        return f"- {created_at}\nساخت کاربر جدید {details.get('email') or '-'}"
+    if action == "add_client_traffic":
+        gb = details.get("gb") or "-"
+        return f"- {created_at}\nافزایش حجم کاربر\nمقدار: {to_persian_digits(gb) if lang == 'fa' and gb != '-' else gb} گیگ"
+    if action == "extend_client_expiry":
+        days = details.get("days") or "-"
+        return f"- {created_at}\nافزایش تاریخ انقضا\nمقدار: {to_persian_digits(days) if lang == 'fa' and days != '-' else days} روز"
+    return None
 
 
 async def _render_delegated_detail(
@@ -133,7 +269,10 @@ async def _render_delegated_detail(
     if overview["delegated"] is None:
         message = target.message if isinstance(target, CallbackQuery) else target
         if message is not None:
-            await message.answer(t("admin_delegated_not_found", lang))
+            if isinstance(target, CallbackQuery):
+                await message.edit_text(t("admin_delegated_not_found", lang))
+            else:
+                await message.answer(t("admin_delegated_not_found", lang))
         return
     user = overview["user"] or {}
     profile = overview["profile"]
@@ -149,8 +288,10 @@ async def _render_delegated_detail(
     expires_text = t("admin_delegated_unlimited", lang) if expires_at <= 0 else (
         f"{to_local_date(expires_at, settings.timezone, lang)} ({relative_remaining_time(expires_at, settings.timezone, lang)})"
     )
-    status_text = t("admin_delegated_status_active", lang) if int(profile.get("is_active") or 0) == 1 else t("admin_delegated_status_inactive", lang)
-    charge_basis_key = "admin_delegated_charge_allocated" if str(pricing.get("charge_basis") or "allocated") == "allocated" else "admin_delegated_charge_consumed"
+    is_active = int(profile.get("is_active") or 0) == 1
+    status_text = t("admin_delegated_status_active", lang) if is_active else t("admin_delegated_status_inactive", lang)
+    charge_basis = str(pricing.get("charge_basis") or "allocated")
+    charge_basis_key = "admin_delegated_charge_allocated" if charge_basis == "allocated" else "admin_delegated_charge_consumed"
     text = t(
         "admin_delegated_details_text",
         lang,
@@ -170,9 +311,19 @@ async def _render_delegated_detail(
         status=status_text,
         owned_clients=int(overview["owned_clients_count"] or 0),
     )
+    reply_markup = _delegated_detail_keyboard(
+        target_user_id,
+        is_active=is_active,
+        charge_basis=charge_basis,
+        admin_scope=str(overview["delegated"].get("admin_scope") or "limited"),
+        lang=lang,
+    )
     message = target.message if isinstance(target, CallbackQuery) else target
     if message is not None:
-        await message.answer(text, reply_markup=_delegated_detail_keyboard(target_user_id, lang))
+        if isinstance(target, CallbackQuery):
+            await message.edit_text(text, reply_markup=reply_markup)
+        else:
+            await message.answer(text, reply_markup=reply_markup)
 
 
 async def _start_delegated_inbound_selection(
@@ -207,7 +358,7 @@ async def _start_delegated_inbound_selection(
 
 @router.message(F.text.in_(button_variants("btn_manage_admins")))
 async def manage_admins_menu(message: Message, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     lang = await services.db.get_user_language(message.from_user.id)
     await message.answer(
@@ -218,7 +369,7 @@ async def manage_admins_menu(message: Message, settings: Settings, services: Ser
 
 @router.callback_query(F.data == "dag:add")
 async def delegated_admin_add_start(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     await state.set_state(DelegatedAdminStates.waiting_target)
@@ -229,7 +380,7 @@ async def delegated_admin_add_start(callback: CallbackQuery, state: FSMContext, 
 
 @router.message(DelegatedAdminStates.waiting_target)
 async def delegated_admin_target_input(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     lang = await services.db.get_user_language(message.from_user.id)
     target_raw = (message.text or "").strip()
@@ -252,7 +403,7 @@ async def delegated_admin_target_input(message: Message, state: FSMContext, sett
 
 @router.message(DelegatedAdminStates.waiting_title)
 async def delegated_admin_title_input(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     lang = await services.db.get_user_language(message.from_user.id)
     title_raw = (message.text or "").strip()
@@ -279,7 +430,7 @@ async def delegated_admin_title_input(message: Message, state: FSMContext, setti
 
 @router.callback_query(DelegatedAdminStates.waiting_inbound_selection, F.data.startswith("dag:toggle:"))
 async def delegated_admin_toggle_inbound(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None or callback.message is None:
         await callback.answer()
@@ -309,8 +460,13 @@ async def delegated_admin_toggle_inbound(callback: CallbackQuery, state: FSMCont
 
 
 @router.callback_query(DelegatedAdminStates.waiting_inbound_selection, F.data == "dag:cancel")
-async def delegated_admin_cancel_inbound_selection(callback: CallbackQuery, state: FSMContext, settings: Settings) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+async def delegated_admin_cancel_inbound_selection(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     await state.clear()
     await callback.answer()
@@ -318,7 +474,7 @@ async def delegated_admin_cancel_inbound_selection(callback: CallbackQuery, stat
 
 @router.callback_query(DelegatedAdminStates.waiting_inbound_selection, F.data == "dag:confirm")
 async def delegated_admin_confirm_inbound_selection(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None:
         await callback.answer()
@@ -349,13 +505,13 @@ async def delegated_admin_confirm_inbound_selection(callback: CallbackQuery, sta
         if mode != "edit" or (panel_id, inbound_id) not in existing_access_ids:
             await services.admin_provisioning_service.grant_delegated_admin_access(
                 actor_user_id=callback.from_user.id,
+                settings=settings,
                 telegram_user_id=target_user_id,
                 title=str(title) if title else None,
                 panel_id=panel_id,
                 inbound_id=inbound_id,
             )
     await state.clear()
-    await callback.message.answer(t("admin_delegated_saved", lang))
     await _render_delegated_detail(
         callback,
         services=services,
@@ -368,7 +524,7 @@ async def delegated_admin_confirm_inbound_selection(callback: CallbackQuery, sta
 
 @router.callback_query(F.data.startswith("dag:edit:"))
 async def delegated_admin_edit(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
         await callback.answer()
@@ -403,27 +559,29 @@ async def delegated_admin_edit(callback: CallbackQuery, state: FSMContext, setti
         await callback.answer(t("bind_no_panel", lang), show_alert=True)
         return
     text, markup = result
-    await callback.message.answer(text, reply_markup=markup)
+    await callback.message.edit_text(text, reply_markup=markup)
     await callback.answer()
 
 
 @router.callback_query(F.data == "dag:list")
 async def delegated_admin_list(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None:
         await callback.answer()
         return
     lang = await services.db.get_user_language(callback.from_user.id)
-    rows = await services.admin_provisioning_service.list_delegated_admin_accesses()
+    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
+        manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+    )
     text = t("admin_delegated_empty", lang) if not rows else t("admin_delegated_list_header", lang)
-    await callback.message.answer(text, reply_markup=_delegated_access_list_keyboard(rows, lang))
+    await callback.message.edit_text(text, reply_markup=_delegated_access_list_keyboard(rows, lang))
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dag:detail:"))
 async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None:
         await callback.answer()
@@ -446,7 +604,7 @@ async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, se
 
 @router.callback_query(F.data.startswith("dag:field:"))
 async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None or callback.message is None:
         await callback.answer()
@@ -484,7 +642,7 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
 
 @router.message(DelegatedAdminStates.waiting_profile_value)
 async def delegated_admin_profile_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_if_not_admin(message, settings):
+    if await _reject_if_not_full_admin(message, settings, services):
         return
     lang = await services.db.get_user_language(message.from_user.id)
     data = await state.get_data()
@@ -517,11 +675,34 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
             if amount < 0:
                 raise ValueError
             pricing = await services.financial_service.get_pricing(target_user_id)
+            new_price_gb = amount if field_name == "price_gb" else int(pricing["price_per_gb"] or 0)
+            new_price_day = amount if field_name == "price_day" else int(pricing["price_per_day"] or 0)
+            if field_name == "price_gb" and new_price_gb != int(pricing.get("price_per_gb") or 0):
+                await state.update_data(
+                    delegated_profile_target_user_id=target_user_id,
+                    delegated_profile_new_price_gb=new_price_gb,
+                    delegated_profile_new_price_day=new_price_day,
+                    delegated_profile_charge_basis=str(pricing.get("charge_basis") or "allocated"),
+                    delegated_profile_currency=str(pricing.get("currency") or "تومان"),
+                    delegated_profile_old_price_gb=int(pricing.get("price_per_gb") or 0),
+                )
+                await state.set_state(DelegatedAdminStates.waiting_price_history_choice)
+                await message.answer(
+                    t(
+                        "finance_pricing_history_confirm",
+                        lang,
+                        old_price_gb=_format_amount(int(pricing.get("price_per_gb") or 0)),
+                        new_price_gb=_format_amount(new_price_gb),
+                        currency=str(pricing.get("currency") or "تومان"),
+                    ),
+                    reply_markup=_pricing_history_choice_keyboard(lang),
+                )
+                return
             await services.financial_service.set_pricing(
                 actor_user_id=message.from_user.id,
                 telegram_user_id=target_user_id,
-                price_per_gb=amount if field_name == "price_gb" else int(pricing["price_per_gb"] or 0),
-                price_per_day=amount if field_name == "price_day" else int(pricing["price_per_day"] or 0),
+                price_per_gb=new_price_gb,
+                price_per_day=new_price_day,
                 charge_basis=str(pricing.get("charge_basis") or "allocated"),
             )
         else:
@@ -545,9 +726,73 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
     )
 
 
+@router.callback_query(DelegatedAdminStates.waiting_price_history_choice, F.data == "dag:pricing:history:apply")
+async def delegated_admin_price_history_apply(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer
+) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    data = await state.get_data()
+    await state.clear()
+    target_user_id = int(data["delegated_profile_target_user_id"])
+    await services.financial_service.set_pricing(
+        actor_user_id=callback.from_user.id,
+        telegram_user_id=target_user_id,
+        price_per_gb=int(data["delegated_profile_new_price_gb"]),
+        price_per_day=int(data["delegated_profile_new_price_day"]),
+        charge_basis=str(data.get("delegated_profile_charge_basis") or "allocated"),
+        apply_price_to_past_reports=True,
+    )
+    await callback.message.answer(t("admin_delegated_profile_saved", lang))
+    await _render_delegated_detail(
+        callback.message,
+        services=services,
+        settings=settings,
+        target_user_id=target_user_id,
+        lang=lang,
+    )
+    await callback.answer()
+
+
+@router.callback_query(DelegatedAdminStates.waiting_price_history_choice, F.data == "dag:pricing:history:keep")
+async def delegated_admin_price_history_keep(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer
+) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    data = await state.get_data()
+    await state.clear()
+    target_user_id = int(data["delegated_profile_target_user_id"])
+    await services.financial_service.set_pricing(
+        actor_user_id=callback.from_user.id,
+        telegram_user_id=target_user_id,
+        price_per_gb=int(data["delegated_profile_new_price_gb"]),
+        price_per_day=int(data["delegated_profile_new_price_day"]),
+        charge_basis=str(data.get("delegated_profile_charge_basis") or "allocated"),
+        apply_price_to_past_reports=False,
+    )
+    await callback.message.answer(t("admin_delegated_profile_saved", lang))
+    await _render_delegated_detail(
+        callback.message,
+        services=services,
+        settings=settings,
+        target_user_id=target_user_id,
+        lang=lang,
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("dag:toggle_status:"))
 async def delegated_admin_toggle_status(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None:
         await callback.answer()
@@ -571,12 +816,44 @@ async def delegated_admin_toggle_status(callback: CallbackQuery, settings: Setti
         target_user_id=target_user_id,
         lang=lang,
     )
-    await callback.answer(t("admin_delegated_profile_saved", lang))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dag:toggle_scope:"))
+async def delegated_admin_toggle_scope(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        target_user_id = int(callback.data.split(":", 2)[2])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
+    if delegated is None:
+        await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
+        return
+    next_scope = "full" if str(delegated.get("admin_scope") or "limited") == "limited" else "limited"
+    await services.db.set_delegated_admin_scope(
+        telegram_user_id=target_user_id,
+        admin_scope=next_scope,
+    )
+    await _render_delegated_detail(
+        callback,
+        services=services,
+        settings=settings,
+        target_user_id=target_user_id,
+        lang=lang,
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dag:toggle_basis:"))
 async def delegated_admin_toggle_basis(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None:
         await callback.answer()
@@ -607,12 +884,12 @@ async def delegated_admin_toggle_basis(callback: CallbackQuery, settings: Settin
         target_user_id=target_user_id,
         lang=lang,
     )
-    await callback.answer(t("admin_delegated_profile_saved", lang))
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dag:report:"))
 async def delegated_admin_report(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None or callback.message is None:
         await callback.answer()
@@ -628,21 +905,22 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         settings=settings,
     )
     report = await services.financial_service.get_sales_report(target_user_id)
-    wallet_lines = []
-    for item in await services.db.list_recent_wallet_transactions(telegram_user_id=target_user_id, limit=10):
-        wallet_lines.append(
-            f"- {item['created_at']} | {item['operation'] or item['kind']} | {_format_amount(int(item['amount'] or 0))}"
-        )
-    activity_lines = []
-    for item in await services.db.list_recent_actor_audit_logs(actor_user_id=target_user_id, limit=10):
-        activity_lines.append(f"- {item['created_at']} | {item['action']} | {item['details'] or '-'}")
+    wallet_lines = [
+        _format_wallet_entry(item, settings=settings, lang=lang)
+        for item in await services.db.list_recent_wallet_transactions(telegram_user_id=target_user_id, limit=10)
+    ]
+    activity_lines: list[str] = []
+    for item in await services.db.list_recent_actor_audit_logs(actor_user_id=target_user_id, limit=20):
+        formatted = _format_activity_entry(item, settings=settings, lang=lang)
+        if formatted is not None:
+            activity_lines.append(formatted)
     user = overview["user"] or {}
     title = (
         str(user.get("username") or "").strip()
         or str(user.get("full_name") or "").strip()
         or str(target_user_id)
     )
-    await callback.message.answer(
+    await callback.message.edit_text(
         t(
             "admin_delegated_report_text",
             lang,
@@ -655,8 +933,8 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
             refunds=_format_amount(int(report["total_refunds"] or 0)),
             transactions=int(report["total_transactions"] or 0),
             owned_clients=int(overview["owned_clients_count"] or 0),
-            wallet_lines="\n".join(wallet_lines) if wallet_lines else "-",
-            activity_lines="\n".join(activity_lines) if activity_lines else "-",
+            wallet_lines="\n\n".join(wallet_lines) if wallet_lines else "تراکنشی ثبت نشده است.",
+            activity_lines="\n\n".join(activity_lines) if activity_lines else "فعالیت مهمی ثبت نشده است.",
         )
     )
     await callback.answer()
@@ -664,7 +942,7 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
 
 @router.callback_query(F.data.startswith("dag:remove_user:"))
 async def delegated_admin_remove_user(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None:
         await callback.answer()
@@ -683,15 +961,17 @@ async def delegated_admin_remove_user(callback: CallbackQuery, settings: Setting
         )
     await services.db.deactivate_delegated_admin(target_user_id)
     if callback.message is not None:
-        rows = await services.admin_provisioning_service.list_delegated_admin_accesses()
+        rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
+            manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+        )
         text = t("admin_delegated_empty", lang) if not rows else t("admin_delegated_list_header", lang)
-        await callback.message.answer(text, reply_markup=_delegated_access_list_keyboard(rows, lang))
+        await callback.message.edit_text(text, reply_markup=_delegated_access_list_keyboard(rows, lang))
     await callback.answer(t("admin_delegated_removed", lang))
 
 
 @router.callback_query(F.data.startswith("dag:revoke:"))
 async def delegated_admin_revoke(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_admin(callback, settings):
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     if callback.data is None:
@@ -707,7 +987,9 @@ async def delegated_admin_revoke(callback: CallbackQuery, settings: Settings, se
         access_id=access_id,
     )
     if callback.message is not None:
-        rows = await services.admin_provisioning_service.list_delegated_admin_accesses()
+        rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
+            manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+        )
         text = t("admin_delegated_empty", lang) if not rows else t("admin_delegated_list_header", lang)
         await callback.message.edit_text(text, reply_markup=_delegated_access_list_keyboard(rows, lang))
     await callback.answer(t("admin_delegated_removed", lang) if revoked else t("admin_panel_not_found", lang))
