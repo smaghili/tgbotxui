@@ -100,6 +100,19 @@ run_as_bot() {
   runuser -u "${BOT_USER}" -- env "${env_args[@]}" "$@"
 }
 
+resolve_database_path() {
+  local configured_path
+  configured_path="$(get_env_value "DATABASE_PATH")"
+  if [[ -z "${configured_path}" ]]; then
+    configured_path="data/bot.db"
+  fi
+  if [[ "${configured_path}" = /* ]]; then
+    echo "${configured_path}"
+  else
+    echo "${APP_DIR}/${configured_path}"
+  fi
+}
+
 project_files_present() {
   [[ -f "${PROJECT_ROOT}/main.py" && -f "${PROJECT_ROOT}/requirements.txt" && -f "${PROJECT_ROOT}/.env.example" ]]
 }
@@ -343,6 +356,19 @@ build_virtualenv() {
   chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}/.venv"
 }
 
+apply_database_migrations() {
+  log_step "7/9" "Applying database migrations safely..."
+  local venv_python="${APP_DIR}/.venv/bin/python"
+  if [[ ! -x "${venv_python}" ]]; then
+    echo "Virtualenv python not found: ${venv_python}"
+    exit 1
+  fi
+  (
+    cd "${APP_DIR}"
+    run_as_bot "${venv_python}" scripts/apply_migrations.py
+  )
+}
+
 prepare_environment_file() {
   if [[ ! -f "${APP_DIR}/.env" ]]; then
     cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
@@ -442,7 +468,8 @@ start_service() {
 }
 
 print_report() {
-  local db_path="${APP_DIR}/data/bot.db"
+  local db_path
+  db_path="$(resolve_database_path)"
   local status_summary="unknown"
   local db_summary="not found"
 
@@ -504,10 +531,13 @@ build_virtualenv
 log_step "6/8" "Preparing environment..."
 prepare_environment_file
 
-log_step "7/8" "Installing systemd service..."
+log_step "7/9" "Installing systemd service..."
 install_service_file
 
-log_step "8/8" "Enabling and starting service..."
+apply_database_migrations
+
+log_step "8/9" "Enabling and starting service..."
 start_service
 
+log_step "9/9" "Printing report..."
 print_report

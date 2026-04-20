@@ -21,6 +21,7 @@ from bot.services.admin_panel_service import AdminPanelService
 from bot.services.admin_provisioning_service import AdminProvisioningService
 from bot.services.container import ServiceContainer
 from bot.services.crypto import CryptoService
+from bot.services.financial_service import FinancialService
 from bot.services.panel_service import PanelService
 from bot.services.telegram_runtime import create_bot_with_failover
 from bot.services.usage_service import UsageService
@@ -32,7 +33,9 @@ logger = logging.getLogger(__name__)
 async def run(settings: Settings) -> None:
     db = Database(settings.database_path)
     await db.connect()
-    await db.init_schema()
+    applied_migrations = await db.init_schema()
+    if applied_migrations:
+        logger.info("database migrations applied", extra={"count": applied_migrations})
 
     crypto = CryptoService(settings.encryption_key)
     xui = XUIClient(timeout_seconds=settings.request_timeout_seconds)
@@ -45,10 +48,15 @@ async def run(settings: Settings) -> None:
     )
     admin_panel_service = AdminPanelService(db=db, panel_service=panel_service)
     access_service = AccessService(db=db)
+    financial_service = FinancialService(
+        db=db,
+        access_service=access_service,
+    )
     admin_provisioning_service = AdminProvisioningService(
         db=db,
         panel_service=panel_service,
         access_service=access_service,
+        financial_service=financial_service,
     )
     usage_service = UsageService(
         db=db,
@@ -63,6 +71,7 @@ async def run(settings: Settings) -> None:
         admin_panel_service=admin_panel_service,
         access_service=access_service,
         admin_provisioning_service=admin_provisioning_service,
+        financial_service=financial_service,
         usage_service=usage_service,
     )
 

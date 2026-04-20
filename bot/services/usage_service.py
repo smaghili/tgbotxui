@@ -10,6 +10,7 @@ from bot.db import Database
 from bot.i18n import t
 from bot.metrics import PANEL_COUNT, SYNC_RUNS, USER_SERVICE_COUNT, USER_STATUS_REQUESTS
 from bot.services.panel_service import PanelService
+from bot.services.xui_client import XUIError
 from bot.utils import format_bytes, format_gb, relative_remaining_time, status_emoji, to_local_date
 
 logger = logging.getLogger(__name__)
@@ -70,10 +71,15 @@ class UsageService:
             return "normal"
         remaining_seconds = int(expire_at) - int(time.time())
         if remaining_seconds <= 0:
-            return "normal"
+            return "expired"
         if remaining_seconds <= 86400:
             return "low"
         return "normal"
+
+    @staticmethod
+    def _is_missing_client_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "inbound not found for email" in text or "client not found on this inbound" in text
 
     async def _send_chat_message(self, chat_id: int, text: str) -> bool:
         if self.bot is None:
@@ -273,7 +279,36 @@ class UsageService:
             )
 
     async def _sync_service_row(self, service_row: dict) -> None:
-        usage = await self.panel_service.fetch_client_usage(service_row["panel_id"], service_row["client_email"])
+        try:
+            usage = await self.panel_service.fetch_client_usage(service_row["panel_id"], service_row["client_email"])
+        except XUIError as exc:
+            if self._is_missing_client_error(exc):
+                await self.db.mark_user_service_deleted(
+                    service_id=int(service_row["id"]),
+                    status="deleted",
+                    last_synced_at=int(time.time()),
+                )
+                await self.db.add_audit_log(
+                    actor_user_id=None,
+                    action="auto_mark_missing_service_deleted",
+                    target_type="user_service",
+                    target_id=str(service_row["id"]),
+                    success=True,
+                    details=(
+                        f"panel={service_row['panel_id']};email={service_row['client_email']};"
+                        f"client_id={service_row.get('client_id')};reason={exc}"
+                    ),
+                )
+                logger.warning(
+                    "marked missing service as deleted",
+                    extra={
+                        "service_id": service_row["id"],
+                        "panel_id": service_row["panel_id"],
+                        "client_email": service_row["client_email"],
+                    },
+                )
+                return
+            raise
         await self.db.update_user_service_stats(
             service_id=service_row["id"],
             total_bytes=usage["total_bytes"],
@@ -431,19 +466,28 @@ class UsageService:
                     inbound_id=inbound_id,
                     client_uuid=client_uuid,
                 )
-                should_notify_traffic = traffic_state == "low" and traffic_state != old_traffic_state
-                should_notify_expiry = expiry_state == "low" and expiry_state != old_expiry_state
+                should_notify_traffic = traffic_state in {"low", "depleted"} and traffic_state != old_traffic_state
+                should_notify_expiry = expiry_state in {"low", "expired"} and expiry_state != old_expiry_state
                 notified = False
 
                 if should_notify_traffic:
                     remaining = max(total_bytes - used_bytes, 0)
-                    text = (
-                        "هشدار سرویس:\n"
-                        f"کاربر {detail.get('email')} کمتر از 100 مگابایت حجم دارد.\n"
-                        f"پنل: {panel_name}\n"
-                        f"اینباند: {inbound_name}\n"
-                        f"حجم باقی‌مانده: {format_gb(remaining, 'fa')}"
-                    )
+                    if traffic_state == "depleted":
+                        text = (
+                            "هشدار سرویس:\n"
+                            f"حجم کاربر {detail.get('email')} به پایان رسیده است.\n"
+                            f"پنل: {panel_name}\n"
+                            f"اینباند: {inbound_name}\n"
+                            "حجم باقی‌مانده: 0"
+                        )
+                    else:
+                        text = (
+                            "هشدار سرویس:\n"
+                            f"کاربر {detail.get('email')} کمتر از 100 مگابایت حجم دارد.\n"
+                            f"پنل: {panel_name}\n"
+                            f"اینباند: {inbound_name}\n"
+                            f"حجم باقی‌مانده: {format_gb(remaining, 'fa')}"
+                        )
                     try:
                         await self.bot.send_message(admin_user_id, text)
                     except Exception:
@@ -455,14 +499,23 @@ class UsageService:
                         notified = True
 
                 if should_notify_expiry:
-                    text = (
-                        "هشدار انقضا:\n"
-                        f"کمتر از 1 روز تا پایان کاربر {detail.get('email')} باقی مانده است.\n"
-                        f"پنل: {panel_name}\n"
-                        f"اینباند: {inbound_name}\n"
-                        f"تاریخ پایان: {to_local_date(detail.get('expiry'), self.timezone, 'fa')}\n"
-                        f"زمان باقی‌مانده: {relative_remaining_time(detail.get('expiry'), self.timezone, 'fa')}"
-                    )
+                    if expiry_state == "expired":
+                        text = (
+                            "هشدار انقضا:\n"
+                            f"زمان کاربر {detail.get('email')} به پایان رسیده است.\n"
+                            f"پنل: {panel_name}\n"
+                            f"اینباند: {inbound_name}\n"
+                            f"تاریخ پایان: {to_local_date(detail.get('expiry'), self.timezone, 'fa')}"
+                        )
+                    else:
+                        text = (
+                            "هشدار انقضا:\n"
+                            f"کمتر از 1 روز تا پایان کاربر {detail.get('email')} باقی مانده است.\n"
+                            f"پنل: {panel_name}\n"
+                            f"اینباند: {inbound_name}\n"
+                            f"تاریخ پایان: {to_local_date(detail.get('expiry'), self.timezone, 'fa')}\n"
+                            f"زمان باقی‌مانده: {relative_remaining_time(detail.get('expiry'), self.timezone, 'fa')}"
+                        )
                     try:
                         await self.bot.send_message(admin_user_id, text)
                     except Exception:

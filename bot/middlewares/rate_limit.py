@@ -31,6 +31,7 @@ class AdminRateLimitMiddleware(BaseMiddleware):
         self.settings = settings
         self.limiter = limiter or SlidingWindowLimiter()
         self.admin_prefixes = {
+            *button_variants("btn_manage_finance"),
             *button_variants("btn_manage"),
             *button_variants("btn_add_panel"),
             *button_variants("btn_list_panels"),

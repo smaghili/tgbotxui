@@ -14,6 +14,7 @@ class MenuStateResetMiddleware(BaseMiddleware):
         self.menu_buttons = {
             *button_variants("btn_status"),
             *button_variants("btn_change_language"),
+            *button_variants("btn_manage_finance"),
             *button_variants("btn_manage"),
             *button_variants("btn_back"),
             *button_variants("btn_add_panel"),

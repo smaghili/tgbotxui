@@ -238,6 +238,33 @@ async def bind_services_for_tg_identity(
     )
 
 
+async def notify_delegated_admin_activity(
+    source: Message | CallbackQuery,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    text: str,
+) -> None:
+    actor_id = source.from_user.id
+    context = await services.access_service.get_admin_context(actor_id, settings)
+    stamped_text = f"{text}\nزمان: {now_jalali_datetime(settings.timezone)}"
+    await services.db.add_audit_log(
+        actor_user_id=actor_id,
+        action="admin_activity",
+        target_type="admin_activity",
+        target_id=str(actor_id),
+        success=True,
+        details=stamped_text,
+    )
+    if not context.is_delegated_admin:
+        return
+    for admin_id in settings.admin_ids:
+        try:
+            await source.bot.send_message(admin_id, stamped_text)
+        except Exception:
+            continue
+
+
 def back_to_detail_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
     return single_button_inline_keyboard(
         t("admin_back_to_detail", lang),

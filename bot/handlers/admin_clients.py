@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import time
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -41,11 +43,30 @@ from .admin_shared import (
     single_button_inline_keyboard,
     panel_bulk_actions_keyboard,
     normalize_tg_id,
+    notify_delegated_admin_activity,
     users_clients_keyboard,
     users_panel_select_keyboard,
 )
 
 router = Router(name="admin_clients")
+GIB = 1024 ** 3
+
+
+def _delegated_profile_error_text(exc: Exception, lang: str | None) -> str | None:
+    text = str(exc).lower()
+    mapping = [
+        ("max clients reached", "admin_delegated_limit_error_max_clients"),
+        ("traffic is below", "admin_delegated_limit_error_traffic_min"),
+        ("traffic is above", "admin_delegated_limit_error_traffic_max"),
+        ("expiry is below", "admin_delegated_limit_error_days_min"),
+        ("expiry is above", "admin_delegated_limit_error_days_max"),
+        ("inactive", "admin_delegated_inactive"),
+        ("expired", "admin_delegated_expired"),
+    ]
+    for needle, key in mapping:
+        if needle in text:
+            return t(key, lang)
+    return None
 
 
 def _positive_added_days(before_expiry: int | None, after_expiry: int | None) -> int:
@@ -59,6 +80,43 @@ def _positive_added_days(before_expiry: int | None, after_expiry: int | None) ->
 
 def _resolved_client_email(before: dict, after: dict) -> str:
     return str(after.get("email") or before.get("email") or "")
+
+
+def _allocated_gb(total_bytes: int | None) -> int:
+    value = int(total_bytes or 0)
+    if value <= 0:
+        return 0
+    return (value + GIB - 1) // GIB
+
+
+def _remaining_days_from_expiry(expiry: int | None) -> int:
+    expiry_value = int(expiry or 0)
+    if expiry_value <= 0:
+        return 0
+    now_value = int(time.time())
+    if expiry_value <= now_value:
+        return 0
+    return max(1, (expiry_value - now_value + 86399) // 86400)
+
+
+async def _charge_actor_wallet(
+    *,
+    actor_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    operation: str,
+    traffic_gb: int = 0,
+    expiry_days: int = 0,
+    details: str | None = None,
+) -> dict | None:
+    return await services.financial_service.charge_operation(
+        actor_user_id=actor_user_id,
+        settings=settings,
+        operation=operation,
+        traffic_gb=traffic_gb,
+        expiry_days=expiry_days,
+        details=details,
+    )
 
 
 async def _notify_traffic_change(
@@ -215,14 +273,12 @@ async def _notify_root_admins_if_delegated(
     services: ServiceContainer,
     text: str,
 ) -> None:
-    context = await services.access_service.get_admin_context(source.from_user.id, settings)
-    if not context.is_delegated_admin:
-        return
-    for admin_id in settings.admin_ids:
-        try:
-            await source.bot.send_message(admin_id, text)
-        except Exception:
-            continue
+    await notify_delegated_admin_activity(
+        source,
+        settings=settings,
+        services=services,
+        text=text,
+    )
 
 
 async def _resolve_panel_or_prompt(
@@ -1320,6 +1376,20 @@ async def client_reset_yes(callback: CallbackQuery, settings: Settings, services
     except Exception as exc:
         await callback_error_alert(callback, exc)
         return
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_root_admins_if_delegated(
+        callback,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(callback)}\n"
+            "عملیات: ریست ترافیک کاربر\n"
+            f"کاربر: {detail.get('email')}\n"
+            f"پنل: {panel_name}\n"
+            f"اینباند: {inbound_name}"
+        ),
+    )
     await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
     await callback.answer(t("admin_reset_done", None))
 
@@ -1375,9 +1445,41 @@ async def client_traffic_set(callback: CallbackQuery, settings: Settings, servic
     total_gb: int | None = None if value_raw == "unlimited" else int(value_raw)
     try:
         before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+        if total_gb is None and not services.access_service.is_root_admin(callback.from_user.id, settings):
+            raise ValueError("delegated_unlimited_not_allowed")
+        if total_gb is not None:
+            await services.financial_service.validate_target_limits(
+                actor_user_id=callback.from_user.id,
+                settings=settings,
+                total_gb=total_gb,
+            )
+        charge_tx = await _charge_actor_wallet(
+            actor_user_id=callback.from_user.id,
+            settings=settings,
+            services=services,
+            operation="set_client_total_gb",
+            traffic_gb=0 if total_gb is None else max(0, total_gb - _allocated_gb(before.get("total"))),
+            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
+        )
         await services.panel_service.set_client_total_gb(panel_id, inbound_id, client_uuid, total_gb)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
+        if 'charge_tx' in locals() and charge_tx is not None:
+            await services.financial_service.refund_transaction(
+                actor_user_id=callback.from_user.id,
+                transaction_id=int(charge_tx["id"]),
+                reason=f"refund:set_client_total_gb_failed:{client_uuid}",
+            )
+        delegated_error = _delegated_profile_error_text(exc, None)
+        if delegated_error is not None:
+            await callback.answer(delegated_error, show_alert=True)
+            return
+        if str(exc) == "delegated_unlimited_not_allowed":
+            await callback.answer(t("finance_unlimited_not_allowed", None), show_alert=True)
+            return
+        if "insufficient" in str(exc).lower():
+            await callback.answer(t("finance_insufficient_wallet", None), show_alert=True)
+            return
         await callback_error_alert(callback, exc)
         return
     await _notify_traffic_change(
@@ -1474,9 +1576,42 @@ async def client_expiry_set(callback: CallbackQuery, settings: Settings, service
     days: int | None = None if value_raw == "unlimited" else int(value_raw)
     try:
         before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+        if days is None and not services.access_service.is_root_admin(callback.from_user.id, settings):
+            raise ValueError("delegated_unlimited_not_allowed")
+        if days is not None:
+            await services.financial_service.validate_target_limits(
+                actor_user_id=callback.from_user.id,
+                settings=settings,
+                total_days=days,
+            )
+        before_days = _remaining_days_from_expiry(before.get("expiry"))
+        charge_tx = await _charge_actor_wallet(
+            actor_user_id=callback.from_user.id,
+            settings=settings,
+            services=services,
+            operation="set_client_expiry_days",
+            expiry_days=0 if days is None else max(0, days - before_days),
+            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
+        )
         await services.panel_service.set_client_expiry_days(panel_id, inbound_id, client_uuid, days)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
+        if 'charge_tx' in locals() and charge_tx is not None:
+            await services.financial_service.refund_transaction(
+                actor_user_id=callback.from_user.id,
+                transaction_id=int(charge_tx["id"]),
+                reason=f"refund:set_client_expiry_days_failed:{client_uuid}",
+            )
+        delegated_error = _delegated_profile_error_text(exc, None)
+        if delegated_error is not None:
+            await callback.answer(delegated_error, show_alert=True)
+            return
+        if str(exc) == "delegated_unlimited_not_allowed":
+            await callback.answer(t("finance_unlimited_not_allowed", None), show_alert=True)
+            return
+        if "insufficient" in str(exc).lower():
+            await callback.answer(t("finance_insufficient_wallet", None), show_alert=True)
+            return
         await callback_error_alert(callback, exc)
         return
     await _notify_expiry_change(
@@ -1572,10 +1707,26 @@ async def iplimit_set_callback(callback: CallbackQuery, settings: Settings, serv
         return
     limit_ip: int | None = None if value_raw == "unlimited" else int(value_raw)
     try:
+        detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
         await services.panel_service.set_client_limit_ip(panel_id, inbound_id, client_uuid, limit_ip)
     except Exception as exc:
         await callback_error_alert(callback, exc)
         return
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_root_admins_if_delegated(
+        callback,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(callback)}\n"
+            "عملیات: تغییر محدودیت IP کاربر\n"
+            f"کاربر: {detail.get('email')}\n"
+            f"پنل: {panel_name}\n"
+            f"اینباند: {inbound_name}\n"
+            f"مقدار جدید: {'نامحدود' if limit_ip is None else limit_ip}"
+        ),
+    )
     await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
     await callback.answer(t("admin_ip_limit_updated", None))
 
@@ -1661,10 +1812,26 @@ async def client_toggle_enable(callback: CallbackQuery, settings: Settings, serv
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     try:
+        detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
         enabled = await services.panel_service.toggle_client_enable(panel_id, inbound_id, client_uuid)
     except Exception as exc:
         await callback_error_alert(callback, exc)
         return
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_root_admins_if_delegated(
+        callback,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(callback)}\n"
+            "عملیات: تغییر وضعیت کاربر\n"
+            f"کاربر: {detail.get('email')}\n"
+            f"پنل: {panel_name}\n"
+            f"اینباند: {inbound_name}\n"
+            f"وضعیت جدید: {'فعال' if enabled else 'غیرفعال'}"
+        ),
+    )
     await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
     await callback.answer(t("admin_enable_on", None) if enabled else t("admin_enable_off", None))
 
@@ -1763,9 +1930,45 @@ async def client_custom_traffic_gb(message: Message, state: FSMContext, settings
         return
     try:
         before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+        await services.financial_service.validate_target_limits(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            total_gb=gb,
+        )
+        charge_tx = await _charge_actor_wallet(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            services=services,
+            operation="set_client_total_gb",
+            traffic_gb=max(0, gb - _allocated_gb(before.get("total"))),
+            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
+        )
         await services.panel_service.set_client_total_gb(panel_id, inbound_id, client_uuid, gb)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
+        if 'charge_tx' in locals() and charge_tx is not None:
+            await services.financial_service.refund_transaction(
+                actor_user_id=message.from_user.id,
+                transaction_id=int(charge_tx["id"]),
+                reason=f"refund:set_client_total_gb_failed:{client_uuid}",
+            )
+        delegated_error = _delegated_profile_error_text(exc, None)
+        if delegated_error is not None:
+            await answer_with_admin_menu(
+                message,
+                delegated_error,
+                settings=settings,
+                services=services,
+            )
+            return
+        if "insufficient" in str(exc).lower():
+            await answer_with_admin_menu(
+                message,
+                t("finance_insufficient_wallet", None),
+                settings=settings,
+                services=services,
+            )
+            return
         await answer_with_admin_menu(
             message,
             f"{t('admin_update_traffic_error', None)}:\n{exc}",
@@ -1816,10 +2019,45 @@ async def bulk_add_traffic_gb(message: Message, state: FSMContext, settings: Set
     failed = 0
     for client in clients:
         try:
+            charge_tx = await _charge_actor_wallet(
+                actor_user_id=message.from_user.id,
+                settings=settings,
+                services=services,
+                operation="add_client_total_gb",
+                traffic_gb=gb,
+                details=f"panel={panel_id};inbound={int(client['inbound_id'])};client_uuid={str(client['uuid'])}",
+            )
             await services.panel_service.add_client_total_gb(panel_id, int(client["inbound_id"]), str(client["uuid"]), gb)
             success += 1
-        except Exception:
+        except Exception as exc:
+            if 'charge_tx' in locals() and charge_tx is not None:
+                await services.financial_service.refund_transaction(
+                    actor_user_id=message.from_user.id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"refund:bulk_add_client_total_gb_failed:{str(client['uuid'])}",
+                )
+            delegated_error = _delegated_profile_error_text(exc, None)
+            if delegated_error is not None:
+                failed += 1
+                continue
+            if "insufficient" in str(exc).lower():
+                failed += 1
+                continue
             failed += 1
+    await _notify_root_admins_if_delegated(
+        message,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(message)}\n"
+            "عملیات: افزایش گروهی حجم\n"
+            f"پنل: {panel_id}\n"
+            f"مقدار: {gb} گیگابایت\n"
+            f"موفق: {success}\n"
+            f"ناموفق: {failed}"
+        ),
+    )
     await answer_with_admin_menu(
         message,
         t("admin_bulk_done", None, success=success, failed=failed),
@@ -1855,10 +2093,45 @@ async def bulk_add_expiry_days(message: Message, state: FSMContext, settings: Se
     failed = 0
     for client in clients:
         try:
+            charge_tx = await _charge_actor_wallet(
+                actor_user_id=message.from_user.id,
+                settings=settings,
+                services=services,
+                operation="extend_client_expiry_days",
+                expiry_days=days,
+                details=f"panel={panel_id};inbound={int(client['inbound_id'])};client_uuid={str(client['uuid'])}",
+            )
             await services.panel_service.extend_client_expiry_days(panel_id, int(client["inbound_id"]), str(client["uuid"]), days)
             success += 1
-        except Exception:
+        except Exception as exc:
+            if 'charge_tx' in locals() and charge_tx is not None:
+                await services.financial_service.refund_transaction(
+                    actor_user_id=message.from_user.id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"refund:bulk_extend_client_expiry_failed:{str(client['uuid'])}",
+                )
+            delegated_error = _delegated_profile_error_text(exc, None)
+            if delegated_error is not None:
+                failed += 1
+                continue
+            if "insufficient" in str(exc).lower():
+                failed += 1
+                continue
             failed += 1
+    await _notify_root_admins_if_delegated(
+        message,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(message)}\n"
+            "عملیات: افزایش گروهی روز\n"
+            f"پنل: {panel_id}\n"
+            f"مقدار: {days} روز\n"
+            f"موفق: {success}\n"
+            f"ناموفق: {failed}"
+        ),
+    )
     await answer_with_admin_menu(
         message,
         t("admin_bulk_done", None, success=success, failed=failed),
@@ -1894,9 +2167,45 @@ async def client_custom_expiry_days(message: Message, state: FSMContext, setting
         return
     try:
         before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+        await services.financial_service.validate_target_limits(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            total_days=days,
+        )
+        charge_tx = await _charge_actor_wallet(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            services=services,
+            operation="set_client_expiry_days",
+            expiry_days=max(0, days - _remaining_days_from_expiry(before.get("expiry"))),
+            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
+        )
         await services.panel_service.set_client_expiry_days(panel_id, inbound_id, client_uuid, days)
         after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
+        if 'charge_tx' in locals() and charge_tx is not None:
+            await services.financial_service.refund_transaction(
+                actor_user_id=message.from_user.id,
+                transaction_id=int(charge_tx["id"]),
+                reason=f"refund:set_client_expiry_days_failed:{client_uuid}",
+            )
+        delegated_error = _delegated_profile_error_text(exc, None)
+        if delegated_error is not None:
+            await answer_with_admin_menu(
+                message,
+                delegated_error,
+                settings=settings,
+                services=services,
+            )
+            return
+        if "insufficient" in str(exc).lower():
+            await answer_with_admin_menu(
+                message,
+                t("finance_insufficient_wallet", None),
+                settings=settings,
+                services=services,
+            )
+            return
         await answer_with_admin_menu(
             message,
             f"{t('admin_update_expiry_error', None)}:\n{exc}",
@@ -1946,6 +2255,7 @@ async def client_custom_ip_limit(message: Message, state: FSMContext, settings: 
         await message.answer(t("no_admin_access", None))
         return
     try:
+        detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
         await services.panel_service.set_client_limit_ip(panel_id, inbound_id, client_uuid, limit)
     except Exception as exc:
         await answer_with_admin_menu(
@@ -1955,6 +2265,21 @@ async def client_custom_ip_limit(message: Message, state: FSMContext, settings: 
             services=services,
         )
         return
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_root_admins_if_delegated(
+        message,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(message)}\n"
+            "عملیات: تغییر محدودیت IP کاربر\n"
+            f"کاربر: {detail.get('email')}\n"
+            f"پنل: {panel_name}\n"
+            f"اینباند: {inbound_name}\n"
+            f"مقدار جدید: {limit}"
+        ),
+    )
     await message.answer(
         t("admin_done", None),
         reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),
@@ -2010,6 +2335,22 @@ async def client_set_tg_id(message: Message, state: FSMContext, settings: Settin
             await message.answer(t("admin_tgid_saved_bind_failed", None, error=exc))
             return
 
+    detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_root_admins_if_delegated(
+        message,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(message)}\n"
+            "عملیات: تغییر tgId کاربر\n"
+            f"کاربر: {detail.get('email')}\n"
+            f"پنل: {panel_name}\n"
+            f"اینباند: {inbound_name}\n"
+            f"مقدار جدید: {tg_id or '-'}"
+        ),
+    )
     await message.answer(
         t("admin_tg_done", None),
         reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),

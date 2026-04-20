@@ -22,6 +22,7 @@ from .admin_shared import (
     normalize_tg_id,
     panel_select_keyboard,
     parse_client_callback,
+    notify_delegated_admin_activity,
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
     yes_no_inline_keyboard,
@@ -30,6 +31,23 @@ from .config_bundle import send_config_bundle_card, send_existing_config_bundle_
 
 router = Router(name="admin_provisioning")
 EDIT_SEARCH_RESULTS_PER_PAGE = 20
+
+
+def _delegated_profile_error_text(exc: Exception, lang: str | None) -> str | None:
+    text = str(exc).lower()
+    mapping = [
+        ("max clients reached", "admin_delegated_limit_error_max_clients"),
+        ("traffic is below", "admin_delegated_limit_error_traffic_min"),
+        ("traffic is above", "admin_delegated_limit_error_traffic_max"),
+        ("expiry is below", "admin_delegated_limit_error_days_min"),
+        ("expiry is above", "admin_delegated_limit_error_days_max"),
+        ("inactive", "admin_delegated_inactive"),
+        ("expired", "admin_delegated_expired"),
+    ]
+    for needle, key in mapping:
+        if needle in text:
+            return t(key, lang)
+    return None
 
 
 def _inbound_access_keyboard(rows: list, prefix: str) -> InlineKeyboardMarkup:
@@ -308,16 +326,12 @@ async def _notify_root_admins_if_delegated(
     services: ServiceContainer,
     text: str,
 ) -> None:
-    actor_id = source.from_user.id
-    context = await services.access_service.get_admin_context(actor_id, settings)
-    if not context.is_delegated_admin:
-        return
-    bot = source.bot
-    for admin_id in settings.admin_ids:
-        try:
-            await bot.send_message(admin_id, text)
-        except Exception:
-            continue
+    await notify_delegated_admin_activity(
+        source,
+        settings=settings,
+        services=services,
+        text=text,
+    )
 
 
 async def _panel_inbound_names(
@@ -677,6 +691,11 @@ async def _finish_create_user(
             tg_id=str(data.get("create_tg_id") or ""),
         )
     except Exception as exc:
+        delegated_error = _delegated_profile_error_text(exc, lang)
+        if delegated_error is not None:
+            await message.answer(delegated_error)
+            await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
+            return
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         return
@@ -975,8 +994,8 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
     try:
-        enabled = await services.panel_service.toggle_client_enable(panel_id, inbound_id, client_uuid)
         detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+        enabled = await services.panel_service.toggle_client_enable(panel_id, inbound_id, client_uuid)
         client_email = str(detail.get("email") or "").strip()
         await _render_edit_detail(
             callback,
@@ -992,6 +1011,21 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
     except Exception as exc:
         await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
         return
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_root_admins_if_delegated(
+        callback,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(callback)}\n"
+            "عملیات: تغییر وضعیت کاربر\n"
+            f"کاربر: {detail.get('email')}\n"
+            f"پنل: {panel_name}\n"
+            f"اینباند: {inbound_name}\n"
+            f"وضعیت جدید: {'فعال' if enabled else 'غیرفعال'}"
+        ),
+    )
     await callback.answer(t("admin_enable_on", lang) if enabled else t("admin_enable_off", lang))
 
 
@@ -1150,6 +1184,19 @@ async def edit_config_rotate_yes(callback: CallbackQuery, settings: Settings, se
     except Exception as exc:
         await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
         return
+    await _notify_root_admins_if_delegated(
+        callback,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(callback)}\n"
+            "عملیات: چرخش کانفیگ کاربر\n"
+            f"کاربر: {client_email}\n"
+            f"پنل: {panel_id}\n"
+            f"اینباند: {inbound_id}"
+        ),
+    )
     await callback.message.answer(t("admin_edit_rotate_done", lang))
 
 
@@ -1232,6 +1279,22 @@ async def edit_config_set_tg_value(message: Message, state: FSMContext, settings
             await message.answer(t("admin_tgid_saved_bind_failed", lang, error=exc))
             await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
             return
+    detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
+    await _notify_root_admins_if_delegated(
+        message,
+        settings=settings,
+        services=services,
+        text=(
+            "اطلاع مدیر:\n"
+            f"ادمین: {_actor_display_name(message)}\n"
+            "عملیات: تغییر tgId کاربر\n"
+            f"کاربر: {detail.get('email')}\n"
+            f"پنل: {panel_name}\n"
+            f"اینباند: {inbound_name}\n"
+            f"مقدار جدید: {tg_id or '-'}"
+        ),
+    )
     await message.answer(
         t("admin_tg_done", lang),
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
@@ -1333,8 +1396,41 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
         await message.answer(t("no_admin_access", lang))
         return
     before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    await services.panel_service.add_client_total_gb(panel_id, inbound_id, client_uuid, gb)
-    after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    charge_tx = None
+    try:
+        await services.financial_service.validate_operation_limits(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            traffic_gb=gb,
+        )
+        charge_tx = await services.financial_service.charge_operation(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            operation="add_client_total_gb",
+            traffic_gb=gb,
+            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
+        )
+        await services.panel_service.add_client_total_gb(panel_id, inbound_id, client_uuid, gb)
+        after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    except ValueError as exc:
+        delegated_error = _delegated_profile_error_text(exc, lang)
+        if delegated_error is not None:
+            await message.answer(delegated_error)
+            return
+        if "insufficient" in str(exc).lower():
+            await message.answer(t("finance_insufficient_wallet", lang))
+            return
+        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        return
+    except Exception as exc:
+        if charge_tx is not None:
+            await services.financial_service.refund_transaction(
+                actor_user_id=message.from_user.id,
+                transaction_id=int(charge_tx["id"]),
+                reason=f"refund:add_client_total_gb_failed:{client_uuid}",
+            )
+        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        return
     await message.answer(
         t("admin_edit_traffic_added", lang),
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
@@ -1433,8 +1529,41 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
         await message.answer(t("no_admin_access", lang))
         return
     before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    await services.panel_service.extend_client_expiry_days(panel_id, inbound_id, client_uuid, days)
-    after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    charge_tx = None
+    try:
+        await services.financial_service.validate_operation_limits(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            expiry_days=days,
+        )
+        charge_tx = await services.financial_service.charge_operation(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            operation="extend_client_expiry_days",
+            expiry_days=days,
+            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
+        )
+        await services.panel_service.extend_client_expiry_days(panel_id, inbound_id, client_uuid, days)
+        after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    except ValueError as exc:
+        delegated_error = _delegated_profile_error_text(exc, lang)
+        if delegated_error is not None:
+            await message.answer(delegated_error)
+            return
+        if "insufficient" in str(exc).lower():
+            await message.answer(t("finance_insufficient_wallet", lang))
+            return
+        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        return
+    except Exception as exc:
+        if charge_tx is not None:
+            await services.financial_service.refund_transaction(
+                actor_user_id=message.from_user.id,
+                transaction_id=int(charge_tx["id"]),
+                reason=f"refund:extend_client_expiry_days_failed:{client_uuid}",
+            )
+        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        return
     await message.answer(
         t("admin_edit_days_added", lang),
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),

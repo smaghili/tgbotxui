@@ -26,10 +26,10 @@ class Database:
             await self.conn.close()
             self.conn = None
 
-    async def init_schema(self) -> None:
+    async def init_schema(self) -> int:
         assert self.conn is not None
         runner = MigrationRunner(self.conn, str(Path(__file__).resolve().parent / "migrations"))
-        await runner.migrate()
+        return await runner.migrate()
 
     async def upsert_user(
         self, telegram_user_id: int, full_name: str, username: str | None, is_admin: bool
@@ -176,6 +176,173 @@ class Database:
         row = await cur.fetchone()
         return dict(row) if row else None
 
+    async def ensure_delegated_admin_profile(self, telegram_user_id: int) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegated_admin_profiles (
+                telegram_user_id, updated_at
+            ) VALUES (?, CURRENT_TIMESTAMP)
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                updated_at=delegated_admin_profiles.updated_at;
+            """,
+            (telegram_user_id,),
+        )
+        await self.conn.commit()
+
+    async def get_delegated_admin_profile(self, telegram_user_id: int) -> Dict[str, Any]:
+        assert self.conn is not None
+        await self.ensure_delegated_admin_profile(telegram_user_id)
+        cur = await self.conn.execute(
+            """
+            SELECT
+                telegram_user_id,
+                username_prefix,
+                max_clients,
+                min_traffic_gb,
+                max_traffic_gb,
+                min_expiry_days,
+                max_expiry_days,
+                charge_basis,
+                is_active,
+                expires_at,
+                created_at,
+                updated_at
+            FROM delegated_admin_profiles
+            WHERE telegram_user_id=?
+            LIMIT 1;
+            """,
+            (telegram_user_id,),
+        )
+        row = await cur.fetchone()
+        if row:
+            return dict(row)
+        return {
+            "telegram_user_id": telegram_user_id,
+            "username_prefix": None,
+            "max_clients": 0,
+            "min_traffic_gb": 1,
+            "max_traffic_gb": 0,
+            "min_expiry_days": 1,
+            "max_expiry_days": 0,
+            "charge_basis": "allocated",
+            "is_active": 1,
+            "expires_at": None,
+        }
+
+    async def update_delegated_admin_profile(
+        self,
+        *,
+        telegram_user_id: int,
+        username_prefix: str | None = None,
+        max_clients: int | None = None,
+        min_traffic_gb: int | None = None,
+        max_traffic_gb: int | None = None,
+        min_expiry_days: int | None = None,
+        max_expiry_days: int | None = None,
+        charge_basis: str | None = None,
+        is_active: int | None = None,
+        expires_at: int | None = None,
+    ) -> Dict[str, Any]:
+        assert self.conn is not None
+        await self.ensure_delegated_admin_profile(telegram_user_id)
+        current = await self.get_delegated_admin_profile(telegram_user_id)
+        payload = {
+            "username_prefix": current.get("username_prefix") if username_prefix is None else username_prefix,
+            "max_clients": int(current.get("max_clients") or 0) if max_clients is None else max_clients,
+            "min_traffic_gb": int(current.get("min_traffic_gb") or 1) if min_traffic_gb is None else min_traffic_gb,
+            "max_traffic_gb": int(current.get("max_traffic_gb") or 0) if max_traffic_gb is None else max_traffic_gb,
+            "min_expiry_days": int(current.get("min_expiry_days") or 1) if min_expiry_days is None else min_expiry_days,
+            "max_expiry_days": int(current.get("max_expiry_days") or 0) if max_expiry_days is None else max_expiry_days,
+            "charge_basis": str(current.get("charge_basis") or "allocated") if charge_basis is None else charge_basis,
+            "is_active": int(current.get("is_active") or 1) if is_active is None else is_active,
+            "expires_at": current.get("expires_at") if expires_at is None else expires_at,
+        }
+        if payload["charge_basis"] not in {"allocated", "consumed"}:
+            raise ValueError("invalid delegated charge basis.")
+        if payload["max_clients"] < 0:
+            raise ValueError("delegated max clients cannot be negative.")
+        if payload["min_traffic_gb"] < 0 or payload["max_traffic_gb"] < 0:
+            raise ValueError("delegated traffic limits cannot be negative.")
+        if payload["min_expiry_days"] < 0 or payload["max_expiry_days"] < 0:
+            raise ValueError("delegated expiry limits cannot be negative.")
+        if payload["max_traffic_gb"] > 0 and payload["min_traffic_gb"] > payload["max_traffic_gb"]:
+            raise ValueError("delegated min traffic cannot exceed max traffic.")
+        if payload["max_expiry_days"] > 0 and payload["min_expiry_days"] > payload["max_expiry_days"]:
+            raise ValueError("delegated min expiry cannot exceed max expiry.")
+        await self.conn.execute(
+            """
+            UPDATE delegated_admin_profiles
+            SET
+                username_prefix=?,
+                max_clients=?,
+                min_traffic_gb=?,
+                max_traffic_gb=?,
+                min_expiry_days=?,
+                max_expiry_days=?,
+                charge_basis=?,
+                is_active=?,
+                expires_at=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE telegram_user_id=?;
+            """,
+            (
+                payload["username_prefix"],
+                payload["max_clients"],
+                payload["min_traffic_gb"],
+                payload["max_traffic_gb"],
+                payload["min_expiry_days"],
+                payload["max_expiry_days"],
+                payload["charge_basis"],
+                payload["is_active"],
+                payload["expires_at"],
+                telegram_user_id,
+            ),
+        )
+        await self.conn.commit()
+        return await self.get_delegated_admin_profile(telegram_user_id)
+
+    async def list_recent_wallet_transactions(
+        self,
+        *,
+        telegram_user_id: int,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, telegram_user_id, actor_user_id, amount, balance_after, currency,
+                   kind, operation, status, reference_transaction_id, details, metadata_json, created_at
+            FROM wallet_transactions
+            WHERE telegram_user_id=?
+            ORDER BY id DESC
+            LIMIT ?;
+            """,
+            (telegram_user_id, max(1, int(limit))),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def list_recent_actor_audit_logs(
+        self,
+        *,
+        actor_user_id: int,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, actor_user_id, action, target_type, target_id, success, details, created_at
+            FROM audit_logs
+            WHERE actor_user_id=?
+            ORDER BY id DESC
+            LIMIT ?;
+            """,
+            (actor_user_id, max(1, int(limit))),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
     async def add_delegated_admin_inbound_access(
         self,
         *,
@@ -211,6 +378,27 @@ class Database:
         cur = await self.conn.execute(
             "DELETE FROM delegated_admin_inbounds WHERE id=?;",
             (access_id,),
+        )
+        await self.conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def deactivate_delegated_admin(self, telegram_user_id: int) -> bool:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            UPDATE delegated_admins
+            SET is_active=0, updated_at=CURRENT_TIMESTAMP
+            WHERE telegram_user_id=?;
+            """,
+            (telegram_user_id,),
+        )
+        await self.conn.execute(
+            """
+            UPDATE delegated_admin_profiles
+            SET is_active=0, updated_at=CURRENT_TIMESTAMP
+            WHERE telegram_user_id=?;
+            """,
+            (telegram_user_id,),
         )
         await self.conn.commit()
         return (cur.rowcount or 0) > 0
@@ -589,7 +777,7 @@ class Database:
             SELECT id, telegram_user_id, panel_id, inbound_id, client_email, client_id, service_name,
                    total_bytes, used_bytes, expire_at, status, last_synced_at
             FROM user_services
-            WHERE telegram_user_id=?
+            WHERE telegram_user_id=? AND COALESCE(status, 'active') <> 'deleted'
             ORDER BY id ASC;
             """,
             (telegram_user_id,),
@@ -604,7 +792,7 @@ class Database:
             SELECT id, telegram_user_id, panel_id, inbound_id, client_email, client_id, service_name,
                    total_bytes, used_bytes, expire_at, status, last_synced_at
             FROM user_services
-            WHERE panel_id=? AND LOWER(client_email)=LOWER(?)
+            WHERE panel_id=? AND LOWER(client_email)=LOWER(?) AND COALESCE(status, 'active') <> 'deleted'
             ORDER BY id ASC;
             """,
             (panel_id, client_email),
@@ -634,6 +822,7 @@ class Database:
             SELECT id, telegram_user_id, panel_id, inbound_id, client_email, client_id, service_name,
                    total_bytes, used_bytes, expire_at, status, last_synced_at
             FROM user_services
+            WHERE COALESCE(status, 'active') <> 'deleted'
             ORDER BY id ASC;
             """
         )
@@ -672,6 +861,43 @@ class Database:
                 last_synced_at,
                 service_id,
             ),
+        )
+        await self.conn.commit()
+
+    async def mark_user_service_deleted(
+        self,
+        *,
+        service_id: int,
+        status: str = "deleted",
+        last_synced_at: int | None = None,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            UPDATE user_services
+            SET status=?, last_synced_at=COALESCE(?, last_synced_at), updated_at=CURRENT_TIMESTAMP
+            WHERE id=?;
+            """,
+            (status, last_synced_at, service_id),
+        )
+        await self.conn.commit()
+
+    async def mark_user_services_deleted_by_panel_email(
+        self,
+        *,
+        panel_id: int,
+        client_email: str,
+        status: str = "deleted",
+        last_synced_at: int | None = None,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            UPDATE user_services
+            SET status=?, last_synced_at=COALESCE(?, last_synced_at), updated_at=CURRENT_TIMESTAMP
+            WHERE panel_id=? AND LOWER(client_email)=LOWER(?);
+            """,
+            (status, last_synced_at, panel_id, client_email),
         )
         await self.conn.commit()
 
@@ -724,6 +950,8 @@ class Database:
 
     async def count_user_services(self) -> int:
         assert self.conn is not None
-        cur = await self.conn.execute("SELECT COUNT(*) AS cnt FROM user_services;")
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) AS cnt FROM user_services WHERE COALESCE(status, 'active') <> 'deleted';"
+        )
         row = await cur.fetchone()
         return int(row["cnt"])

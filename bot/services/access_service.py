@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 
 from bot.config import Settings
 from bot.db import Database
@@ -30,7 +31,15 @@ class AccessService:
 
     async def is_delegated_admin(self, user_id: int) -> bool:
         row = await self.db.get_delegated_admin_by_user_id(user_id)
-        return row is not None
+        if row is None:
+            return False
+        profile = await self.db.get_delegated_admin_profile(user_id)
+        if int(profile.get("is_active") or 0) != 1:
+            return False
+        expires_at = int(profile.get("expires_at") or 0)
+        if expires_at > 0 and expires_at <= int(time.time()):
+            return False
+        return True
 
     async def get_admin_context(self, user_id: int, settings: Settings) -> AdminContext:
         is_root = self.is_root_admin(user_id, settings)

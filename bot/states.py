@@ -40,6 +40,7 @@ class DelegatedAdminStates(StatesGroup):
     waiting_target = State()
     waiting_title = State()
     waiting_inbound_selection = State()
+    waiting_profile_value = State()
 
 
 class ProvisioningStates(StatesGroup):
@@ -53,3 +54,11 @@ class ProvisioningStates(StatesGroup):
     waiting_edit_search_panel = State()
     waiting_edit_add_traffic_gb = State()
     waiting_edit_add_expiry_days = State()
+
+
+class FinanceStates(StatesGroup):
+    waiting_wallet_target = State()
+    waiting_wallet_amount = State()
+    waiting_pricing_target = State()
+    waiting_pricing_gb = State()
+    waiting_pricing_day = State()

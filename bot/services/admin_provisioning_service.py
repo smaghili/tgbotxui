@@ -8,6 +8,7 @@ import uuid as uuid_lib
 from bot.config import Settings
 from bot.db import Database
 from bot.services.access_service import AccessService
+from bot.services.financial_service import FinancialService
 from bot.services.panel_service import PanelService
 
 
@@ -39,10 +40,28 @@ class AdminProvisioningService:
         db: Database,
         panel_service: PanelService,
         access_service: AccessService,
+        financial_service: FinancialService | None = None,
     ) -> None:
         self.db = db
         self.panel_service = panel_service
         self.access_service = access_service
+        self.financial_service = financial_service
+
+    async def _apply_delegated_username_prefix(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        client_email: str,
+    ) -> str:
+        email = client_email.strip()
+        if self.access_service.is_root_admin(actor_user_id, settings):
+            return email
+        profile = await self.db.get_delegated_admin_profile(actor_user_id)
+        prefix = str(profile.get("username_prefix") or "").strip()
+        if not prefix:
+            return email
+        return email if email.startswith(prefix) else f"{prefix}{email}"
 
     async def resolve_admin_target(self, value: str) -> tuple[int, str | None]:
         raw = value.strip()
@@ -81,6 +100,7 @@ class AdminProvisioningService:
             panel_id=panel_id,
             inbound_id=inbound_id,
         )
+        await self.db.ensure_delegated_admin_profile(telegram_user_id)
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
             action="grant_delegated_admin_access",
@@ -253,6 +273,58 @@ class AdminProvisioningService:
             row["inbound_name"] = inbound_maps[panel_id].get(int(row["inbound_id"]), f"inbound-{row['inbound_id']}")
         return rows
 
+    async def count_owned_clients_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+    ) -> int:
+        if self.access_service.is_root_admin(actor_user_id, settings):
+            return 0
+        count = 0
+        for panel in await self.panel_service.list_panels():
+            panel_id = int(panel["id"])
+            try:
+                clients = await self.panel_service.list_clients(
+                    panel_id,
+                    owner_admin_user_id=actor_user_id,
+                )
+            except Exception:
+                continue
+            count += len(clients)
+        return count
+
+    async def get_delegated_admin_overview(
+        self,
+        *,
+        telegram_user_id: int,
+        settings: Settings,
+    ) -> dict[str, Any]:
+        delegated = await self.db.get_delegated_admin_by_user_id(telegram_user_id)
+        profile = await self.db.get_delegated_admin_profile(telegram_user_id)
+        wallet = await self.financial_service.get_wallet(telegram_user_id) if self.financial_service is not None else {
+            "balance": 0,
+            "currency": "تومان",
+        }
+        pricing = await self.financial_service.get_pricing(telegram_user_id) if self.financial_service is not None else {
+            "price_per_gb": 0,
+            "price_per_day": 0,
+            "currency": "تومان",
+            "charge_basis": "allocated",
+        }
+        user = await self.db.get_user_by_telegram_id(telegram_user_id)
+        access_rows = await self.db.list_admin_access_rows_for_user(telegram_user_id)
+        owned_count = await self.count_owned_clients_for_actor(actor_user_id=telegram_user_id, settings=settings)
+        return {
+            "delegated": delegated,
+            "profile": profile,
+            "wallet": wallet,
+            "pricing": pricing,
+            "user": user,
+            "access_rows": access_rows,
+            "owned_clients_count": owned_count,
+        }
+
     async def create_client_for_actor(
         self,
         *,
@@ -265,6 +337,11 @@ class AdminProvisioningService:
         expiry_days: int,
         tg_id: str = "",
     ) -> dict[str, Any]:
+        client_email = await self._apply_delegated_username_prefix(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            client_email=client_email,
+        )
         allowed = await self.access_service.can_access_inbound(
             user_id=actor_user_id,
             settings=settings,
@@ -273,16 +350,42 @@ class AdminProvisioningService:
         )
         if not allowed:
             raise ValueError("you do not have access to this inbound.")
+        if not self.access_service.is_root_admin(actor_user_id, settings):
+            profile = await self.db.get_delegated_admin_profile(actor_user_id)
+            max_clients = int(profile.get("max_clients") or 0)
+            if max_clients > 0:
+                current_count = await self.count_owned_clients_for_actor(actor_user_id=actor_user_id, settings=settings)
+                if current_count >= max_clients:
+                    raise ValueError("delegated admin max clients reached.")
 
-        created = await self.panel_service.create_client(
-            panel_id=panel_id,
-            inbound_id=inbound_id,
-            client_email=client_email,
-            total_gb=total_gb,
-            expiry_days=expiry_days,
-            tg_id=tg_id,
-            comment="" if self.access_service.is_root_admin(actor_user_id, settings) else str(actor_user_id),
-        )
+        charge_tx = None
+        if self.financial_service is not None:
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation="create_client",
+                traffic_gb=total_gb,
+                expiry_days=expiry_days,
+                details=f"panel={panel_id};inbound={inbound_id};email={client_email}",
+            )
+        try:
+            created = await self.panel_service.create_client(
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_email=client_email,
+                total_gb=total_gb,
+                expiry_days=expiry_days,
+                tg_id=tg_id,
+                comment="" if self.access_service.is_root_admin(actor_user_id, settings) else str(actor_user_id),
+            )
+        except Exception:
+            if charge_tx is not None and self.financial_service is not None:
+                await self.financial_service.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"refund:create_client_failed:{client_email}",
+                )
+            raise
         if tg_id:
             try:
                 resolved_user_id: int | None = None
@@ -340,6 +443,7 @@ class AdminProvisioningService:
             **created,
             "vless_uri": vless_uri,
             "sub_url": sub_url,
+            "wallet_charge_amount": int(charge_tx["amount"]) if charge_tx is not None else 0,
         }
 
     @staticmethod
@@ -424,7 +528,25 @@ class AdminProvisioningService:
             settings=settings,
             vless_uri=vless_uri,
         )
-        await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
+        charge_tx = None
+        if self.financial_service is not None:
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation="add_client_traffic",
+                traffic_gb=add_gb,
+                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
+            )
+        try:
+            await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
+        except Exception:
+            if charge_tx is not None and self.financial_service is not None:
+                await self.financial_service.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"refund:add_client_traffic_failed:{ref.client_uuid}",
+                )
+            raise
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
             action="add_client_traffic",
@@ -448,7 +570,25 @@ class AdminProvisioningService:
             settings=settings,
             vless_uri=vless_uri,
         )
-        await self.panel_service.extend_client_expiry_days(ref.panel_id, ref.inbound_id, ref.client_uuid, add_days)
+        charge_tx = None
+        if self.financial_service is not None:
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation="extend_client_expiry",
+                expiry_days=add_days,
+                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
+            )
+        try:
+            await self.panel_service.extend_client_expiry_days(ref.panel_id, ref.inbound_id, ref.client_uuid, add_days)
+        except Exception:
+            if charge_tx is not None and self.financial_service is not None:
+                await self.financial_service.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"refund:extend_client_expiry_failed:{ref.client_uuid}",
+                )
+            raise
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
             action="extend_client_expiry",

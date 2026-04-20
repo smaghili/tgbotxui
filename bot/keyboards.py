@@ -9,9 +9,12 @@ def main_keyboard(is_admin: bool, lang: str | None = None) -> ReplyKeyboardMarku
     if is_admin:
         rows.append(
             [
+                KeyboardButton(text=btn("btn_manage_finance", lang)),
                 KeyboardButton(text=btn("btn_manage", lang)),
-                KeyboardButton(text=btn("btn_change_language", lang)),
             ]
+        )
+        rows.append(
+            [KeyboardButton(text=btn("btn_change_language", lang))]
         )
     else:
         rows.append([KeyboardButton(text=btn("btn_change_language", lang))])

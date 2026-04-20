@@ -398,6 +398,21 @@ class PanelService:
 
                 try:
                     await self.delete_client(panel_id, inbound_id, client_uuid)
+                    if email:
+                        await self.db.mark_user_services_deleted_by_panel_email(
+                            panel_id=panel_id,
+                            client_email=email,
+                            status="deleted",
+                            last_synced_at=now,
+                        )
+                        await self.db.add_audit_log(
+                            actor_user_id=None,
+                            action="auto_cleanup_deleted_client",
+                            target_type="client",
+                            target_id=client_uuid,
+                            success=True,
+                            details=f"panel={panel_id};inbound={inbound_id};email={email}",
+                        )
                 except Exception:
                     failed += 1
                     continue
@@ -718,6 +733,12 @@ class PanelService:
         }
 
     async def delete_client(self, panel_id: int, inbound_id: int, client_uuid: str) -> None:
+        client_email = ""
+        try:
+            detail = await self.get_client_detail(panel_id, inbound_id, client_uuid)
+            client_email = str(detail.get("email") or "").strip()
+        except Exception:
+            client_email = ""
         try:
             await self._with_auth_request(
                 panel_id,
@@ -731,6 +752,13 @@ class PanelService:
         except XUIError as exc:
             await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
             raise
+        if client_email:
+            await self.db.mark_user_services_deleted_by_panel_email(
+                panel_id=panel_id,
+                client_email=client_email,
+                status="deleted",
+                last_synced_at=int(time.time()),
+            )
 
     async def get_client_traffic_by_uuid(self, panel_id: int, client_uuid: str) -> Dict[str, Any]:
         try:
