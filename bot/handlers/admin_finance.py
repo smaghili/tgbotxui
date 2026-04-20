@@ -97,13 +97,7 @@ async def _is_primary_delegated_admin(
     services: ServiceContainer,
 ) -> bool:
     context = await services.access_service.get_admin_context(user_id, settings)
-    if not context.is_delegated_admin or context.delegated_scope != "full":
-        return False
-    delegated = await services.db.get_delegated_admin_by_user_id(user_id)
-    if delegated is None:
-        return False
-    parent_user_id = int(delegated.get("parent_user_id") or 0)
-    return parent_user_id in set(settings.admin_ids)
+    return context.is_delegated_admin and context.delegated_scope == "full"
 
 
 def _display_title(user: dict | None, fallback_user_id: int) -> str:
