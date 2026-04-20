@@ -300,6 +300,10 @@ async def _render_delegated_detail(
     pricing = overview["pricing"]
     wallet = overview["wallet"]
     sales_report = await services.financial_service.get_sales_report(target_user_id)
+    financial_summary = await services.admin_provisioning_service.get_admin_scope_financial_summary(
+        actor_user_id=target_user_id,
+        settings=settings,
+    )
     title = (
         str(user.get("username") or "").strip()
         or str(user.get("full_name") or "").strip()
@@ -315,6 +319,17 @@ async def _render_delegated_detail(
     charge_basis = str(pricing.get("charge_basis") or "allocated")
     charge_basis_key = "admin_delegated_charge_allocated" if charge_basis == "allocated" else "admin_delegated_charge_consumed"
     allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
+    if charge_basis == "consumed":
+        total_sales_value = int(financial_summary.get("debt_amount") or 0)
+        extra_lines = t(
+            "admin_delegated_consumed_lines",
+            lang,
+            consumed_gb=int(financial_summary.get("consumed_gb") or 0),
+            currency=str(wallet.get("currency") or "تومان"),
+        )
+    else:
+        total_sales_value = int(sales_report.get("total_sales") or 0)
+        extra_lines = ""
     text = t(
         "admin_delegated_details_text",
         lang,
@@ -330,7 +345,8 @@ async def _render_delegated_detail(
         currency=str(wallet.get("currency") or "تومان"),
         charge_basis=t(charge_basis_key, lang),
         balance=_format_amount(int(wallet.get("balance") or 0)),
-        total_sales=_format_amount(int(sales_report.get("total_sales") or 0)),
+        total_sales=_format_amount(total_sales_value),
+        extra_lines=extra_lines,
         expires_at=expires_text,
         status=status_text,
         owned_clients=int(overview["owned_clients_count"] or 0),
