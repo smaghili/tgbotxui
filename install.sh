@@ -20,6 +20,7 @@ TEMP_PROJECT_DIR=""
 BACKUP_STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${APP_DIR}/backups/${BACKUP_STAMP}"
 INSTALL_MODE="auto"
+TOTAL_STEPS=9
 UPDATED_ENV_KEYS=()
 ADDED_ENV_KEYS=()
 
@@ -357,7 +358,8 @@ build_virtualenv() {
 }
 
 apply_database_migrations() {
-  log_step "7/9" "Applying database migrations safely..."
+  echo
+  echo "Applying database migrations safely..."
   local venv_python="${APP_DIR}/.venv/bin/python"
   if [[ ! -x "${venv_python}" ]]; then
     echo "Virtualenv python not found: ${venv_python}"
@@ -512,32 +514,32 @@ prompt_install_mode
 
 ensure_project_root
 
-log_step "1/9" "Installing dependencies..."
+log_step "1/${TOTAL_STEPS}" "Installing dependencies..."
 apt-get update
 apt-get install -y "${PYTHON_BIN}" python3-venv python3-pip python3-socks rsync
 
-log_step "2/9" "Preparing runtime user..."
+log_step "2/${TOTAL_STEPS}" "Preparing runtime user..."
 ensure_runtime_user
 
-log_step "3/9" "Backing up existing state (update mode only)..."
+log_step "3/${TOTAL_STEPS}" "Backing up existing state (update mode only)..."
 backup_existing_state
 
-log_step "4/9" "Syncing project to ${APP_DIR}..."
+log_step "4/${TOTAL_STEPS}" "Syncing project to ${APP_DIR}..."
 sync_project_files
 
-log_step "5/9" "Building virtualenv..."
+log_step "5/${TOTAL_STEPS}" "Building virtualenv..."
 build_virtualenv
 
-log_step "6/9" "Preparing environment..."
+log_step "6/${TOTAL_STEPS}" "Preparing environment..."
 prepare_environment_file
 
-log_step "7/9" "Installing systemd service..."
+log_step "7/${TOTAL_STEPS}" "Installing systemd service..."
 install_service_file
 
 apply_database_migrations
 
-log_step "8/9" "Enabling and starting service..."
+log_step "8/${TOTAL_STEPS}" "Enabling and starting service..."
 start_service
 
-log_step "9/9" "Printing report..."
+log_step "9/${TOTAL_STEPS}" "Printing report..."
 print_report

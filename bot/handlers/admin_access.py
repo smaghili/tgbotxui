@@ -120,33 +120,40 @@ def _delegated_detail_keyboard(
         if admin_scope == "full"
         else t("admin_delegated_scope_limited", lang)
     )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t("admin_delegated_update", lang), callback_data=f"dag:detail:{user_id}")],
-            [
-                InlineKeyboardButton(text=t("admin_delegated_delete", lang), callback_data=f"dag:remove_user:{user_id}"),
-                InlineKeyboardButton(text=t("admin_delegated_max_users", lang), callback_data=f"dag:field:max_clients:{user_id}"),
-            ],
-            [
-                InlineKeyboardButton(text=t("admin_delegated_expiry", lang), callback_data=f"dag:field:expires_at:{user_id}"),
-                InlineKeyboardButton(text=t("admin_delegated_prefix", lang), callback_data=f"dag:field:username_prefix:{user_id}"),
-            ],
-            [
-                InlineKeyboardButton(text=t("admin_delegated_price_day", lang), callback_data=f"dag:field:price_day:{user_id}"),
-                InlineKeyboardButton(text=t("admin_delegated_price_gb", lang), callback_data=f"dag:field:price_gb:{user_id}"),
-            ],
-            [
-                InlineKeyboardButton(text=t("admin_delegated_min_traffic", lang), callback_data=f"dag:field:min_traffic_gb:{user_id}"),
-                InlineKeyboardButton(text=t("admin_delegated_max_traffic", lang), callback_data=f"dag:field:max_traffic_gb:{user_id}"),
-            ],
-            [
-                InlineKeyboardButton(text=t("admin_delegated_min_days", lang), callback_data=f"dag:field:min_expiry_days:{user_id}"),
-                InlineKeyboardButton(text=t("admin_delegated_max_days", lang), callback_data=f"dag:field:max_expiry_days:{user_id}"),
-            ],
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=t("admin_delegated_update", lang), callback_data=f"dag:detail:{user_id}")],
+        [
+            InlineKeyboardButton(text=t("admin_delegated_delete", lang), callback_data=f"dag:remove_user:{user_id}"),
+            InlineKeyboardButton(text=t("admin_delegated_max_users", lang), callback_data=f"dag:field:max_clients:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=t("admin_delegated_expiry", lang), callback_data=f"dag:field:expires_at:{user_id}"),
+            InlineKeyboardButton(text=t("admin_delegated_prefix", lang), callback_data=f"dag:field:username_prefix:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=t("admin_delegated_price_day", lang), callback_data=f"dag:field:price_day:{user_id}"),
+            InlineKeyboardButton(text=t("admin_delegated_price_gb", lang), callback_data=f"dag:field:price_gb:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=t("admin_delegated_min_traffic", lang), callback_data=f"dag:field:min_traffic_gb:{user_id}"),
+            InlineKeyboardButton(text=t("admin_delegated_max_traffic", lang), callback_data=f"dag:field:max_traffic_gb:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=t("admin_delegated_min_days", lang), callback_data=f"dag:field:min_expiry_days:{user_id}"),
+            InlineKeyboardButton(text=t("admin_delegated_max_days", lang), callback_data=f"dag:field:max_expiry_days:{user_id}"),
+        ],
+    ]
+    if admin_scope == "limited":
+        rows.append(
             [
                 InlineKeyboardButton(text=status_label, callback_data=f"dag:toggle_status:{user_id}"),
                 InlineKeyboardButton(text=f"{t('admin_delegated_scope', lang)}: {scope_label}", callback_data=f"dag:toggle_scope:{user_id}"),
-            ],
+            ]
+        )
+    else:
+        rows.append([InlineKeyboardButton(text=status_label, callback_data=f"dag:toggle_status:{user_id}")])
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(text=t("admin_delegated_access", lang), callback_data=f"dag:edit:{user_id}"),
             ],
@@ -160,6 +167,7 @@ def _delegated_detail_keyboard(
             [InlineKeyboardButton(text=t("admin_delegated_report", lang), callback_data=f"dag:report:{user_id}")],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _format_amount(value: int) -> str:
@@ -468,8 +476,30 @@ async def delegated_admin_cancel_inbound_selection(
 ) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
+    if callback.message is None:
+        await state.clear()
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    data = await state.get_data()
     await state.clear()
-    await callback.answer()
+    mode = str(data.get("delegated_mode") or "create")
+    target_user_id = int(data.get("delegated_target_user_id") or 0)
+    if mode == "edit" and target_user_id > 0:
+        await _render_delegated_detail(
+            callback,
+            services=services,
+            settings=settings,
+            target_user_id=target_user_id,
+            lang=lang,
+        )
+    else:
+        rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
+            manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+        )
+        text = t("admin_delegated_empty", lang) if not rows else t("admin_delegated_list_header", lang)
+        await callback.message.edit_text(text, reply_markup=_delegated_access_list_keyboard(rows, lang))
+    await callback.answer(t("operation_cancelled", lang))
 
 
 @router.callback_query(DelegatedAdminStates.waiting_inbound_selection, F.data == "dag:confirm")
@@ -494,23 +524,27 @@ async def delegated_admin_confirm_inbound_selection(callback: CallbackQuery, sta
         tuple(map(int, key.split(":", 1))): int(value)
         for key, value in existing_access_ids_raw.items()
     }
-    if mode == "edit":
-        for key, access_id in existing_access_ids.items():
-            if key not in selected_set:
-                await services.admin_provisioning_service.revoke_delegated_admin_access(
+    try:
+        if mode == "edit":
+            for key, access_id in existing_access_ids.items():
+                if key not in selected_set:
+                    await services.admin_provisioning_service.revoke_delegated_admin_access(
+                        actor_user_id=callback.from_user.id,
+                        access_id=access_id,
+                    )
+        for panel_id, inbound_id in selected_set:
+            if mode != "edit" or (panel_id, inbound_id) not in existing_access_ids:
+                await services.admin_provisioning_service.grant_delegated_admin_access(
                     actor_user_id=callback.from_user.id,
-                    access_id=access_id,
+                    settings=settings,
+                    telegram_user_id=target_user_id,
+                    title=str(title) if title else None,
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
                 )
-    for panel_id, inbound_id in selected_set:
-        if mode != "edit" or (panel_id, inbound_id) not in existing_access_ids:
-            await services.admin_provisioning_service.grant_delegated_admin_access(
-                actor_user_id=callback.from_user.id,
-                settings=settings,
-                telegram_user_id=target_user_id,
-                title=str(title) if title else None,
-                panel_id=panel_id,
-                inbound_id=inbound_id,
-            )
+    except Exception as exc:
+        await callback.answer(str(exc)[:180], show_alert=True)
+        return
     await state.clear()
     await _render_delegated_detail(
         callback,
@@ -519,7 +553,7 @@ async def delegated_admin_confirm_inbound_selection(callback: CallbackQuery, sta
         target_user_id=target_user_id,
         lang=lang,
     )
-    await callback.answer()
+    await callback.answer(t("admin_delegated_profile_saved", lang))
 
 
 @router.callback_query(F.data.startswith("dag:edit:"))
