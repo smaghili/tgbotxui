@@ -85,6 +85,11 @@ def _format_amount(value: int) -> str:
     return f"{value:,}"
 
 
+def _format_gb_exact(value: float | int) -> str:
+    formatted = f"{float(value):.2f}".rstrip("0").rstrip(".")
+    return formatted or "0"
+
+
 async def _is_primary_delegated_admin(
     *,
     user_id: int,
@@ -164,7 +169,7 @@ async def _answer_sales_report(
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,
-            consumed_gb=int(summary["consumed_gb"] or 0),
+            consumed_gb=_format_gb_exact(summary["consumed_gb"] or 0),
             debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
             currency=str(wallet["currency"] or "تومان"),
         )

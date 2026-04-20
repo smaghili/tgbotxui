@@ -414,6 +414,10 @@ class FinancialService:
             traffic_gb=traffic_gb,
             expiry_days=expiry_days,
         )
+        # For consumed-basis delegates, billing is computed from real usage reports,
+        # so operation-time wallet deductions must be skipped.
+        if str(charge.get("charge_basis") or "allocated") == "consumed":
+            return None
         amount = int(charge["amount"] or 0)
         if amount <= 0:
             return None

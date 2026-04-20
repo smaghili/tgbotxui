@@ -187,6 +187,11 @@ def _format_amount(value: int) -> str:
     return f"{value:,}"
 
 
+def _format_gb_exact(value: float | int) -> str:
+    formatted = f"{float(value):.2f}".rstrip("0").rstrip(".")
+    return formatted or "0"
+
+
 def _value_or_unlimited(value: int, lang: str | None) -> str:
     return t("admin_delegated_unlimited", lang) if value <= 0 else str(value)
 
@@ -324,12 +329,19 @@ async def _render_delegated_detail(
         extra_lines = t(
             "admin_delegated_consumed_lines",
             lang,
-            consumed_gb=int(financial_summary.get("consumed_gb") or 0),
+            consumed_gb=_format_gb_exact(financial_summary.get("consumed_gb") or 0),
             currency=str(wallet.get("currency") or "تومان"),
         )
+        balance_line = ""
     else:
         total_sales_value = int(sales_report.get("total_sales") or 0)
         extra_lines = ""
+        balance_line = t(
+            "admin_delegated_balance_line",
+            lang,
+            balance=_format_amount(int(wallet.get("balance") or 0)),
+            currency=str(wallet.get("currency") or "تومان"),
+        )
     text = t(
         "admin_delegated_details_text",
         lang,
@@ -344,7 +356,7 @@ async def _render_delegated_detail(
         price_gb=_format_amount(int(pricing.get("price_per_gb") or 0)),
         currency=str(wallet.get("currency") or "تومان"),
         charge_basis=t(charge_basis_key, lang),
-        balance=_format_amount(int(wallet.get("balance") or 0)),
+        balance_line=balance_line,
         total_sales=_format_amount(total_sales_value),
         extra_lines=extra_lines,
         expires_at=expires_text,
@@ -1027,9 +1039,9 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,
-            consumed_gb=int(summary["consumed_gb"] or 0),
+            consumed_gb=_format_gb_exact(summary["consumed_gb"] or 0),
             debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
-            currency=str(summary["wallet"]["currency"] or "ØªÙˆÙ…Ø§Ù†"),
+            currency=str(summary["wallet"]["currency"] or "تومان"),
         )
     await callback.message.edit_text(
         t(

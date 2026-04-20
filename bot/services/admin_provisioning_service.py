@@ -442,12 +442,11 @@ class AdminProvisioningService:
         allocated_gb = allocated_bytes // (1024 ** 3)
         if allocated_bytes % (1024 ** 3):
             allocated_gb += 1
+        gb_unit = 1024 ** 3
         charge_basis = str(pricing.get("charge_basis") or "allocated")
         if charge_basis == "consumed":
             consumed_bytes = max(0, panel_total_consumed_bytes - root_created_consumed_bytes)
-        consumed_gb = consumed_bytes // (1024 ** 3)
-        if consumed_bytes % (1024 ** 3):
-            consumed_gb += 1
+        consumed_gb = float(consumed_bytes) / float(gb_unit) if consumed_bytes > 0 else 0.0
         scope_totals = (
             await self.financial_service.get_scope_sales_totals(owner_ids)
             if self.financial_service is not None
@@ -457,7 +456,10 @@ class AdminProvisioningService:
             }
         )
         sale_amount = int(scope_totals.get("total_sales") or 0)
-        debt_amount = (consumed_gb if charge_basis == "consumed" else allocated_gb) * price_per_gb
+        if charge_basis == "consumed":
+            debt_amount = (consumed_bytes * price_per_gb) // gb_unit
+        else:
+            debt_amount = allocated_gb * price_per_gb
         return {
             "wallet": wallet,
             "pricing": pricing,
