@@ -105,6 +105,7 @@ def _delegated_detail_keyboard(
     admin_scope: str,
     lang: str | None = None,
 ) -> InlineKeyboardMarkup:
+    scope_value = str(admin_scope or "limited").strip().lower()
     status_label = (
         f"{t('admin_delegated_status', lang)}: {t('admin_delegated_status_active', lang)}"
         if is_active else
@@ -117,7 +118,7 @@ def _delegated_detail_keyboard(
     )
     scope_label = (
         t("admin_delegated_scope_full", lang)
-        if admin_scope == "full"
+        if scope_value == "full"
         else t("admin_delegated_scope_limited", lang)
     )
     rows: list[list[InlineKeyboardButton]] = [
@@ -143,7 +144,7 @@ def _delegated_detail_keyboard(
             InlineKeyboardButton(text=t("admin_delegated_max_days", lang), callback_data=f"dag:field:max_expiry_days:{user_id}"),
         ],
     ]
-    if admin_scope == "limited":
+    if scope_value == "limited":
         rows.append(
             [
                 InlineKeyboardButton(text=status_label, callback_data=f"dag:toggle_status:{user_id}"),
