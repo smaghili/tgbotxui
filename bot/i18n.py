@@ -162,6 +162,74 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "برای امروز گزارشی ثبت نشده است.",
         "en": "There are no reports recorded for today.",
     },
+    "finance_currency_default": {
+        "fa": "تومان",
+        "en": "Toman",
+    },
+    "finance_report_traffic_part": {
+        "fa": "حجم {value} گیگ",
+        "en": "Traffic {value} GB",
+    },
+    "finance_report_expiry_part": {
+        "fa": "{value} روزه",
+        "en": "{value} days",
+    },
+    "finance_report_actor_part": {
+        "fa": "توسط {value}",
+        "en": "By {value}",
+    },
+    "finance_report_panel_part": {
+        "fa": "پنل {value}",
+        "en": "Panel {value}",
+    },
+    "finance_report_inbound_part": {
+        "fa": "اینباند {value}",
+        "en": "Inbound {value}",
+    },
+    "finance_report_time_part": {
+        "fa": "در تاریخ {value}",
+        "en": "At {value}",
+    },
+    "finance_report_amount_part": {
+        "fa": "مبلغ {value}",
+        "en": "Amount {value}",
+    },
+    "finance_unit_gb_short": {
+        "fa": "گیگ",
+        "en": "GB",
+    },
+    "finance_unit_day_short": {
+        "fa": "روز",
+        "en": "days",
+    },
+    "admin_activity_notice_title": {
+        "fa": "اطلاع مدیر",
+        "en": "Manager notice",
+    },
+    "admin_activity_label_actor": {
+        "fa": "ادمین",
+        "en": "Admin",
+    },
+    "admin_activity_label_action": {
+        "fa": "عملیات",
+        "en": "Operation",
+    },
+    "admin_activity_label_user": {
+        "fa": "کاربر",
+        "en": "User",
+    },
+    "admin_activity_label_panel": {
+        "fa": "پنل",
+        "en": "Panel",
+    },
+    "admin_activity_label_inbound": {
+        "fa": "اینباند",
+        "en": "Inbound",
+    },
+    "admin_activity_label_time": {
+        "fa": "زمان",
+        "en": "Time",
+    },
     "finance_master_report_text": {
         "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nقیمت هر گیگ {basis_label}: {price_gb} {currency}\nتعداد کاربران: {clients}\nحجم تخصیص‌یافته: {allocated_gb} گیگ\nمبلغ کل فروش: {sale_amount} {currency}\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری: {debt_amount} {currency}",
         "en": "Overall financial report\n\nWallet: {balance} {currency}\nPer-GB {basis_label}: {price_gb} {currency}\nClients: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal sales: {sale_amount} {currency}\nConsumed traffic: {consumed_gb} GB\nDebt: {debt_amount} {currency}",
@@ -729,6 +797,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_activity_action_add_traffic": {"fa": "افزایش حجم کاربر", "en": "Increase client traffic"},
     "admin_activity_action_add_days": {"fa": "افزایش روز کاربر", "en": "Extend client expiry"},
     "admin_activity_action_delete_client": {"fa": "حذف کاربر", "en": "Delete client"},
+    "admin_activity_action_set_total_gb": {"fa": "تنظیم حجم کاربر", "en": "Set client traffic"},
+    "admin_activity_action_set_expiry_days": {"fa": "تنظیم تاریخ انقضا", "en": "Set client expiry"},
+    "admin_activity_action_reset_traffic": {"fa": "ریست ترافیک کاربر", "en": "Reset client traffic"},
+    "admin_activity_action_set_ip_limit": {"fa": "تغییر محدودیت IP کاربر", "en": "Set client IP limit"},
     "admin_activity_status_active": {"fa": "فعال", "en": "active"},
     "admin_activity_status_inactive": {"fa": "غیرفعال", "en": "inactive"},
     "admin_activity_detail_amount_gb": {"fa": "مقدار: {value} گیگ", "en": "Amount: {value} GB"},

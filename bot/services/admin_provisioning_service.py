@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 import uuid as uuid_lib
@@ -12,7 +13,7 @@ from bot.i18n import t
 from bot.services.access_service import AccessService
 from bot.services.financial_service import FinancialService
 from bot.services.panel_service import PanelService
-from bot.utils import now_jalali_datetime
+from bot.utils import format_gb, now_jalali_datetime, to_local_date
 
 if TYPE_CHECKING:
     from bot.services.usage_service import UsageService
@@ -107,6 +108,620 @@ class AdminProvisioningService:
         if delegated is None or self.usage_service is None:
             return
         await self.usage_service.notify_admin_activity(actor_user_id=actor_user_id, text=stamped_text)
+
+    async def _record_templated_admin_activity(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        action_key: str,
+        user: str,
+        panel_id: int,
+        inbound_id: int,
+        details: list[str] | None = None,
+    ) -> None:
+        lang = await self.db.get_user_language(actor_user_id)
+        actor = await self._actor_display_name(actor_user_id)
+        panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
+        activity_text = t(
+            "admin_activity_notify_template",
+            lang,
+            actor=actor,
+            action=t(action_key, lang),
+            user=user,
+            panel=panel_name,
+            inbound=inbound_name,
+            details=("\n" + "\n".join(details)) if details else "",
+        )
+        await self._record_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            text=activity_text,
+        )
+
+    async def _managed_ref_from_panel_client(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> ManagedClientRef:
+        panel = await self.panel_service.get_panel(panel_id)
+        panel_name = str(panel.get("name") or panel_id) if panel is not None else str(panel_id)
+        inbound_name = f"inbound-{inbound_id}"
+        try:
+            inbounds = await self.panel_service.list_inbounds(panel_id)
+            inbound = next((item for item in inbounds if int(item.get("id") or 0) == inbound_id), None)
+            if inbound is not None:
+                remark = str(inbound.get("remark") or "").strip()
+                inbound_name = remark or inbound_name
+        except Exception:
+            pass
+        detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+        return ManagedClientRef(
+            panel_id=panel_id,
+            panel_name=panel_name,
+            inbound_id=inbound_id,
+            inbound_name=inbound_name,
+            client_uuid=client_uuid,
+            client_email=str(detail.get("email") or ""),
+        )
+
+    async def _add_client_total_gb_for_ref(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        ref: ManagedClientRef,
+        add_gb: int,
+        operation_name: str,
+        refund_reason_prefix: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        before = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        charge_tx = None
+        if self.financial_service is not None:
+            await self.financial_service.validate_operation_limits(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                traffic_gb=add_gb,
+            )
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation=operation_name,
+                traffic_gb=add_gb,
+                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
+            )
+        try:
+            await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
+            after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        except Exception:
+            if charge_tx is not None and self.financial_service is not None:
+                await self.financial_service.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"{refund_reason_prefix}:{ref.client_uuid}",
+                )
+            raise
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="add_client_traffic",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+            details=f"gb={add_gb}",
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_add_traffic",
+            user=str(after.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[t("admin_activity_detail_amount_gb", lang, value=add_gb)],
+        )
+        if self.usage_service is not None:
+            added_bytes = max(0, int(after.get("total") or 0) - int(before.get("total") or 0))
+            if added_bytes > 0:
+                await self.usage_service.notify_user_traffic_increased(
+                    panel_id=ref.panel_id,
+                    client_email=str(after.get("email") or ref.client_email or ""),
+                    added_bytes=added_bytes,
+                    new_total_bytes=int(after.get("total") or 0),
+                )
+        return before, after
+
+    async def _extend_client_expiry_for_ref(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        ref: ManagedClientRef,
+        add_days: int,
+        operation_name: str,
+        refund_reason_prefix: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        before = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        charge_tx = None
+        if self.financial_service is not None:
+            await self.financial_service.validate_operation_limits(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                expiry_days=add_days,
+            )
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation=operation_name,
+                expiry_days=add_days,
+                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
+            )
+        try:
+            await self.panel_service.extend_client_expiry_days(ref.panel_id, ref.inbound_id, ref.client_uuid, add_days)
+            after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        except Exception:
+            if charge_tx is not None and self.financial_service is not None:
+                await self.financial_service.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"{refund_reason_prefix}:{ref.client_uuid}",
+                )
+            raise
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="extend_client_expiry",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+            details=f"days={add_days}",
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_add_days",
+            user=str(after.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[t("admin_activity_detail_amount_days", lang, value=add_days)],
+        )
+        if self.usage_service is not None:
+            await self.usage_service.notify_user_expiry_extended(
+                panel_id=ref.panel_id,
+                client_email=str(after.get("email") or ref.client_email or ""),
+                added_days=add_days,
+                new_expiry=after.get("expiry"),
+            )
+        return before, after
+
+    async def _delete_client_for_ref(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        ref: ManagedClientRef,
+    ) -> dict[str, Any]:
+        before = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        await self.panel_service.delete_client(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="delete_client",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+        )
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_delete_client",
+            user=str(before.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+        )
+        return before
+
+    async def toggle_client_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> tuple[dict[str, Any], bool]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        detail = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        enabled = await self.panel_service.toggle_client_enable(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_toggle_client",
+            user=str(detail.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[
+                t(
+                    "admin_activity_detail_new_status",
+                    lang,
+                    value=t("admin_activity_status_active", lang)
+                    if enabled
+                    else t("admin_activity_status_inactive", lang),
+                )
+            ],
+        )
+        return detail, enabled
+
+    async def set_client_tg_id_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        tg_id: str,
+    ) -> dict[str, Any]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        await self.panel_service.set_client_tg_id(ref.panel_id, ref.inbound_id, ref.client_uuid, tg_id)
+        detail = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        if tg_id:
+            client_email = str(detail.get("email") or ref.client_email or "").strip()
+            if client_email:
+                resolved_user_id = None
+                resolved_username = None
+                if tg_id.lstrip("-").isdigit():
+                    resolved_user_id = int(tg_id)
+                    user = await self.db.get_user_by_telegram_id(resolved_user_id)
+                    if user is not None:
+                        resolved_username = str(user.get("username") or "").strip() or None
+                else:
+                    user = await self.db.find_user_by_username(tg_id)
+                    if user is not None:
+                        resolved_user_id = int(user["telegram_user_id"])
+                        resolved_username = str(user.get("username") or "").strip() or None
+                if resolved_user_id is not None:
+                    await self.panel_service.bind_service_to_user(
+                        panel_id=ref.panel_id,
+                        telegram_user_id=resolved_user_id,
+                        client_email=client_email,
+                        service_name=None,
+                        inbound_id=ref.inbound_id,
+                    )
+                    await self.panel_service.bind_services_for_telegram_identity(
+                        telegram_user_id=resolved_user_id,
+                        username=resolved_username,
+                    )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_set_tg_id",
+            user=str(detail.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[t("admin_activity_detail_new_value", lang, value=tg_id or "-")],
+        )
+        return detail
+
+    async def add_client_total_gb_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        add_gb: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        return await self._add_client_total_gb_for_ref(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            ref=ref,
+            add_gb=add_gb,
+            operation_name="add_client_total_gb",
+            refund_reason_prefix="refund:add_client_total_gb_failed",
+        )
+
+    async def extend_client_expiry_days_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        add_days: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        return await self._extend_client_expiry_for_ref(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            ref=ref,
+            add_days=add_days,
+            operation_name="extend_client_expiry_days",
+            refund_reason_prefix="refund:extend_client_expiry_days_failed",
+        )
+
+    async def delete_client_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> dict[str, Any]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        return await self._delete_client_for_ref(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            ref=ref,
+        )
+
+    async def set_client_total_gb_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        total_gb: int | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        before = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        if total_gb is None and not self.access_service.is_root_admin(actor_user_id, settings):
+            raise ValueError("delegated_unlimited_not_allowed")
+        if total_gb is not None and self.financial_service is not None:
+            await self.financial_service.validate_target_limits(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                total_gb=total_gb,
+            )
+        charge_tx = None
+        if self.financial_service is not None:
+            before_allocated_gb = max(0, (int(before.get("total") or 0) + (1024**3) - 1) // (1024**3))
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation="set_client_total_gb",
+                traffic_gb=0 if total_gb is None else max(0, total_gb - before_allocated_gb),
+                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
+            )
+        try:
+            await self.panel_service.set_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, total_gb)
+            after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        except Exception:
+            if charge_tx is not None and self.financial_service is not None:
+                await self.financial_service.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"refund:set_client_total_gb_failed:{ref.client_uuid}",
+                )
+            raise
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="set_client_total_gb",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+            details=f"total_gb={'unlimited' if total_gb is None else total_gb}",
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_set_total_gb",
+            user=str(after.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[
+                t(
+                    "admin_activity_detail_traffic_change",
+                    lang,
+                    before=format_gb(int(before.get("total") or 0), lang),
+                    after=t("admin_unlimited", lang) if total_gb is None else format_gb(int(after.get("total") or 0), lang),
+                )
+            ],
+        )
+        if self.usage_service is not None:
+            added_bytes = max(0, int(after.get("total") or 0) - int(before.get("total") or 0))
+            if added_bytes > 0:
+                await self.usage_service.notify_user_traffic_increased(
+                    panel_id=ref.panel_id,
+                    client_email=str(after.get("email") or ref.client_email or ""),
+                    added_bytes=added_bytes,
+                    new_total_bytes=int(after.get("total") or 0),
+                )
+        return before, after
+
+    async def set_client_expiry_days_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        days: int | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        before = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        if days is None and not self.access_service.is_root_admin(actor_user_id, settings):
+            raise ValueError("delegated_unlimited_not_allowed")
+        if days is not None and self.financial_service is not None:
+            await self.financial_service.validate_target_limits(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                total_days=days,
+            )
+        charge_tx = None
+        if self.financial_service is not None:
+            before_expiry = int(before.get("expiry") or 0)
+            now_ts = int(time.time())
+            before_days = 0 if before_expiry <= now_ts else max(1, (before_expiry - now_ts + 86399) // 86400)
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation="set_client_expiry_days",
+                expiry_days=0 if days is None else max(0, days - before_days),
+                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
+            )
+        try:
+            await self.panel_service.set_client_expiry_days(ref.panel_id, ref.inbound_id, ref.client_uuid, days)
+            after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        except Exception:
+            if charge_tx is not None and self.financial_service is not None:
+                await self.financial_service.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(charge_tx["id"]),
+                    reason=f"refund:set_client_expiry_days_failed:{ref.client_uuid}",
+                )
+            raise
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="set_client_expiry_days",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+            details=f"days={'unlimited' if days is None else days}",
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_set_expiry_days",
+            user=str(after.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[
+                t(
+                    "admin_activity_detail_expiry_change",
+                    lang,
+                    before=to_local_date(before.get("expiry"), settings.timezone, lang),
+                    after=t("admin_unlimited", lang) if days is None else to_local_date(after.get("expiry"), settings.timezone, lang),
+                )
+            ],
+        )
+        if self.usage_service is not None:
+            before_expiry = int(before.get("expiry") or 0)
+            after_expiry = int(after.get("expiry") or 0)
+            if after_expiry > before_expiry:
+                added_days = max(1, (after_expiry - before_expiry + 86399) // 86400)
+                await self.usage_service.notify_user_expiry_extended(
+                    panel_id=ref.panel_id,
+                    client_email=str(after.get("email") or ref.client_email or ""),
+                    added_days=added_days,
+                    new_expiry=after.get("expiry"),
+                )
+        return before, after
+
+    async def reset_client_traffic_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> dict[str, Any]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        detail = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        await self.panel_service.reset_client_traffic(ref.panel_id, ref.inbound_id, str(detail.get("email") or ""))
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="reset_client_traffic",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+        )
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_reset_traffic",
+            user=str(detail.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+        )
+        return detail
+
+    async def set_client_limit_ip_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        limit_ip: int | None,
+    ) -> dict[str, Any]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        detail = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        await self.panel_service.set_client_limit_ip(ref.panel_id, ref.inbound_id, ref.client_uuid, limit_ip)
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="set_client_limit_ip",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+            details=f"limit_ip={'unlimited' if limit_ip is None else limit_ip}",
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_set_ip_limit",
+            user=str(detail.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[
+                t(
+                    "admin_activity_detail_new_value",
+                    lang,
+                    value=t("admin_unlimited", lang) if limit_ip is None else limit_ip,
+                )
+            ],
+        )
+        return detail
 
     async def _apply_delegated_username_prefix(
         self,
@@ -765,32 +1380,13 @@ class AdminProvisioningService:
             settings=settings,
             vless_uri=vless_uri,
         )
-        charge_tx = None
-        if self.financial_service is not None:
-            charge_tx = await self.financial_service.charge_operation(
-                actor_user_id=actor_user_id,
-                settings=settings,
-                operation="add_client_traffic",
-                traffic_gb=add_gb,
-                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
-            )
-        try:
-            await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
-        except Exception:
-            if charge_tx is not None and self.financial_service is not None:
-                await self.financial_service.refund_transaction(
-                    actor_user_id=actor_user_id,
-                    transaction_id=int(charge_tx["id"]),
-                    reason=f"refund:add_client_traffic_failed:{ref.client_uuid}",
-                )
-            raise
-        await self.db.add_audit_log(
+        await self._add_client_total_gb_for_ref(
             actor_user_id=actor_user_id,
-            action="add_client_traffic",
-            target_type="client",
-            target_id=ref.client_uuid,
-            success=True,
-            details=f"gb={add_gb}",
+            settings=settings,
+            ref=ref,
+            add_gb=add_gb,
+            operation_name="add_client_traffic",
+            refund_reason_prefix="refund:add_client_traffic_failed",
         )
         return ref
 
@@ -807,32 +1403,13 @@ class AdminProvisioningService:
             settings=settings,
             vless_uri=vless_uri,
         )
-        charge_tx = None
-        if self.financial_service is not None:
-            charge_tx = await self.financial_service.charge_operation(
-                actor_user_id=actor_user_id,
-                settings=settings,
-                operation="extend_client_expiry",
-                expiry_days=add_days,
-                details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
-            )
-        try:
-            await self.panel_service.extend_client_expiry_days(ref.panel_id, ref.inbound_id, ref.client_uuid, add_days)
-        except Exception:
-            if charge_tx is not None and self.financial_service is not None:
-                await self.financial_service.refund_transaction(
-                    actor_user_id=actor_user_id,
-                    transaction_id=int(charge_tx["id"]),
-                    reason=f"refund:extend_client_expiry_failed:{ref.client_uuid}",
-                )
-            raise
-        await self.db.add_audit_log(
+        await self._extend_client_expiry_for_ref(
             actor_user_id=actor_user_id,
-            action="extend_client_expiry",
-            target_type="client",
-            target_id=ref.client_uuid,
-            success=True,
-            details=f"days={add_days}",
+            settings=settings,
+            ref=ref,
+            add_days=add_days,
+            operation_name="extend_client_expiry",
+            refund_reason_prefix="refund:extend_client_expiry_failed",
         )
         return ref
 
@@ -848,12 +1425,9 @@ class AdminProvisioningService:
             settings=settings,
             vless_uri=vless_uri,
         )
-        await self.panel_service.delete_client(ref.panel_id, ref.inbound_id, ref.client_uuid)
-        await self.db.add_audit_log(
+        await self._delete_client_for_ref(
             actor_user_id=actor_user_id,
-            action="delete_client",
-            target_type="client",
-            target_id=ref.client_uuid,
-            success=True,
+            settings=settings,
+            ref=ref,
         )
         return ref

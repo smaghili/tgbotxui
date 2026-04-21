@@ -202,23 +202,26 @@ def _parse_admin_activity_text(raw: str | None) -> dict[str, str | list[str]]:
         "extras": [],
     }
     mapping = {
-        "ادمین:": "actor",
-        "عملیات:": "operation",
-        "کاربر:": "user",
-        "پنل:": "panel",
-        "اینباند:": "inbound",
-        "زمان:": "time",
-        "Admin:": "actor",
-        "Operation:": "operation",
-        "User:": "user",
-        "Panel:": "panel",
-        "Inbound:": "inbound",
-        "Time:": "time",
+        f"{t('admin_activity_label_actor', 'fa')}:": "actor",
+        f"{t('admin_activity_label_actor', 'en')}:": "actor",
+        f"{t('admin_activity_label_action', 'fa')}:": "operation",
+        f"{t('admin_activity_label_action', 'en')}:": "operation",
+        f"{t('admin_activity_label_user', 'fa')}:": "user",
+        f"{t('admin_activity_label_user', 'en')}:": "user",
+        f"{t('admin_activity_label_panel', 'fa')}:": "panel",
+        f"{t('admin_activity_label_panel', 'en')}:": "panel",
+        f"{t('admin_activity_label_inbound', 'fa')}:": "inbound",
+        f"{t('admin_activity_label_inbound', 'en')}:": "inbound",
+        f"{t('admin_activity_label_time', 'fa')}:": "time",
+        f"{t('admin_activity_label_time', 'en')}:": "time",
     }
     extras: list[str] = []
     for raw_line in str(raw or "").splitlines():
         line = raw_line.strip()
-        if not line or line in {"اطلاع مدیر:", "Manager notice:"}:
+        if not line or line in {
+            f"{t('admin_activity_notice_title', 'fa')}:",
+            f"{t('admin_activity_notice_title', 'en')}:",
+        }:
             continue
         for prefix, key in mapping.items():
             if line.startswith(prefix):
@@ -232,6 +235,80 @@ def _parse_admin_activity_text(raw: str | None) -> dict[str, str | list[str]]:
 
 def _create_activity_signature(*, actor_user_id: int, created_at: str, user: str) -> tuple[int, str, str]:
     return actor_user_id, created_at.strip(), user.strip().lower()
+
+
+def _wallet_create_client_signature(item: dict) -> tuple[int, str, str] | None:
+    actor_user_id = int(item.get("actor_user_id") or 0)
+    details = _parse_detail_pairs(item.get("details"))
+    email = str(details.get("email") or "").strip()
+    created_at = str(item.get("created_at") or "").strip()
+    if actor_user_id <= 0 or not email or not created_at:
+        return None
+    return _create_activity_signature(
+        actor_user_id=actor_user_id,
+        created_at=created_at,
+        user=email,
+    )
+
+
+def _extract_create_client_amounts(
+    *,
+    extras: list[str] | None = None,
+    wallet_item: dict | None = None,
+) -> tuple[str | None, str | None]:
+    traffic_value: str | None = None
+    expiry_value: str | None = None
+
+    for extra in extras or []:
+        line = str(extra).strip()
+        if not line:
+            continue
+        if traffic_value is None and any(
+            token in line
+            for token in (
+                t("finance_unit_gb_short", "fa"),
+                t("finance_unit_gb_short", "en"),
+            )
+        ):
+            raw_value = line.split(":", 1)[1].strip() if ":" in line else line
+            traffic_value = (
+                raw_value.replace(t("finance_unit_gb_short", "fa"), "")
+                .replace(t("finance_unit_gb_short", "en"), "")
+                .strip()
+            )
+            continue
+        if expiry_value is None and any(
+            token in line
+            for token in (
+                t("finance_unit_day_short", "fa"),
+                t("finance_unit_day_short", "en"),
+                t("finance_report_expiry_part", "fa", value=""),
+                t("finance_report_expiry_part", "en", value=""),
+            )
+        ):
+            raw_value = line.split(":", 1)[1].strip() if ":" in line else line
+            expiry_value = (
+                raw_value.replace(t("finance_report_expiry_part", "fa", value="").strip(), "")
+                .replace(t("finance_unit_day_short", "fa"), "")
+                .replace(t("finance_unit_day_short", "en"), "")
+                .strip()
+            )
+
+    if wallet_item is not None:
+        try:
+            metadata = json.loads(wallet_item.get("metadata_json") or "{}")
+        except Exception:
+            metadata = {}
+        if traffic_value is None:
+            traffic_gb = int(metadata.get("traffic_gb") or 0)
+            if traffic_gb > 0:
+                traffic_value = str(traffic_gb)
+        if expiry_value is None:
+            expiry_days = int(metadata.get("expiry_days") or 0)
+            if expiry_days > 0:
+                expiry_value = str(expiry_days)
+
+    return traffic_value, expiry_value
 
 
 async def _resolve_panel_inbound_names_from_details(
@@ -279,7 +356,7 @@ async def _format_today_sale_line(
     traffic_gb = int(metadata.get("traffic_gb") or 0)
     expiry_days = int(metadata.get("expiry_days") or 0)
     amount = _format_amount(abs(int(item.get("amount") or 0)))
-    currency = str(item.get("currency") or "تومان")
+    currency = str(item.get("currency") or t("finance_currency_default", lang))
     amount_label = f"{amount} {currency}"
     row_label = str(row_number)
     traffic_label = str(traffic_gb)
@@ -292,14 +369,23 @@ async def _format_today_sale_line(
         amount_label = t("finance_amount_unknown", lang)
 
     if operation == "create_client":
-        return (
-            f"{row_label}. ساخت کاربر جدید {email} - حجم {traffic_label} گیگ - "
-            f"{expiry_label} روزه - توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
-        )
-    return (
-        f"{row_label}. افزایش حجم کاربر {email} - حجم {traffic_label} گیگ - "
-        f"توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
-    )
+        parts = [
+            f"{t('admin_activity_action_create_client', lang)} {email}",
+            t("finance_report_traffic_part", lang, value=traffic_label),
+            t("finance_report_expiry_part", lang, value=expiry_label),
+            t("finance_report_actor_part", lang, value=actor_name),
+            t("finance_report_time_part", lang, value=created_at),
+            t("finance_report_amount_part", lang, value=amount_label),
+        ]
+        return f"{row_label}. " + " - ".join(parts)
+    parts = [
+        f"{t('admin_activity_action_add_traffic', lang)} {email}",
+        t("finance_report_traffic_part", lang, value=traffic_label),
+        t("finance_report_actor_part", lang, value=actor_name),
+        t("finance_report_time_part", lang, value=created_at),
+        t("finance_report_amount_part", lang, value=amount_label),
+    ]
+    return f"{row_label}. " + " - ".join(parts)
 
 
 async def _format_today_report_line(
@@ -308,6 +394,7 @@ async def _format_today_report_line(
     row_number: int,
     settings: Settings,
     services: ServiceContainer,
+    wallet_create_rows_by_signature: dict[tuple[int, str, str], dict] | None = None,
     lang: str | None,
 ) -> tuple[str, tuple[int, str, str] | None] | None:
     action = str(item.get("action") or "")
@@ -330,24 +417,38 @@ async def _format_today_report_line(
         extras = [str(value).strip() for value in list(parsed.get("extras") or []) if str(value).strip()]
 
         headline = operation if not user else f"{operation} {user}"
-        parts = [headline, *extras]
-        if actor:
-            parts.append(f"توسط {actor}" if lang != "en" else f"By {actor}")
-        if panel:
-            parts.append(f"پنل {panel}" if lang != "en" else f"Panel {panel}")
-        if inbound:
-            parts.append(f"اینباند {inbound}" if lang != "en" else f"Inbound {inbound}")
-        if report_time:
-            parts.append(f"در تاریخ {report_time}" if lang != "en" else f"At {report_time}")
-
-        line = f"{row_label}. " + " - ".join(parts)
         signature = None
-        if operation in {"ساخت کاربر جدید", "Create client"} and user:
+        wallet_item = None
+        if operation in {
+            t("admin_activity_action_create_client", "fa"),
+            t("admin_activity_action_create_client", "en"),
+        } and user:
             signature = _create_activity_signature(
                 actor_user_id=actor_user_id,
                 created_at=str(item.get("created_at") or ""),
                 user=user,
             )
+            wallet_item = wallet_create_rows_by_signature.get(signature) if wallet_create_rows_by_signature else None
+
+        parts = [headline]
+        if signature is not None:
+            traffic_value, expiry_value = _extract_create_client_amounts(extras=extras, wallet_item=wallet_item)
+            if traffic_value:
+                parts.append(t("finance_report_traffic_part", lang, value=traffic_value))
+            if expiry_value:
+                parts.append(t("finance_report_expiry_part", lang, value=expiry_value))
+        else:
+            parts.extend(extras)
+        if actor:
+            parts.append(t("finance_report_actor_part", lang, value=actor))
+        if panel:
+            parts.append(t("finance_report_panel_part", lang, value=panel))
+        if inbound:
+            parts.append(t("finance_report_inbound_part", lang, value=inbound))
+        if report_time:
+            parts.append(t("finance_report_time_part", lang, value=report_time))
+
+        line = f"{row_label}. " + " - ".join(parts)
         return (to_persian_digits(line) if lang != "en" else line, signature)
 
     if action != "create_client":
@@ -358,20 +459,33 @@ async def _format_today_report_line(
     actor_name = await _actor_title(actor_user_id=actor_user_id, services=services)
     created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
     panel_name, inbound_name = await _resolve_panel_inbound_names_from_details(details, services=services)
+    signature = _create_activity_signature(
+        actor_user_id=actor_user_id,
+        created_at=str(item.get("created_at") or ""),
+        user=email,
+    )
+    wallet_item = wallet_create_rows_by_signature.get(signature) if wallet_create_rows_by_signature else None
+    traffic_value, expiry_value = _extract_create_client_amounts(wallet_item=wallet_item)
     row_label = str(row_number)
     if lang != "en":
         row_label = to_persian_digits(row_label)
-    line = (
-        f"{row_label}. ساخت کاربر جدید {email} - "
-        f"توسط {actor_name} - پنل {panel_name} - اینباند {inbound_name} - در تاریخ {created_at}"
+    parts = [f"{t('admin_activity_action_create_client', lang)} {email}"]
+    if traffic_value:
+        parts.append(t("finance_report_traffic_part", lang, value=traffic_value))
+    if expiry_value:
+        parts.append(t("finance_report_expiry_part", lang, value=expiry_value))
+    parts.extend(
+        [
+            t("finance_report_actor_part", lang, value=actor_name),
+            t("finance_report_panel_part", lang, value=panel_name),
+            t("finance_report_inbound_part", lang, value=inbound_name),
+            t("finance_report_time_part", lang, value=created_at),
+        ]
     )
+    line = f"{row_label}. " + " - ".join(parts)
     return (
         to_persian_digits(line) if lang != "en" else line,
-        _create_activity_signature(
-            actor_user_id=actor_user_id,
-            created_at=str(item.get("created_at") or ""),
-            user=email,
-        ),
+        signature,
     )
 
 
@@ -459,6 +573,19 @@ async def _answer_today_reports(
         created_at_to=end_utc,
         limit=2000,
     )
+    wallet_rows = await services.db.list_scope_wallet_transactions(
+        owner_ids,
+        operation_names=["create_client"],
+        kind="charge",
+        created_at_from=start_utc,
+        created_at_to=end_utc,
+        limit=2000,
+    )
+    wallet_create_rows_by_signature = {
+        signature: item
+        for item in wallet_rows
+        if (signature := _wallet_create_client_signature(item)) is not None
+    }
     admin_activity_signatures: set[tuple[int, str, str]] = set()
     formatted_rows: list[tuple[dict, tuple[str, tuple[int, str, str] | None]]] = []
     for item in rows:
@@ -467,6 +594,7 @@ async def _answer_today_reports(
             row_number=0,
             settings=settings,
             services=services,
+            wallet_create_rows_by_signature=wallet_create_rows_by_signature,
             lang=lang,
         )
         if formatted is None:
@@ -486,6 +614,7 @@ async def _answer_today_reports(
             row_number=line_number,
             settings=settings,
             services=services,
+            wallet_create_rows_by_signature=wallet_create_rows_by_signature,
             lang=lang,
         )
         if numbered is None:

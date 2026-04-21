@@ -12,12 +12,11 @@ from bot.i18n import button_variants, t
 from bot.pagination import chunk_buttons, paginate_window
 from bot.services.container import ServiceContainer
 from bot.states import ProvisioningStates
-from bot.utils import format_gb, to_local_date
+from bot.utils import format_gb
 
 from .admin_shared import (
     answer_with_admin_menu,
     answer_with_cancel,
-    bind_services_for_tg_identity,
     edit_config_actions_keyboard,
     format_client_detail,
     inline_button,
@@ -304,86 +303,6 @@ def _delegated_min_create_error(
     if expiry_days is not None and expiry_days < settings.delegated_admin_min_create_days:
         return "admin_delegated_min_create_days", settings.delegated_admin_min_create_days
     return None
-
-
-async def _notify_added_traffic(
-    source: Message | CallbackQuery,
-    *,
-    settings: Settings,
-    services: ServiceContainer,
-    lang: str | None,
-    panel_id: int,
-    inbound_id: int,
-    before: dict,
-    after: dict,
-) -> None:
-    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_admin_activity(
-        source,
-        settings=settings,
-        services=services,
-        lang=lang,
-        action_key="admin_activity_action_add_traffic",
-        user=_resolved_client_email(before, after),
-        panel=panel_name,
-        inbound=inbound_name,
-        details=[
-            t(
-                "admin_activity_detail_traffic_change",
-                lang,
-                before=format_gb(int(before.get("total") or 0), lang or "fa"),
-                after=format_gb(int(after.get("total") or 0), lang or "fa"),
-            )
-        ],
-    )
-    added_bytes = max(0, int(after.get("total") or 0) - int(before.get("total") or 0))
-    if added_bytes > 0:
-        await services.usage_service.notify_user_traffic_increased(
-            panel_id=panel_id,
-            client_email=_resolved_client_email(before, after),
-            added_bytes=added_bytes,
-            new_total_bytes=int(after.get("total") or 0),
-        )
-
-
-async def _notify_added_expiry_days(
-    source: Message | CallbackQuery,
-    *,
-    settings: Settings,
-    services: ServiceContainer,
-    lang: str | None,
-    panel_id: int,
-    inbound_id: int,
-    before: dict,
-    after: dict,
-    added_days: int,
-) -> None:
-    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_admin_activity(
-        source,
-        settings=settings,
-        services=services,
-        lang=lang,
-        action_key="admin_activity_action_add_days",
-        user=_resolved_client_email(before, after),
-        panel=panel_name,
-        inbound=inbound_name,
-        details=[
-            t(
-                "admin_activity_detail_expiry_change",
-                lang,
-                before=to_local_date(before.get("expiry"), settings.timezone, lang),
-                after=to_local_date(after.get("expiry"), settings.timezone, lang),
-            ),
-            t("admin_activity_detail_amount_days", lang, value=added_days),
-        ],
-    )
-    await services.usage_service.notify_user_expiry_extended(
-        panel_id=panel_id,
-        client_email=_resolved_client_email(before, after),
-        added_days=added_days,
-        new_expiry=after.get("expiry"),
-    )
 
 
 async def _notify_root_admins_if_delegated(
@@ -1041,8 +960,13 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
     try:
-        detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-        enabled = await services.panel_service.toggle_client_enable(panel_id, inbound_id, client_uuid)
+        detail, enabled = await services.admin_provisioning_service.toggle_client_for_actor(
+            actor_user_id=callback.from_user.id,
+            settings=settings,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
         client_email = str(detail.get("email") or "").strip()
         await _render_edit_detail(
             callback,
@@ -1058,26 +982,6 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
     except Exception as exc:
         await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
         return
-    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_admin_activity(
-        callback,
-        settings=settings,
-        services=services,
-        lang=lang,
-        action_key="admin_activity_action_toggle_client",
-        user=str(detail.get("email") or "-"),
-        panel=panel_name,
-        inbound=inbound_name,
-        details=[
-            t(
-                "admin_activity_detail_new_status",
-                lang,
-                value=t("admin_activity_status_active", lang)
-                if enabled
-                else t("admin_activity_status_inactive", lang),
-            )
-        ],
-    )
     await callback.answer(t("admin_enable_on", lang) if enabled else t("admin_enable_off", lang))
 
 
@@ -1308,40 +1212,18 @@ async def edit_config_set_tg_value(message: Message, state: FSMContext, settings
         await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         return
     try:
-        await services.panel_service.set_client_tg_id(panel_id, inbound_id, client_uuid, tg_id)
+        await services.admin_provisioning_service.set_client_tg_id_for_actor(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            tg_id=tg_id,
+        )
     except Exception as exc:
-        await message.answer(t("admin_update_tg_error", lang) + f":\n{exc}")
+        await message.answer(t("admin_tgid_saved_bind_failed", lang, error=exc))
         await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         return
-    if tg_id:
-        try:
-            detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-            client_email = str(detail.get("email") or "").strip()
-            if client_email:
-                await bind_services_for_tg_identity(
-                    services=services,
-                    panel_id=panel_id,
-                    inbound_id=inbound_id,
-                    client_email=client_email,
-                    tg_id=tg_id,
-                )
-        except Exception as exc:
-            await message.answer(t("admin_tgid_saved_bind_failed", lang, error=exc))
-            await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
-            return
-    detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_admin_activity(
-        message,
-        settings=settings,
-        services=services,
-        lang=lang,
-        action_key="admin_activity_action_set_tg_id",
-        user=str(detail.get("email") or "-"),
-        panel=panel_name,
-        inbound=inbound_name,
-        details=[t("admin_activity_detail_new_value", lang, value=tg_id or "-")],
-    )
     await message.answer(
         t("admin_tg_done", lang),
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
@@ -1442,23 +1324,15 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
     ):
         await message.answer(t("no_admin_access", lang))
         return
-    before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    charge_tx = None
     try:
-        await services.financial_service.validate_operation_limits(
+        await services.admin_provisioning_service.add_client_total_gb_for_actor(
             actor_user_id=message.from_user.id,
             settings=settings,
-            traffic_gb=gb,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            add_gb=gb,
         )
-        charge_tx = await services.financial_service.charge_operation(
-            actor_user_id=message.from_user.id,
-            settings=settings,
-            operation="add_client_total_gb",
-            traffic_gb=gb,
-            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
-        )
-        await services.panel_service.add_client_total_gb(panel_id, inbound_id, client_uuid, gb)
-        after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except ValueError as exc:
         delegated_error = _delegated_profile_error_text(exc, lang)
         if delegated_error is not None:
@@ -1470,12 +1344,6 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
     except Exception as exc:
-        if charge_tx is not None:
-            await services.financial_service.refund_transaction(
-                actor_user_id=message.from_user.id,
-                transaction_id=int(charge_tx["id"]),
-                reason=f"refund:add_client_total_gb_failed:{client_uuid}",
-            )
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
     await message.answer(
@@ -1490,16 +1358,6 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
         inbound_id=inbound_id,
         client_uuid=client_uuid,
         lang=lang,
-    )
-    await _notify_added_traffic(
-        message,
-        settings=settings,
-        services=services,
-        lang=lang,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        before=before,
-        after=after,
     )
 
 
@@ -1561,23 +1419,15 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
     ):
         await message.answer(t("no_admin_access", lang))
         return
-    before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    charge_tx = None
     try:
-        await services.financial_service.validate_operation_limits(
+        await services.admin_provisioning_service.extend_client_expiry_days_for_actor(
             actor_user_id=message.from_user.id,
             settings=settings,
-            expiry_days=days,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            add_days=days,
         )
-        charge_tx = await services.financial_service.charge_operation(
-            actor_user_id=message.from_user.id,
-            settings=settings,
-            operation="extend_client_expiry_days",
-            expiry_days=days,
-            details=f"panel={panel_id};inbound={inbound_id};client_uuid={client_uuid}",
-        )
-        await services.panel_service.extend_client_expiry_days(panel_id, inbound_id, client_uuid, days)
-        after = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except ValueError as exc:
         delegated_error = _delegated_profile_error_text(exc, lang)
         if delegated_error is not None:
@@ -1589,28 +1439,11 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
     except Exception as exc:
-        if charge_tx is not None:
-            await services.financial_service.refund_transaction(
-                actor_user_id=message.from_user.id,
-                transaction_id=int(charge_tx["id"]),
-                reason=f"refund:extend_client_expiry_days_failed:{client_uuid}",
-            )
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
     await message.answer(
         t("admin_edit_days_added", lang),
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
-    )
-    await _notify_added_expiry_days(
-        message,
-        settings=settings,
-        services=services,
-        lang=lang,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        before=before,
-        after=after,
-        added_days=days,
     )
 
 
@@ -1668,18 +1501,12 @@ async def edit_config_delete_yes(callback: CallbackQuery, settings: Settings, se
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    await services.panel_service.delete_client(panel_id, inbound_id, client_uuid)
-    panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
-    await _notify_admin_activity(
-        callback,
+    await services.admin_provisioning_service.delete_client_for_actor(
+        actor_user_id=callback.from_user.id,
         settings=settings,
-        services=services,
-        lang=lang,
-        action_key="admin_activity_action_delete_client",
-        user=str(before.get("email") or "-"),
-        panel=panel_name,
-        inbound=inbound_name,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
     )
     await callback.message.edit_text(t("admin_edit_deleted", lang))
     await callback.answer()

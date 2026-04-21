@@ -151,6 +151,7 @@ async def _send_service_status(
 ) -> None:
     user_id = target_user_id if target_user_id is not None else message.from_user.id
     lang = await _user_lang(services, user_id)
+    skipped_autobind_due_to_cooldown = False
     if message.from_user is not None and message.from_user.id == user_id:
         # Keep user identity fresh and try auto-bind on demand, so users do not need /start again.
         await services.db.upsert_user(
@@ -168,6 +169,7 @@ async def _send_service_status(
             except ValueError:
                 last_run_ts = 0
             should_autobind = int(time.time()) - last_run_ts >= STATUS_AUTOBIND_COOLDOWN_SECONDS
+            skipped_autobind_due_to_cooldown = not should_autobind
         if should_autobind:
             try:
                 await services.panel_service.bind_services_for_telegram_identity(
@@ -199,6 +201,24 @@ async def _send_service_status(
             lang=lang,
         )
         return
+
+    if (
+        skipped_autobind_due_to_cooldown
+        and message.from_user is not None
+        and message.from_user.id == user_id
+        and len(service_rows) <= 1
+    ):
+        try:
+            rebound = await services.panel_service.bind_services_for_telegram_identity(
+                telegram_user_id=user_id,
+                username=message.from_user.username,
+            )
+        except Exception:
+            logger.exception("fallback auto-bind by telegram identity failed", extra={"telegram_user_id": user_id})
+        else:
+            if rebound > 0:
+                status_messages = await services.usage_service.get_user_status_messages(user_id, force_refresh=force_refresh)
+                service_rows = await services.db.get_user_services(user_id)
 
     if not status_messages:
         await services.db.add_audit_log(
