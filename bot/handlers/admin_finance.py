@@ -229,6 +229,35 @@ def _parse_admin_activity_text(raw: str | None) -> dict[str, str | list[str]]:
     parsed["extras"] = extras
     return parsed
 
+
+def _create_activity_signature(*, actor_user_id: int, created_at: str, user: str) -> tuple[int, str, str]:
+    return actor_user_id, created_at.strip(), user.strip().lower()
+
+
+async def _resolve_panel_inbound_names_from_details(
+    details: dict[str, str],
+    *,
+    services: ServiceContainer,
+) -> tuple[str, str]:
+    panel_raw = str(details.get("panel") or "").strip()
+    inbound_raw = str(details.get("inbound") or "").strip()
+    panel_name = panel_raw or "-"
+    inbound_name = inbound_raw or "-"
+    if panel_raw.lstrip("-").isdigit():
+        panel = await services.panel_service.get_panel(int(panel_raw))
+        if panel is not None:
+            panel_name = str(panel.get("name") or panel_raw)
+        if inbound_raw.lstrip("-").isdigit():
+            try:
+                inbounds = await services.panel_service.list_inbounds(int(panel_raw))
+                inbound = next((item for item in inbounds if int(item.get("id") or 0) == int(inbound_raw)), None)
+                if inbound is not None:
+                    remark = str(inbound.get("remark") or "").strip()
+                    inbound_name = remark or f"inbound-{inbound_raw}"
+            except Exception:
+                pass
+    return panel_name, inbound_name
+
 async def _format_today_sale_line(
     item: dict,
     *,
@@ -277,39 +306,73 @@ async def _format_today_report_line(
     item: dict,
     *,
     row_number: int,
+    settings: Settings,
+    services: ServiceContainer,
     lang: str | None,
-) -> str | None:
-    if str(item.get("action") or "") != "admin_activity":
-        return None
-    parsed = _parse_admin_activity_text(item.get("details"))
-    operation = str(parsed.get("operation") or "").strip()
-    if not operation:
+) -> tuple[str, tuple[int, str, str] | None] | None:
+    action = str(item.get("action") or "")
+    actor_user_id = int(item.get("actor_user_id") or 0)
+    if action == "admin_activity":
+        parsed = _parse_admin_activity_text(item.get("details"))
+        operation = str(parsed.get("operation") or "").strip()
+        if not operation:
+            return None
+
+        row_label = str(row_number)
+        if lang != "en":
+            row_label = to_persian_digits(row_label)
+
+        user = str(parsed.get("user") or "").strip()
+        actor = str(parsed.get("actor") or "").strip()
+        panel = str(parsed.get("panel") or "").strip()
+        inbound = str(parsed.get("inbound") or "").strip()
+        report_time = str(parsed.get("time") or "").strip()
+        extras = [str(value).strip() for value in list(parsed.get("extras") or []) if str(value).strip()]
+
+        headline = operation if not user else f"{operation} {user}"
+        parts = [headline, *extras]
+        if actor:
+            parts.append(f"توسط {actor}" if lang != "en" else f"By {actor}")
+        if panel:
+            parts.append(f"پنل {panel}" if lang != "en" else f"Panel {panel}")
+        if inbound:
+            parts.append(f"اینباند {inbound}" if lang != "en" else f"Inbound {inbound}")
+        if report_time:
+            parts.append(f"در تاریخ {report_time}" if lang != "en" else f"At {report_time}")
+
+        line = f"{row_label}. " + " - ".join(parts)
+        signature = None
+        if operation in {"ساخت کاربر جدید", "Create client"} and user:
+            signature = _create_activity_signature(
+                actor_user_id=actor_user_id,
+                created_at=str(item.get("created_at") or ""),
+                user=user,
+            )
+        return (to_persian_digits(line) if lang != "en" else line, signature)
+
+    if action != "create_client":
         return None
 
+    details = _parse_detail_pairs(item.get("details"))
+    email = str(details.get("email") or "-").strip() or "-"
+    actor_name = await _actor_title(actor_user_id=actor_user_id, services=services)
+    created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
+    panel_name, inbound_name = await _resolve_panel_inbound_names_from_details(details, services=services)
     row_label = str(row_number)
     if lang != "en":
         row_label = to_persian_digits(row_label)
-
-    user = str(parsed.get("user") or "").strip()
-    actor = str(parsed.get("actor") or "").strip()
-    panel = str(parsed.get("panel") or "").strip()
-    inbound = str(parsed.get("inbound") or "").strip()
-    report_time = str(parsed.get("time") or "").strip()
-    extras = [str(value).strip() for value in list(parsed.get("extras") or []) if str(value).strip()]
-
-    headline = operation if not user else f"{operation} {user}"
-    parts = [headline, *extras]
-    if actor:
-        parts.append(f"توسط {actor}" if lang != "en" else f"By {actor}")
-    if panel:
-        parts.append(f"پنل {panel}" if lang != "en" else f"Panel {panel}")
-    if inbound:
-        parts.append(f"اینباند {inbound}" if lang != "en" else f"Inbound {inbound}")
-    if report_time:
-        parts.append(f"در تاریخ {report_time}" if lang != "en" else f"At {report_time}")
-
-    line = f"{row_label}. " + " - ".join(parts)
-    return to_persian_digits(line) if lang != "en" else line
+    line = (
+        f"{row_label}. ساخت کاربر جدید {email} - "
+        f"توسط {actor_name} - پنل {panel_name} - اینباند {inbound_name} - در تاریخ {created_at}"
+    )
+    return (
+        to_persian_digits(line) if lang != "en" else line,
+        _create_activity_signature(
+            actor_user_id=actor_user_id,
+            created_at=str(item.get("created_at") or ""),
+            user=email,
+        ),
+    )
 
 
 
@@ -391,16 +454,43 @@ async def _answer_today_reports(
     start_utc, end_utc = _today_utc_range_strings(settings.timezone)
     rows = await services.db.list_scope_audit_logs(
         owner_ids,
-        actions=["admin_activity"],
+        actions=["admin_activity", "create_client"],
         created_at_from=start_utc,
         created_at_to=end_utc,
         limit=2000,
     )
-    lines = [
-        line
-        for index, item in enumerate(rows, start=1)
-        if (line := await _format_today_report_line(item, row_number=index, lang=lang)) is not None
-    ]
+    admin_activity_signatures: set[tuple[int, str, str]] = set()
+    formatted_rows: list[tuple[dict, tuple[str, tuple[int, str, str] | None]]] = []
+    for item in rows:
+        formatted = await _format_today_report_line(
+            item,
+            row_number=0,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+        if formatted is None:
+            continue
+        line, signature = formatted
+        formatted_rows.append((item, (line, signature)))
+        if str(item.get("action") or "") == "admin_activity" and signature is not None:
+            admin_activity_signatures.add(signature)
+
+    lines: list[str] = []
+    for item, (line, signature) in formatted_rows:
+        if str(item.get("action") or "") == "create_client" and signature in admin_activity_signatures:
+            continue
+        line_number = len(lines) + 1
+        numbered = await _format_today_report_line(
+            item,
+            row_number=line_number,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+        if numbered is None:
+            continue
+        lines.append(numbered[0])
     if not lines:
         await message.answer(t("finance_today_reports_empty", lang))
         return

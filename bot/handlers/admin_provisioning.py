@@ -766,25 +766,6 @@ async def _finish_create_user(
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         return
-    panel_name, inbound_name = await _panel_inbound_names(
-        services,
-        panel_id=int(result["panel_id"]),
-        inbound_id=int(result["inbound_id"]),
-    )
-    await _notify_admin_activity(
-        message,
-        settings=settings,
-        services=services,
-        lang=lang,
-        action_key="admin_activity_action_create_client",
-        user=str(result["email"]),
-        panel=panel_name,
-        inbound=inbound_name,
-        details=[
-            t("admin_activity_detail_amount_gb", lang, value=int(data["create_total_gb"])),
-            t("admin_activity_detail_amount_days", lang, value=int(data["create_expiry_days"])),
-        ],
-    )
     await _send_config_bundle(
         message,
         config_name=result["email"],

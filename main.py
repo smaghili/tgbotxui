@@ -52,18 +52,19 @@ async def run(settings: Settings) -> None:
         db=db,
         access_service=access_service,
     )
-    admin_provisioning_service = AdminProvisioningService(
-        db=db,
-        panel_service=panel_service,
-        access_service=access_service,
-        financial_service=financial_service,
-    )
     usage_service = UsageService(
         db=db,
         panel_service=panel_service,
         timezone=settings.timezone,
         root_admin_ids=settings.admin_ids,
         depleted_delete_after_hours=settings.depleted_client_delete_after_hours,
+    )
+    admin_provisioning_service = AdminProvisioningService(
+        db=db,
+        panel_service=panel_service,
+        access_service=access_service,
+        financial_service=financial_service,
+        usage_service=usage_service,
     )
     services = ServiceContainer(
         db=db,

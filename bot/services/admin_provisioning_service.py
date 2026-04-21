@@ -2,15 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 import uuid as uuid_lib
 
 from bot.config import Settings
 from bot.db import Database
+from bot.i18n import t
 from bot.services.access_service import AccessService
 from bot.services.financial_service import FinancialService
 from bot.services.panel_service import PanelService
+from bot.utils import now_jalali_datetime
+
+if TYPE_CHECKING:
+    from bot.services.usage_service import UsageService
 
 
 @dataclass(slots=True, frozen=True)
@@ -42,11 +47,66 @@ class AdminProvisioningService:
         panel_service: PanelService,
         access_service: AccessService,
         financial_service: FinancialService | None = None,
+        usage_service: "UsageService | None" = None,
     ) -> None:
         self.db = db
         self.panel_service = panel_service
         self.access_service = access_service
         self.financial_service = financial_service
+        self.usage_service = usage_service
+
+    async def _actor_display_name(self, actor_user_id: int) -> str:
+        user = await self.db.get_user_by_telegram_id(actor_user_id)
+        if user is not None:
+            full_name = str(user.get("full_name") or "").strip()
+            if full_name:
+                return full_name
+            username = str(user.get("username") or "").strip()
+            if username:
+                return username
+        delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
+        if delegated is not None:
+            title = str(delegated.get("title") or "").strip()
+            if title:
+                return title
+        return str(actor_user_id)
+
+    async def _panel_inbound_names(self, *, panel_id: int, inbound_id: int) -> tuple[str, str]:
+        panel_name = str(panel_id)
+        inbound_name = str(inbound_id)
+        panel = await self.panel_service.get_panel(panel_id)
+        if panel is not None:
+            panel_name = str(panel.get("name") or panel_id)
+        try:
+            inbounds = await self.panel_service.list_inbounds(panel_id)
+            inbound = next((item for item in inbounds if int(item.get("id") or 0) == inbound_id), None)
+            if inbound is not None:
+                remark = str(inbound.get("remark") or "").strip()
+                inbound_name = remark or f"inbound-{inbound_id}"
+        except Exception:
+            pass
+        return panel_name, inbound_name
+
+    async def _record_admin_activity(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        text: str,
+    ) -> None:
+        stamped_text = f"{text}\nزمان: {now_jalali_datetime(settings.timezone)}"
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="admin_activity",
+            target_type="admin_activity",
+            target_id=str(actor_user_id),
+            success=True,
+            details=stamped_text,
+        )
+        delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
+        if delegated is None or self.usage_service is None:
+            return
+        await self.usage_service.notify_admin_activity(actor_user_id=actor_user_id, text=stamped_text)
 
     async def _apply_delegated_username_prefix(
         self,
@@ -591,6 +651,30 @@ class AdminProvisioningService:
             target_id=created["uuid"],
             success=True,
             details=f"panel={panel_id};inbound={inbound_id};email={client_email}",
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        actor = await self._actor_display_name(actor_user_id)
+        panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
+        activity_text = t(
+            "admin_activity_notify_template",
+            lang,
+            actor=actor,
+            action=t("admin_activity_action_create_client", lang),
+            user=client_email,
+            panel=panel_name,
+            inbound=inbound_name,
+            details="\n"
+            + "\n".join(
+                [
+                    t("admin_activity_detail_amount_gb", lang, value=total_gb),
+                    t("admin_activity_detail_amount_days", lang, value=expiry_days),
+                ]
+            ),
+        )
+        await self._record_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            text=activity_text,
         )
         return {
             **created,
