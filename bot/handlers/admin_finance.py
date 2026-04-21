@@ -190,6 +190,45 @@ def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
         result[key.strip()] = value.strip()
     return result
 
+
+def _parse_admin_activity_text(raw: str | None) -> dict[str, str | list[str]]:
+    parsed: dict[str, str | list[str]] = {
+        "actor": "",
+        "operation": "",
+        "user": "",
+        "panel": "",
+        "inbound": "",
+        "time": "",
+        "extras": [],
+    }
+    mapping = {
+        "ادمین:": "actor",
+        "عملیات:": "operation",
+        "کاربر:": "user",
+        "پنل:": "panel",
+        "اینباند:": "inbound",
+        "زمان:": "time",
+        "Admin:": "actor",
+        "Operation:": "operation",
+        "User:": "user",
+        "Panel:": "panel",
+        "Inbound:": "inbound",
+        "Time:": "time",
+    }
+    extras: list[str] = []
+    for raw_line in str(raw or "").splitlines():
+        line = raw_line.strip()
+        if not line or line in {"اطلاع مدیر:", "Manager notice:"}:
+            continue
+        for prefix, key in mapping.items():
+            if line.startswith(prefix):
+                parsed[key] = line[len(prefix) :].strip()
+                break
+        else:
+            extras.append(line)
+    parsed["extras"] = extras
+    return parsed
+
 async def _format_today_sale_line(
     item: dict,
     *,
@@ -232,6 +271,45 @@ async def _format_today_sale_line(
         f"{row_label}. افزایش حجم کاربر {email} - حجم {traffic_label} گیگ - "
         f"توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
     )
+
+
+async def _format_today_report_line(
+    item: dict,
+    *,
+    row_number: int,
+    lang: str | None,
+) -> str | None:
+    if str(item.get("action") or "") != "admin_activity":
+        return None
+    parsed = _parse_admin_activity_text(item.get("details"))
+    operation = str(parsed.get("operation") or "").strip()
+    if not operation:
+        return None
+
+    row_label = str(row_number)
+    if lang != "en":
+        row_label = to_persian_digits(row_label)
+
+    user = str(parsed.get("user") or "").strip()
+    actor = str(parsed.get("actor") or "").strip()
+    panel = str(parsed.get("panel") or "").strip()
+    inbound = str(parsed.get("inbound") or "").strip()
+    report_time = str(parsed.get("time") or "").strip()
+    extras = [str(value).strip() for value in list(parsed.get("extras") or []) if str(value).strip()]
+
+    headline = operation if not user else f"{operation} {user}"
+    parts = [headline, *extras]
+    if actor:
+        parts.append(f"توسط {actor}" if lang != "en" else f"By {actor}")
+    if panel:
+        parts.append(f"پنل {panel}" if lang != "en" else f"Panel {panel}")
+    if inbound:
+        parts.append(f"اینباند {inbound}" if lang != "en" else f"Inbound {inbound}")
+    if report_time:
+        parts.append(f"در تاریخ {report_time}" if lang != "en" else f"At {report_time}")
+
+    line = f"{row_label}. " + " - ".join(parts)
+    return to_persian_digits(line) if lang != "en" else line
 
 
 
@@ -279,10 +357,59 @@ async def _answer_today_sales(
         for index, item in enumerate(rows, start=1)
     ]
     header = t("finance_today_sales_title", lang)
-    buffer = f"{header}\n"
+    buffer = header
     for line in lines:
-        candidate = f"{buffer}\n{line}" if buffer.strip() != header else f"{header}\n\n{line}"
-        if len(candidate) > 3500 and buffer.strip() != header:
+        candidate = f"{buffer}\n\n{line}" if buffer != header else f"{header}\n\n{line}"
+        if len(candidate) > 3500 and buffer != header:
+            await message.answer(buffer)
+            buffer = f"{header}\n\n{line}"
+        else:
+            buffer = candidate
+    await message.answer(buffer)
+
+
+async def _answer_today_reports(
+    message: Message,
+    *,
+    actor_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+) -> None:
+    if services.access_service.is_root_admin(actor_user_id, settings):
+        delegate_rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
+        owner_ids = sorted({actor_user_id, *[int(row["telegram_user_id"]) for row in delegate_rows]})
+    else:
+        owner_ids = await services.admin_provisioning_service.financial_scope_user_ids(
+            actor_user_id=actor_user_id,
+            settings=settings,
+        )
+    if not owner_ids:
+        await message.answer(t("finance_today_reports_empty", lang))
+        return
+
+    start_utc, end_utc = _today_utc_range_strings(settings.timezone)
+    rows = await services.db.list_scope_audit_logs(
+        owner_ids,
+        actions=["admin_activity"],
+        created_at_from=start_utc,
+        created_at_to=end_utc,
+        limit=2000,
+    )
+    lines = [
+        line
+        for index, item in enumerate(rows, start=1)
+        if (line := await _format_today_report_line(item, row_number=index, lang=lang)) is not None
+    ]
+    if not lines:
+        await message.answer(t("finance_today_reports_empty", lang))
+        return
+
+    header = t("finance_today_reports_title", lang)
+    buffer = header
+    for line in lines:
+        candidate = f"{buffer}\n\n{line}" if buffer != header else f"{header}\n\n{line}"
+        if len(candidate) > 3500 and buffer != header:
             await message.answer(buffer)
             buffer = f"{header}\n\n{line}"
         else:
@@ -533,7 +660,13 @@ async def finance_today_reports_message(message: Message, settings: Settings, se
     ):
         return
     lang = await services.db.get_user_language(message.from_user.id)
-    await message.answer(t("finance_today_reports_soon", lang))
+    await _answer_today_reports(
+        message,
+        actor_user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
 
 
 @router.message(F.text.in_(button_variants("finance_delegates_list")))

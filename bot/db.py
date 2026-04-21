@@ -450,6 +450,46 @@ class Database:
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
+    async def list_scope_audit_logs(
+        self,
+        actor_user_ids: List[int],
+        *,
+        actions: List[str] | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        if not actor_user_ids:
+            return []
+
+        clauses = [f"actor_user_id IN ({','.join('?' for _ in actor_user_ids)})"]
+        params: List[Any] = list(actor_user_ids)
+
+        if actions:
+            clauses.append(f"action IN ({','.join('?' for _ in actions)})")
+            params.extend(actions)
+        if created_at_from:
+            clauses.append("created_at>=?")
+            params.append(created_at_from)
+        if created_at_to:
+            clauses.append("created_at<?")
+            params.append(created_at_to)
+
+        params.append(max(1, int(limit)))
+        cur = await self.conn.execute(
+            f"""
+            SELECT id, actor_user_id, action, target_type, target_id, success, details, created_at
+            FROM audit_logs
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?;
+            """,
+            tuple(params),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
     async def add_delegated_admin_inbound_access(
         self,
         *,

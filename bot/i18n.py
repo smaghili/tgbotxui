@@ -154,6 +154,14 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "بخش گزارش‌های امروز بعدا تکمیل می‌شود.",
         "en": "Today's reports will be added later.",
     },
+    "finance_today_reports_title": {
+        "fa": "گزارش امروز",
+        "en": "Today's Reports",
+    },
+    "finance_today_reports_empty": {
+        "fa": "برای امروز گزارشی ثبت نشده است.",
+        "en": "There are no reports recorded for today.",
+    },
     "finance_master_report_text": {
         "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nقیمت هر گیگ {basis_label}: {price_gb} {currency}\nتعداد کاربران: {clients}\nحجم تخصیص‌یافته: {allocated_gb} گیگ\nمبلغ کل فروش: {sale_amount} {currency}\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری: {debt_amount} {currency}",
         "en": "Overall financial report\n\nWallet: {balance} {currency}\nPer-GB {basis_label}: {price_gb} {currency}\nClients: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal sales: {sale_amount} {currency}\nConsumed traffic: {consumed_gb} GB\nDebt: {debt_amount} {currency}",
