@@ -107,30 +107,58 @@ class UsageService:
             parent_user_id = int(parent_row.get("parent_user_id") or 0)
         return sorted(recipients)
 
+    async def _audit_admin_activity_delivery(
+        self,
+        *,
+        actor_user_id: int | None,
+        recipient_user_id: int,
+        action: str,
+        success: bool,
+        details: str,
+    ) -> None:
+        if actor_user_id is None:
+            return
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action=action,
+            target_type="admin",
+            target_id=str(recipient_user_id),
+            success=success,
+            details=details,
+        )
+
     async def notify_admin_activity(self, *, actor_user_id: int, text: str) -> None:
         for admin_id in await self._admin_activity_recipient_ids(actor_user_id):
             if await self._send_chat_message(admin_id, text):
+                await self._audit_admin_activity_delivery(
+                    actor_user_id=actor_user_id,
+                    recipient_user_id=admin_id,
+                    action="admin_activity_notification_sent",
+                    success=True,
+                    details="delivery=immediate",
+                )
                 continue
-            await self.db.enqueue_admin_activity_notification(
+            notification_id = await self.db.enqueue_admin_activity_notification(
                 actor_user_id=actor_user_id,
                 chat_id=admin_id,
                 text=text,
                 next_attempt_at=int(time.time()) + 30,
                 last_error="immediate_send_failed",
             )
-            await self.db.add_audit_log(
+            await self._audit_admin_activity_delivery(
                 actor_user_id=actor_user_id,
+                recipient_user_id=admin_id,
                 action="admin_activity_notification_queued",
-                target_type="admin",
-                target_id=str(admin_id),
                 success=False,
-                details="queued_for_retry",
+                details=f"delivery=immediate_failed;notification_id={notification_id}",
             )
 
     async def flush_pending_admin_activity_notifications(self, *, limit: int = 100) -> None:
         rows = await self.db.list_due_admin_activity_notifications(now_ts=int(time.time()), limit=limit)
         for row in rows:
             notification_id = int(row["id"])
+            actor_user_id_raw = row.get("actor_user_id")
+            actor_user_id = int(actor_user_id_raw) if actor_user_id_raw is not None else None
             chat_id = int(row["chat_id"])
             text = str(row.get("text") or "")
             attempts = int(row.get("attempts") or 0)
@@ -139,12 +167,26 @@ class UsageService:
                     notification_id=notification_id,
                     sent_at=int(time.time()),
                 )
+                await self._audit_admin_activity_delivery(
+                    actor_user_id=actor_user_id,
+                    recipient_user_id=chat_id,
+                    action="admin_activity_notification_sent",
+                    success=True,
+                    details=f"delivery=retry;notification_id={notification_id}",
+                )
                 continue
             backoff_seconds = min(1800, 30 * (2 ** min(attempts, 5)))
             await self.db.mark_admin_activity_notification_failed(
                 notification_id=notification_id,
                 last_error="retry_send_failed",
                 next_attempt_at=int(time.time()) + backoff_seconds,
+            )
+            await self._audit_admin_activity_delivery(
+                actor_user_id=actor_user_id,
+                recipient_user_id=chat_id,
+                action="admin_activity_notification_retry_failed",
+                success=False,
+                details=f"delivery=retry_failed;notification_id={notification_id};attempt={attempts + 1}",
             )
 
     async def _manager_chat_ids_for_service(

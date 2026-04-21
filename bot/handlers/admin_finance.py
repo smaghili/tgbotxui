@@ -18,6 +18,7 @@ from bot.keyboards import (
 )
 from bot.services.container import ServiceContainer
 from bot.states import FinanceStates
+from bot.utils import to_persian_digits
 
 from .admin_shared import answer_with_cancel, reject_callback_if_not_any_admin, reject_if_not_any_admin
 
@@ -189,10 +190,10 @@ def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
         result[key.strip()] = value.strip()
     return result
 
-
 async def _format_today_sale_line(
     item: dict,
     *,
+    row_number: int,
     report_user_id: int,
     settings: Settings,
     services: ServiceContainer,
@@ -210,20 +211,28 @@ async def _format_today_sale_line(
     traffic_gb = int(metadata.get("traffic_gb") or 0)
     expiry_days = int(metadata.get("expiry_days") or 0)
     amount = _format_amount(abs(int(item.get("amount") or 0)))
-    currency = str(item.get("currency") or "تومان")
+    currency = str(item.get("currency") or "ØªÙˆÙ…Ø§Ù†")
     amount_label = f"{amount} {currency}"
+    row_label = str(row_number)
+    traffic_label = str(traffic_gb)
+    expiry_label = str(expiry_days)
+    if lang == "fa":
+        row_label = to_persian_digits(row_label)
+        traffic_label = to_persian_digits(traffic_label)
+        expiry_label = to_persian_digits(expiry_label)
     if actor_user_id == report_user_id or services.access_service.is_root_admin(actor_user_id, settings):
         amount_label = t("finance_amount_unknown", lang)
 
     if operation == "create_client":
         return (
-            f"ساخت کاربر جدید {email} - {traffic_gb} گیگ - {expiry_days} روزه - "
-            f"توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
+            f"{row_label}. Ø³Ø§Ø®Øª Ú©Ø§Ø±Ø¨Ø± Ø¬Ø¯ÛŒØ¯ {email} - Ø­Ø¬Ù… {traffic_label} Ú¯ÛŒÚ¯ - "
+            f"{expiry_label} Ø±ÙˆØ²Ù‡ - ØªÙˆØ³Ø· {actor_name} - Ø¯Ø± ØªØ§Ø±ÛŒØ® {created_at} - Ù…Ø¨Ù„Øº {amount_label}"
         )
     return (
-        f"افزایش حجم کاربر {email} - {traffic_gb} گیگ - "
-        f"توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
+        f"{row_label}. Ø§ÙØ²Ø§ÛŒØ´ Ø­Ø¬Ù… Ú©Ø§Ø±Ø¨Ø± {email} - Ø­Ø¬Ù… {traffic_label} Ú¯ÛŒÚ¯ - "
+        f"ØªÙˆØ³Ø· {actor_name} - Ø¯Ø± ØªØ§Ø±ÛŒØ® {created_at} - Ù…Ø¨Ù„Øº {amount_label}"
     )
+
 
 
 async def _answer_today_sales(
@@ -261,17 +270,18 @@ async def _answer_today_sales(
     lines = [
         await _format_today_sale_line(
             item,
+            row_number=index,
             report_user_id=actor_user_id,
             settings=settings,
             services=services,
             lang=lang,
         )
-        for item in rows
+        for index, item in enumerate(rows, start=1)
     ]
     header = t("finance_today_sales_title", lang)
     buffer = header
     for line in lines:
-        candidate = f"{buffer}\n{line}"
+        candidate = f"{buffer}\\n\\n{line}" if buffer != header else f"{buffer}\\n{line}"
         if len(candidate) > 3500 and buffer != header:
             await message.answer(buffer)
             buffer = f"{header}\n{line}"
@@ -360,7 +370,7 @@ async def _wallet_target_summary_text(
         lang,
         title=_display_title(user, target_user_id),
         balance=_format_amount(int(wallet["balance"] or 0)),
-        currency=str(wallet["currency"] or "تومان"),
+        currency=str(wallet["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
         price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
         price_day=_format_amount(int(pricing["price_per_day"] or 0)),
     )
@@ -389,7 +399,7 @@ async def _answer_sales_report(
             lang,
             consumed_gb=_format_gb_exact(summary["consumed_gb"] or 0),
             debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
-            currency=str(wallet["currency"] or "تومان"),
+            currency=str(wallet["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
         )
     if context.delegated_scope == "full":
         text = t(
@@ -397,7 +407,7 @@ async def _answer_sales_report(
             lang,
             title=_display_title(await services.db.get_user_by_telegram_id(report_user_id), report_user_id),
             balance=_format_amount(int(wallet["balance"] or 0)),
-            currency=str(wallet["currency"] or "تومان"),
+            currency=str(wallet["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
             price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
             price_day=_format_amount(int(pricing["price_per_day"] or 0)),
             clients=int(summary["clients_count"] or 0),
@@ -410,7 +420,7 @@ async def _answer_sales_report(
             "finance_limited_report_text",
             lang,
             balance=_format_amount(int(wallet["balance"] or 0)),
-            currency=str(wallet["currency"] or "تومان"),
+            currency=str(wallet["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
             clients=int(summary["clients_count"] or 0),
             allocated_gb=int(summary["allocated_gb"] or 0),
             sale_amount=_format_amount(int(summary["sale_amount"] or 0)),
@@ -448,7 +458,7 @@ async def _save_pricing_and_answer(
             lang,
             price_gb=_format_amount(int(pricing["price_per_gb"] or 0)),
             price_day=_format_amount(int(pricing["price_per_day"] or 0)),
-            currency=str(pricing["currency"] or "تومان"),
+            currency=str(pricing["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
         ),
         reply_markup=await _main_menu_markup(
             user_id=actor_user_id,
@@ -691,7 +701,7 @@ async def finance_overall_report(callback: CallbackQuery, settings: Settings, se
         lang,
         wallets=int(report["wallets_count"]),
         balance=_format_amount(int(report["total_balance"] or 0)),
-        currency=str(report["currency"] or "تومان"),
+        currency=str(report["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
         sales=_format_amount(int(report["total_sales"] or 0)),
         sales_count=int(report["sales_count"]),
         transactions=int(report["total_transactions"]),
@@ -848,7 +858,7 @@ async def finance_wallet_amount_input(message: Message, state: FSMContext, setti
             "finance_wallet_updated",
             lang,
             balance=_format_amount(int(result["balance_after"] or 0)),
-            currency=str(result["currency"] or "تومان"),
+            currency=str(result["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
         ),
         reply_markup=await _main_menu_markup(
             user_id=message.from_user.id,
@@ -922,7 +932,7 @@ async def finance_pricing_day_input(message: Message, state: FSMContext, setting
         await state.update_data(
             finance_price_per_day=price_day,
             finance_old_price_per_gb=old_price_gb,
-            finance_pricing_currency=str(current_pricing.get("currency") or "تومان"),
+            finance_pricing_currency=str(current_pricing.get("currency") or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
         )
         await state.set_state(FinanceStates.waiting_pricing_history_choice)
         await message.answer(
@@ -931,7 +941,7 @@ async def finance_pricing_day_input(message: Message, state: FSMContext, setting
                 lang,
                 old_price_gb=_format_amount(old_price_gb),
                 new_price_gb=_format_amount(price_gb),
-                currency=str(current_pricing.get("currency") or "تومان"),
+                currency=str(current_pricing.get("currency") or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
             ),
             reply_markup=_pricing_history_choice_keyboard(lang),
         )
@@ -1006,4 +1016,5 @@ async def finance_pricing_history_keep(
         lang=lang,
     )
     await callback.answer()
+
 
