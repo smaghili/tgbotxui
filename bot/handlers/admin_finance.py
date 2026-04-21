@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardRemove
@@ -28,7 +32,10 @@ def _finance_delegated_keyboard(lang: str | None = None) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=t("finance_view_credit", lang), callback_data="fin:credit:me")],
-            [InlineKeyboardButton(text=t("finance_delegates_list", lang), callback_data="fin:delegates:mine")],
+            [
+                InlineKeyboardButton(text=t("finance_delegates_list", lang), callback_data="fin:delegates:mine"),
+                InlineKeyboardButton(text=t("finance_today_sales", lang), callback_data="fin:sales:today"),
+            ],
             [InlineKeyboardButton(text=t("btn_back", lang), callback_data="fin:delegated:back")],
         ]
     )
@@ -88,6 +95,216 @@ def _format_amount(value: int) -> str:
 def _format_gb_exact(value: float | int) -> str:
     formatted = f"{float(value):.2f}".rstrip("0").rstrip(".")
     return formatted or "0"
+
+
+def _parse_db_timestamp(raw: str) -> datetime | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace(" ", "T"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _format_db_timestamp(raw: str, *, settings: Settings, lang: str | None) -> str:
+    dt = _parse_db_timestamp(raw)
+    if dt is None:
+        return raw
+    local_dt = dt.astimezone(ZoneInfo(settings.timezone))
+    if lang == "fa":
+        from bot.utils import to_jalali_datetime
+
+        return to_jalali_datetime(int(local_dt.timestamp()), settings.timezone)
+    return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _today_utc_range_strings(tz_name: str) -> tuple[str, str]:
+    local_now = datetime.now(ZoneInfo(tz_name))
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+    start_utc = local_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    end_utc = local_end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    return start_utc, end_utc
+
+
+async def _actor_title(
+    *,
+    actor_user_id: int | None,
+    services: ServiceContainer,
+) -> str:
+    if actor_user_id is None:
+        return "-"
+    user = await services.db.get_user_by_telegram_id(actor_user_id)
+    if user is not None:
+        name = str(user.get("full_name") or "").strip()
+        if name:
+            return name
+        username = str(user.get("username") or "").strip()
+        if username:
+            return username
+    delegated = await services.db.get_delegated_admin_by_user_id(actor_user_id)
+    if delegated is not None:
+        title = str(delegated.get("title") or "").strip()
+        if title:
+            return title
+    return str(actor_user_id)
+
+
+async def _transaction_email(
+    item: dict,
+    *,
+    services: ServiceContainer,
+) -> str:
+    details = _parse_detail_pairs(item.get("details"))
+    email = str(details.get("email") or details.get("client_email") or "").strip()
+    if email:
+        return email
+    panel_raw = details.get("panel")
+    inbound_raw = details.get("inbound")
+    client_uuid = str(details.get("client_uuid") or "").strip()
+    if not panel_raw or not inbound_raw or not client_uuid:
+        return "-"
+    try:
+        detail = await services.panel_service.get_client_detail(int(panel_raw), int(inbound_raw), client_uuid)
+    except Exception:
+        return "-"
+    return str(detail.get("email") or "-").strip() or "-"
+
+
+def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for part in str(raw or "").split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result
+
+
+async def _format_today_sale_line(
+    item: dict,
+    *,
+    report_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+) -> str:
+    try:
+        metadata = json.loads(item.get("metadata_json") or "{}")
+    except Exception:
+        metadata = {}
+    operation = str(item.get("operation") or "")
+    actor_user_id = int(item.get("actor_user_id") or item.get("telegram_user_id") or 0)
+    actor_name = await _actor_title(actor_user_id=actor_user_id, services=services)
+    email = await _transaction_email(item, services=services)
+    created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
+    amount = _format_amount(abs(int(item.get("amount") or 0)))
+    currency = str(item.get("currency") or "تومان")
+    traffic_gb = int(metadata.get("traffic_gb") or 0)
+    expiry_days = int(metadata.get("expiry_days") or 0)
+    amount_label = f"{amount} {currency}"
+    if actor_user_id == report_user_id or services.access_service.is_root_admin(actor_user_id, settings):
+        amount_label = t("finance_amount_unknown", lang)
+
+    if operation == "create_client":
+        return (
+            f"ساخت کاربر جدید {email} - {traffic_gb} گیگ - {expiry_days} روزه - "
+            f"توسط {actor_name} - در تاریخ {created_at} - قیمت {amount} {currency}"
+        )
+    return (
+        f"افزایش حجم کاربر {email} - {traffic_gb} گیگ - توسط {actor_name} - "
+        f"در تاریخ {created_at} - قیمت {amount} {currency}"
+    )
+
+
+async def _format_today_sale_line_clean(
+    item: dict,
+    *,
+    report_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+) -> str:
+    try:
+        metadata = json.loads(item.get("metadata_json") or "{}")
+    except Exception:
+        metadata = {}
+    operation = str(item.get("operation") or "")
+    actor_user_id = int(item.get("actor_user_id") or item.get("telegram_user_id") or 0)
+    actor_name = await _actor_title(actor_user_id=actor_user_id, services=services)
+    email = await _transaction_email(item, services=services)
+    created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
+    traffic_gb = int(metadata.get("traffic_gb") or 0)
+    expiry_days = int(metadata.get("expiry_days") or 0)
+    amount = _format_amount(abs(int(item.get("amount") or 0)))
+    currency = str(item.get("currency") or "تومان")
+    amount_label = f"{amount} {currency}"
+    if actor_user_id == report_user_id or services.access_service.is_root_admin(actor_user_id, settings):
+        amount_label = t("finance_amount_unknown", lang)
+
+    if operation == "create_client":
+        return (
+            f"ساخت کاربر جدید {email} - {traffic_gb} گیگ - {expiry_days} روزه - "
+            f"توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
+        )
+    return (
+        f"افزایش حجم کاربر {email} - {traffic_gb} گیگ - "
+        f"توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
+    )
+
+
+async def _answer_today_sales(
+    message: Message,
+    *,
+    actor_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+) -> None:
+    owner_ids = await services.admin_provisioning_service.financial_scope_user_ids(
+        actor_user_id=actor_user_id,
+        settings=settings,
+    )
+    if not owner_ids:
+        await message.answer(t("finance_today_sales_empty", lang))
+        return
+    start_utc, end_utc = _today_utc_range_strings(settings.timezone)
+    rows = await services.db.list_scope_wallet_transactions(
+        owner_ids,
+        operation_names=["create_client", "add_client_traffic", "add_client_total_gb"],
+        kind="charge",
+        created_at_from=start_utc,
+        created_at_to=end_utc,
+        limit=2000,
+    )
+    if not rows:
+        await message.answer(t("finance_today_sales_empty", lang))
+        return
+
+    lines = [
+        await _format_today_sale_line_clean(
+            item,
+            report_user_id=actor_user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+        for item in rows
+    ]
+    header = t("finance_today_sales_title", lang)
+    buffer = header
+    for line in lines:
+        candidate = f"{buffer}\n{line}"
+        if len(candidate) > 3500 and buffer != header:
+            await message.answer(buffer)
+            buffer = f"{header}\n{line}"
+        else:
+            buffer = candidate
+    await message.answer(buffer)
 
 
 async def _is_primary_delegated_admin(
@@ -269,6 +486,32 @@ async def finance_view_credit_message(message: Message, settings: Settings, serv
         services=services,
         lang=lang,
     )
+
+
+@router.message(F.text.in_(button_variants("finance_today_sales")))
+async def finance_today_sales_message(message: Message, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_if_not_any_admin(message, settings, services):
+        return
+    if not await _is_primary_delegated_admin(user_id=message.from_user.id, settings=settings, services=services):
+        return
+    lang = await services.db.get_user_language(message.from_user.id)
+    await _answer_today_sales(
+        message,
+        actor_user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+
+
+@router.message(F.text.in_(button_variants("finance_today_reports")))
+async def finance_today_reports_message(message: Message, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_if_not_any_admin(message, settings, services):
+        return
+    if not await _is_primary_delegated_admin(user_id=message.from_user.id, settings=settings, services=services):
+        return
+    lang = await services.db.get_user_language(message.from_user.id)
+    await message.answer(t("finance_today_reports_soon", lang))
 
 
 @router.message(F.text.in_(button_variants("finance_delegates_list")))
@@ -458,6 +701,27 @@ async def finance_my_sales_report(callback: CallbackQuery, settings: Settings, s
     await _answer_sales_report(
         callback,
         report_user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fin:sales:today")
+async def finance_today_sales_callback(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.message is None:
+        await callback.answer()
+        return
+    if not await _is_primary_delegated_admin(user_id=callback.from_user.id, settings=settings, services=services):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    await _answer_today_sales(
+        callback.message,
+        actor_user_id=callback.from_user.id,
         settings=settings,
         services=services,
         lang=lang,

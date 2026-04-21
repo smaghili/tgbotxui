@@ -38,6 +38,7 @@ EDIT_SEARCH_RESULTS_PER_PAGE = 20
 def _delegated_profile_error_text(exc: Exception, lang: str | None) -> str | None:
     text = str(exc).lower()
     mapping = [
+        ("already exists on this inbound", "admin_duplicate_client_email"),
         ("max clients reached", "admin_delegated_limit_error_max_clients"),
         ("traffic is below", "admin_delegated_limit_error_traffic_min"),
         ("traffic is above", "admin_delegated_limit_error_traffic_max"),

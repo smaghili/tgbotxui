@@ -385,6 +385,51 @@ class Database:
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
+    async def list_scope_wallet_transactions(
+        self,
+        telegram_user_ids: List[int],
+        *,
+        operation_names: List[str] | None = None,
+        kind: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        if not telegram_user_ids:
+            return []
+
+        clauses = [f"telegram_user_id IN ({','.join('?' for _ in telegram_user_ids)})"]
+        params: List[Any] = list(telegram_user_ids)
+
+        if operation_names:
+            clauses.append(f"operation IN ({','.join('?' for _ in operation_names)})")
+            params.extend(operation_names)
+        if kind:
+            clauses.append("kind=?")
+            params.append(kind)
+        if created_at_from:
+            clauses.append("created_at>=?")
+            params.append(created_at_from)
+        if created_at_to:
+            clauses.append("created_at<?")
+            params.append(created_at_to)
+
+        params.append(max(1, int(limit)))
+        cur = await self.conn.execute(
+            f"""
+            SELECT id, telegram_user_id, actor_user_id, amount, balance_after, currency,
+                   kind, operation, status, reference_transaction_id, details, metadata_json, created_at
+            FROM wallet_transactions
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?;
+            """,
+            tuple(params),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
     async def list_recent_actor_audit_logs(
         self,
         *,

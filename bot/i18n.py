@@ -70,8 +70,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Root financial management:\n- Delegates",
     },
     "finance_delegated_title": {
-        "fa": "مدیریت مالی:\n- مشاهده اعتبار\n- نمایندگی‌ها\n- بازگشت",
-        "en": "Financial management:\n- View credit\n- Delegates\n- Back",
+        "fa": "مدیریت مالی:\n- مشاهده اعتبار\n- نمایندگی‌ها\n- فروش امروز\n- گزارش‌های امروز\n- بازگشت",
+        "en": "Financial management:\n- View credit\n- Delegates\n- Today's sales\n- Today's reports\n- Back",
     },
     "finance_wallet_manage": {"fa": "👛 کیف پول کاربران", "en": "👛 User Wallets"},
     "finance_pricing_manage": {"fa": "💳 تنظیم قیمت کاربران", "en": "💳 User Pricing"},
@@ -79,6 +79,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "finance_my_sales_report": {"fa": "📈 گزارش فروش من", "en": "📈 My Sales Report"},
     "finance_view_credit": {"fa": "💰 مشاهده اعتبار", "en": "💰 View Credit"},
     "finance_delegates_list": {"fa": "👥 نمایندگی‌ها", "en": "👥 Delegates"},
+    "finance_today_sales": {"fa": "💵 فروش امروز", "en": "💵 Today's Sales"},
+    "finance_today_reports": {"fa": "🗒 گزارش‌های امروز", "en": "🗒 Today's Reports"},
     "finance_delegates_list_header": {"fa": "لیست نمایندگی‌ها:", "en": "Delegates list:"},
     "finance_enter_target": {
         "fa": "آیدی عددی یا @username کاربر را وارد کنید.",
@@ -132,6 +134,22 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}",
         "en": "\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}",
     },
+    "finance_today_sales_title": {
+        "fa": "فروش امروز",
+        "en": "Today's Sales",
+    },
+    "finance_today_sales_empty": {
+        "fa": "برای امروز فروش ثبت‌شده‌ای وجود ندارد.",
+        "en": "There are no sales recorded for today.",
+    },
+    "finance_amount_unknown": {
+        "fa": "نامشخص",
+        "en": "Unknown",
+    },
+    "finance_today_reports_soon": {
+        "fa": "بخش گزارش‌های امروز بعدا تکمیل می‌شود.",
+        "en": "Today's reports will be added later.",
+    },
     "finance_master_report_text": {
         "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nقیمت هر گیگ {basis_label}: {price_gb} {currency}\nتعداد کاربران: {clients}\nحجم تخصیص‌یافته: {allocated_gb} گیگ\nمبلغ کل فروش: {sale_amount} {currency}\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری: {debt_amount} {currency}",
         "en": "Overall financial report\n\nWallet: {balance} {currency}\nPer-GB {basis_label}: {price_gb} {currency}\nClients: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal sales: {sale_amount} {currency}\nConsumed traffic: {consumed_gb} GB\nDebt: {debt_amount} {currency}",
@@ -155,6 +173,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "finance_unlimited_not_allowed": {
         "fa": "برای مدیران فرعی تنظیم نامحدود مجاز نیست.",
         "en": "Unlimited values are not allowed for delegated admins.",
+    },
+    "admin_duplicate_client_email": {
+        "fa": "این نام کاربری/ایمیل از قبل در این اینباند وجود دارد.",
+        "en": "This client email already exists on this inbound.",
     },
 
     "status_fetch_error": {

@@ -499,6 +499,10 @@ class AdminProvisioningService:
         )
         if not allowed:
             raise ValueError("you do not have access to this inbound.")
+        existing_clients = await self.panel_service.list_inbound_clients(panel_id, inbound_id)
+        normalized_email = client_email.strip().lower()
+        if any(str(item.get("email") or "").strip().lower() == normalized_email for item in existing_clients):
+            raise ValueError("client email already exists on this inbound.")
         if not (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
             profile = await self.db.get_delegated_admin_profile(actor_user_id)
             max_clients = int(profile.get("max_clients") or 0)
