@@ -10,7 +10,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
-from bot.keyboards import finance_primary_delegated_keyboard, finance_root_delegated_keyboard, main_keyboard
+from bot.keyboards import (
+    finance_limited_delegated_keyboard,
+    finance_primary_delegated_keyboard,
+    finance_root_delegated_keyboard,
+    main_keyboard,
+)
 from bot.services.container import ServiceContainer
 from bot.states import FinanceStates
 
@@ -202,42 +207,6 @@ async def _format_today_sale_line(
     actor_name = await _actor_title(actor_user_id=actor_user_id, services=services)
     email = await _transaction_email(item, services=services)
     created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
-    amount = _format_amount(abs(int(item.get("amount") or 0)))
-    currency = str(item.get("currency") or "تومان")
-    traffic_gb = int(metadata.get("traffic_gb") or 0)
-    expiry_days = int(metadata.get("expiry_days") or 0)
-    amount_label = f"{amount} {currency}"
-    if actor_user_id == report_user_id or services.access_service.is_root_admin(actor_user_id, settings):
-        amount_label = t("finance_amount_unknown", lang)
-
-    if operation == "create_client":
-        return (
-            f"ساخت کاربر جدید {email} - {traffic_gb} گیگ - {expiry_days} روزه - "
-            f"توسط {actor_name} - در تاریخ {created_at} - قیمت {amount} {currency}"
-        )
-    return (
-        f"افزایش حجم کاربر {email} - {traffic_gb} گیگ - توسط {actor_name} - "
-        f"در تاریخ {created_at} - قیمت {amount} {currency}"
-    )
-
-
-async def _format_today_sale_line_clean(
-    item: dict,
-    *,
-    report_user_id: int,
-    settings: Settings,
-    services: ServiceContainer,
-    lang: str | None,
-) -> str:
-    try:
-        metadata = json.loads(item.get("metadata_json") or "{}")
-    except Exception:
-        metadata = {}
-    operation = str(item.get("operation") or "")
-    actor_user_id = int(item.get("actor_user_id") or item.get("telegram_user_id") or 0)
-    actor_name = await _actor_title(actor_user_id=actor_user_id, services=services)
-    email = await _transaction_email(item, services=services)
-    created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
     traffic_gb = int(metadata.get("traffic_gb") or 0)
     expiry_days = int(metadata.get("expiry_days") or 0)
     amount = _format_amount(abs(int(item.get("amount") or 0)))
@@ -265,10 +234,14 @@ async def _answer_today_sales(
     services: ServiceContainer,
     lang: str | None,
 ) -> None:
-    owner_ids = await services.admin_provisioning_service.financial_scope_user_ids(
-        actor_user_id=actor_user_id,
-        settings=settings,
-    )
+    if services.access_service.is_root_admin(actor_user_id, settings):
+        delegate_rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
+        owner_ids = sorted({actor_user_id, *[int(row["telegram_user_id"]) for row in delegate_rows]})
+    else:
+        owner_ids = await services.admin_provisioning_service.financial_scope_user_ids(
+            actor_user_id=actor_user_id,
+            settings=settings,
+        )
     if not owner_ids:
         await message.answer(t("finance_today_sales_empty", lang))
         return
@@ -286,7 +259,7 @@ async def _answer_today_sales(
         return
 
     lines = [
-        await _format_today_sale_line_clean(
+        await _format_today_sale_line(
             item,
             report_user_id=actor_user_id,
             settings=settings,
@@ -315,6 +288,40 @@ async def _is_primary_delegated_admin(
 ) -> bool:
     context = await services.access_service.get_admin_context(user_id, settings)
     return context.is_delegated_admin and context.delegated_scope == "full"
+
+
+async def _is_any_delegated_admin(
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+) -> bool:
+    return (await services.access_service.get_admin_context(user_id, settings)).is_delegated_admin
+
+
+async def _can_access_today_finance(
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+) -> bool:
+    if services.access_service.is_root_admin(user_id, settings):
+        return True
+    return await _is_any_delegated_admin(user_id=user_id, settings=settings, services=services)
+
+
+async def _finance_menu_text_and_keyboard(
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+):
+    if services.access_service.is_root_admin(user_id, settings):
+        return t("finance_root_delegate_menu", lang), finance_root_delegated_keyboard(lang)
+    if await _is_primary_delegated_admin(user_id=user_id, settings=settings, services=services):
+        return t("finance_delegated_title", lang), finance_primary_delegated_keyboard(lang)
+    return t("finance_limited_delegated_title", lang), finance_limited_delegated_keyboard(lang)
 
 
 def _display_title(user: dict | None, fallback_user_id: int) -> str:
@@ -457,19 +464,16 @@ async def manage_finance_menu(message: Message, settings: Settings, services: Se
     if await reject_if_not_any_admin(message, settings, services):
         return
     lang = await services.db.get_user_language(message.from_user.id)
-    if services.access_service.is_root_admin(message.from_user.id, settings):
-        await message.answer(
-            t("finance_root_delegate_menu", lang),
-            reply_markup=finance_root_delegated_keyboard(lang),
-        )
-        return
-    if await _is_primary_delegated_admin(user_id=message.from_user.id, settings=settings, services=services):
-        await message.answer(
-            t("finance_delegated_title", lang),
-            reply_markup=finance_primary_delegated_keyboard(lang),
-        )
-        return
-    await message.answer(t("finance_delegated_title", lang))
+    text, reply_markup = await _finance_menu_text_and_keyboard(
+        user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+    await message.answer(
+        text,
+        reply_markup=reply_markup,
+    )
 
 
 @router.message(F.text.in_(button_variants("finance_view_credit")))
@@ -492,7 +496,11 @@ async def finance_view_credit_message(message: Message, settings: Settings, serv
 async def finance_today_sales_message(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    if not await _is_primary_delegated_admin(user_id=message.from_user.id, settings=settings, services=services):
+    if not await _can_access_today_finance(
+        user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+    ):
         return
     lang = await services.db.get_user_language(message.from_user.id)
     await _answer_today_sales(
@@ -508,7 +516,11 @@ async def finance_today_sales_message(message: Message, settings: Settings, serv
 async def finance_today_reports_message(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    if not await _is_primary_delegated_admin(user_id=message.from_user.id, settings=settings, services=services):
+    if not await _can_access_today_finance(
+        user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+    ):
         return
     lang = await services.db.get_user_language(message.from_user.id)
     await message.answer(t("finance_today_reports_soon", lang))
@@ -715,7 +727,11 @@ async def finance_today_sales_callback(callback: CallbackQuery, settings: Settin
     if callback.message is None:
         await callback.answer()
         return
-    if not await _is_primary_delegated_admin(user_id=callback.from_user.id, settings=settings, services=services):
+    if not await _can_access_today_finance(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+    ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     lang = await services.db.get_user_language(callback.from_user.id)
@@ -990,3 +1006,4 @@ async def finance_pricing_history_keep(
         lang=lang,
     )
     await callback.answer()
+

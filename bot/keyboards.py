@@ -68,11 +68,30 @@ def finance_primary_delegated_keyboard(lang: str | None = None) -> ReplyKeyboard
     )
 
 
+def finance_limited_delegated_keyboard(lang: str | None = None) -> ReplyKeyboardMarkup:
+    lang = lang or get_current_lang()
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=btn("finance_today_sales", lang)),
+                KeyboardButton(text=btn("finance_today_reports", lang)),
+            ],
+            [KeyboardButton(text=btn("btn_back", lang))],
+        ],
+        resize_keyboard=True,
+        is_persistent=False,
+    )
+
+
 def finance_root_delegated_keyboard(lang: str | None = None) -> ReplyKeyboardMarkup:
     lang = lang or get_current_lang()
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=btn("finance_delegates_list", lang))],
+            [
+                KeyboardButton(text=btn("finance_delegates_list", lang)),
+                KeyboardButton(text=btn("finance_today_sales", lang)),
+            ],
+            [KeyboardButton(text=btn("finance_today_reports", lang))],
             [KeyboardButton(text=btn("btn_back", lang))],
         ],
         resize_keyboard=True,

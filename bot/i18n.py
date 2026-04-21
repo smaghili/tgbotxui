@@ -66,12 +66,16 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Financial management:\n- User wallets\n- User/admin pricing\n- Overall financial report",
     },
     "finance_root_delegate_menu": {
-        "fa": "مدیریت مالی مدیر اصلی:\n- نمایندگی‌ها",
-        "en": "Root financial management:\n- Delegates",
+        "fa": "مدیریت مالی مدیر اصلی:\n- نمایندگی‌ها\n- فروش امروز\n- گزارش‌های امروز",
+        "en": "Root financial management:\n- Delegates\n- Today's sales\n- Today's reports",
     },
     "finance_delegated_title": {
         "fa": "مدیریت مالی:\n- مشاهده اعتبار\n- نمایندگی‌ها\n- فروش امروز\n- گزارش‌های امروز\n- بازگشت",
         "en": "Financial management:\n- View credit\n- Delegates\n- Today's sales\n- Today's reports\n- Back",
+    },
+    "finance_limited_delegated_title": {
+        "fa": "مدیریت مالی:\n- فروش امروز\n- گزارش‌های امروز\n- بازگشت",
+        "en": "Financial management:\n- Today's sales\n- Today's reports\n- Back",
     },
     "finance_wallet_manage": {"fa": "👛 کیف پول کاربران", "en": "👛 User Wallets"},
     "finance_pricing_manage": {"fa": "💳 تنظیم قیمت کاربران", "en": "💳 User Pricing"},
