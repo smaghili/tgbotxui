@@ -211,12 +211,12 @@ async def _format_today_sale_line(
     traffic_gb = int(metadata.get("traffic_gb") or 0)
     expiry_days = int(metadata.get("expiry_days") or 0)
     amount = _format_amount(abs(int(item.get("amount") or 0)))
-    currency = str(item.get("currency") or "ØªÙˆÙ…Ø§Ù†")
+    currency = str(item.get("currency") or "تومان")
     amount_label = f"{amount} {currency}"
     row_label = str(row_number)
     traffic_label = str(traffic_gb)
     expiry_label = str(expiry_days)
-    if lang == "fa":
+    if lang != "en":
         row_label = to_persian_digits(row_label)
         traffic_label = to_persian_digits(traffic_label)
         expiry_label = to_persian_digits(expiry_label)
@@ -225,12 +225,12 @@ async def _format_today_sale_line(
 
     if operation == "create_client":
         return (
-            f"{row_label}. Ø³Ø§Ø®Øª Ú©Ø§Ø±Ø¨Ø± Ø¬Ø¯ÛŒØ¯ {email} - Ø­Ø¬Ù… {traffic_label} Ú¯ÛŒÚ¯ - "
-            f"{expiry_label} Ø±ÙˆØ²Ù‡ - ØªÙˆØ³Ø· {actor_name} - Ø¯Ø± ØªØ§Ø±ÛŒØ® {created_at} - Ù…Ø¨Ù„Øº {amount_label}"
+            f"{row_label}. ساخت کاربر جدید {email} - حجم {traffic_label} گیگ - "
+            f"{expiry_label} روزه - توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
         )
     return (
-        f"{row_label}. Ø§ÙØ²Ø§ÛŒØ´ Ø­Ø¬Ù… Ú©Ø§Ø±Ø¨Ø± {email} - Ø­Ø¬Ù… {traffic_label} Ú¯ÛŒÚ¯ - "
-        f"ØªÙˆØ³Ø· {actor_name} - Ø¯Ø± ØªØ§Ø±ÛŒØ® {created_at} - Ù…Ø¨Ù„Øº {amount_label}"
+        f"{row_label}. افزایش حجم کاربر {email} - حجم {traffic_label} گیگ - "
+        f"توسط {actor_name} - در تاریخ {created_at} - مبلغ {amount_label}"
     )
 
 
@@ -279,12 +279,12 @@ async def _answer_today_sales(
         for index, item in enumerate(rows, start=1)
     ]
     header = t("finance_today_sales_title", lang)
-    buffer = header
+    buffer = f"{header}\n"
     for line in lines:
-        candidate = f"{buffer}\\n\\n{line}" if buffer != header else f"{buffer}\\n{line}"
-        if len(candidate) > 3500 and buffer != header:
+        candidate = f"{buffer}\n{line}" if buffer.strip() != header else f"{header}\n\n{line}"
+        if len(candidate) > 3500 and buffer.strip() != header:
             await message.answer(buffer)
-            buffer = f"{header}\n{line}"
+            buffer = f"{header}\n\n{line}"
         else:
             buffer = candidate
     await message.answer(buffer)
