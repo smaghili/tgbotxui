@@ -8,8 +8,11 @@ from bot.services.usage_service import UsageService
 class DummyBot:
     def __init__(self) -> None:
         self.messages: list[tuple[int, str]] = []
+        self.fail_chat_ids: set[int] = set()
 
     async def send_message(self, chat_id: int, text: str) -> None:
+        if chat_id in self.fail_chat_ids:
+            raise RuntimeError(f"failed:{chat_id}")
         self.messages.append((chat_id, text))
 
 
@@ -18,6 +21,9 @@ class FakeDB:
         self.lang_by_user: dict[int, str] = {}
         self.bound_rows: list[dict] = []
         self.delegated_admins: dict[int, dict] = {}
+        self.audit_logs: list[dict] = []
+        self.pending_notifications: list[dict] = []
+        self.next_notification_id = 1
 
     async def get_user_language(self, telegram_user_id: int) -> str:
         return self.lang_by_user.get(telegram_user_id, "fa")
@@ -31,6 +37,61 @@ class FakeDB:
             for row in self.bound_rows
             if int(row["panel_id"]) == panel_id and str(row["client_email"]).lower() == client_email.lower()
         ]
+
+    async def enqueue_admin_activity_notification(
+        self,
+        *,
+        actor_user_id: int | None,
+        chat_id: int,
+        text: str,
+        next_attempt_at: int = 0,
+        last_error: str | None = None,
+    ) -> int:
+        row = {
+            "id": self.next_notification_id,
+            "actor_user_id": actor_user_id,
+            "chat_id": chat_id,
+            "text": text,
+            "attempts": 0,
+            "last_error": last_error,
+            "next_attempt_at": next_attempt_at,
+            "sent_at": None,
+        }
+        self.next_notification_id += 1
+        self.pending_notifications.append(row)
+        return int(row["id"])
+
+    async def add_audit_log(self, **kwargs) -> None:
+        self.audit_logs.append(kwargs)
+
+    async def list_due_admin_activity_notifications(self, *, now_ts: int, limit: int = 100) -> list[dict]:
+        rows = [
+            row for row in self.pending_notifications
+            if row["sent_at"] is None and int(row["next_attempt_at"]) <= now_ts
+        ]
+        return rows[:limit]
+
+    async def mark_admin_activity_notification_sent(self, *, notification_id: int, sent_at: int) -> None:
+        for row in self.pending_notifications:
+            if int(row["id"]) == notification_id:
+                row["sent_at"] = sent_at
+                row["attempts"] = int(row["attempts"]) + 1
+                row["last_error"] = None
+                return
+
+    async def mark_admin_activity_notification_failed(
+        self,
+        *,
+        notification_id: int,
+        last_error: str,
+        next_attempt_at: int,
+    ) -> None:
+        for row in self.pending_notifications:
+            if int(row["id"]) == notification_id:
+                row["attempts"] = int(row["attempts"]) + 1
+                row["last_error"] = last_error
+                row["next_attempt_at"] = next_attempt_at
+                return
 
 
 class FakePanelService:
@@ -192,3 +253,39 @@ async def test_admin_notifications_are_deduplicated_per_user() -> None:
     )
 
     assert [chat_id for chat_id, _ in bot.messages] == [88]
+
+
+@pytest.mark.asyncio
+async def test_failed_admin_activity_is_queued_for_retry() -> None:
+    db = FakeDB()
+    db.delegated_admins[555] = {"telegram_user_id": 555, "parent_user_id": 0}
+    service = UsageService(db=db, panel_service=FakePanelService(), timezone="Asia/Tehran", root_admin_ids={999})  # type: ignore[arg-type]
+    bot = DummyBot()
+    bot.fail_chat_ids = {999}
+    service.attach_bot(bot)  # type: ignore[arg-type]
+
+    await service.notify_admin_activity(actor_user_id=555, text="admin event")
+
+    assert bot.messages == []
+    assert len(db.pending_notifications) == 1
+    assert int(db.pending_notifications[0]["chat_id"]) == 999
+
+
+@pytest.mark.asyncio
+async def test_pending_admin_activity_notifications_are_flushed() -> None:
+    db = FakeDB()
+    service = UsageService(db=db, panel_service=FakePanelService(), timezone="Asia/Tehran", root_admin_ids={999})  # type: ignore[arg-type]
+    bot = DummyBot()
+    service.attach_bot(bot)  # type: ignore[arg-type]
+    notification_id = await db.enqueue_admin_activity_notification(
+        actor_user_id=555,
+        chat_id=999,
+        text="queued event",
+        next_attempt_at=0,
+    )
+
+    await service.flush_pending_admin_activity_notifications()
+
+    assert (999, "queued event") in bot.messages
+    row = next(item for item in db.pending_notifications if int(item["id"]) == notification_id)
+    assert row["sent_at"] is not None

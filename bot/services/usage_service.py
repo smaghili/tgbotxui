@@ -91,6 +91,62 @@ class UsageService:
             return False
         return True
 
+    async def _admin_activity_recipient_ids(self, actor_user_id: int) -> list[int]:
+        recipients = set(self.root_admin_ids)
+        delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
+        if delegated is None:
+            return sorted(recipients)
+        parent_user_id = int(delegated.get("parent_user_id") or 0)
+        seen_parents: set[int] = set()
+        while parent_user_id > 0 and parent_user_id not in seen_parents:
+            seen_parents.add(parent_user_id)
+            recipients.add(parent_user_id)
+            parent_row = await self.db.get_delegated_admin_by_user_id(parent_user_id)
+            if parent_row is None:
+                break
+            parent_user_id = int(parent_row.get("parent_user_id") or 0)
+        return sorted(recipients)
+
+    async def notify_admin_activity(self, *, actor_user_id: int, text: str) -> None:
+        for admin_id in await self._admin_activity_recipient_ids(actor_user_id):
+            if await self._send_chat_message(admin_id, text):
+                continue
+            await self.db.enqueue_admin_activity_notification(
+                actor_user_id=actor_user_id,
+                chat_id=admin_id,
+                text=text,
+                next_attempt_at=int(time.time()) + 30,
+                last_error="immediate_send_failed",
+            )
+            await self.db.add_audit_log(
+                actor_user_id=actor_user_id,
+                action="admin_activity_notification_queued",
+                target_type="admin",
+                target_id=str(admin_id),
+                success=False,
+                details="queued_for_retry",
+            )
+
+    async def flush_pending_admin_activity_notifications(self, *, limit: int = 100) -> None:
+        rows = await self.db.list_due_admin_activity_notifications(now_ts=int(time.time()), limit=limit)
+        for row in rows:
+            notification_id = int(row["id"])
+            chat_id = int(row["chat_id"])
+            text = str(row.get("text") or "")
+            attempts = int(row.get("attempts") or 0)
+            if await self._send_chat_message(chat_id, text):
+                await self.db.mark_admin_activity_notification_sent(
+                    notification_id=notification_id,
+                    sent_at=int(time.time()),
+                )
+                continue
+            backoff_seconds = min(1800, 30 * (2 ** min(attempts, 5)))
+            await self.db.mark_admin_activity_notification_failed(
+                notification_id=notification_id,
+                last_error="retry_send_failed",
+                next_attempt_at=int(time.time()) + backoff_seconds,
+            )
+
     async def _manager_chat_ids_for_service(
         self,
         *,
@@ -566,6 +622,11 @@ class UsageService:
         except Exception:
             had_error = True
             logger.exception("failed to cleanup depleted clients")
+        try:
+            await self.flush_pending_admin_activity_notifications()
+        except Exception:
+            had_error = True
+            logger.exception("failed to flush admin activity notifications")
         SYNC_RUNS.labels(result="error" if had_error else "ok").inc()
         await self.refresh_cardinality_metrics()
 

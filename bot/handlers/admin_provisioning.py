@@ -765,15 +765,6 @@ async def _finish_create_user(
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         return
-    await _send_config_bundle(
-        message,
-        config_name=result["email"],
-        total_gb=int(data["create_total_gb"]),
-        expiry_days=int(data["create_expiry_days"]),
-        vless_uri=result["vless_uri"],
-        sub_url=result["sub_url"],
-        lang=lang,
-    )
     panel_name, inbound_name = await _panel_inbound_names(
         services,
         panel_id=int(result["panel_id"]),
@@ -792,6 +783,15 @@ async def _finish_create_user(
             t("admin_activity_detail_amount_gb", lang, value=int(data["create_total_gb"])),
             t("admin_activity_detail_amount_days", lang, value=int(data["create_expiry_days"])),
         ],
+    )
+    await _send_config_bundle(
+        message,
+        config_name=result["email"],
+        total_gb=int(data["create_total_gb"]),
+        expiry_days=int(data["create_expiry_days"]),
+        vless_uri=result["vless_uri"],
+        sub_url=result["sub_url"],
+        lang=lang,
     )
     await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
 
@@ -1688,7 +1688,6 @@ async def edit_config_delete_yes(callback: CallbackQuery, settings: Settings, se
         return
     before = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     await services.panel_service.delete_client(panel_id, inbound_id, client_uuid)
-    await callback.message.edit_text(t("admin_edit_deleted", lang))
     panel_name, inbound_name = await _panel_inbound_names(services, panel_id=panel_id, inbound_id=inbound_id)
     await _notify_admin_activity(
         callback,
@@ -1700,4 +1699,5 @@ async def edit_config_delete_yes(callback: CallbackQuery, settings: Settings, se
         panel=panel_name,
         inbound=inbound_name,
     )
+    await callback.message.edit_text(t("admin_edit_deleted", lang))
     await callback.answer()

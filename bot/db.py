@@ -1010,6 +1010,83 @@ class Database:
         )
         await self.conn.commit()
 
+    async def enqueue_admin_activity_notification(
+        self,
+        *,
+        actor_user_id: int | None,
+        chat_id: int,
+        text: str,
+        next_attempt_at: int = 0,
+        last_error: str | None = None,
+    ) -> int:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            INSERT INTO admin_activity_notifications (
+                actor_user_id, chat_id, text, attempts, last_error, next_attempt_at
+            )
+            VALUES (?, ?, ?, 0, ?, ?);
+            """,
+            (actor_user_id, chat_id, text, last_error, int(next_attempt_at)),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid)
+
+    async def list_due_admin_activity_notifications(
+        self,
+        *,
+        now_ts: int,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, actor_user_id, chat_id, text, attempts, last_error, next_attempt_at, sent_at, created_at
+            FROM admin_activity_notifications
+            WHERE sent_at IS NULL AND next_attempt_at <= ?
+            ORDER BY id ASC
+            LIMIT ?;
+            """,
+            (int(now_ts), max(1, int(limit))),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def mark_admin_activity_notification_sent(
+        self,
+        *,
+        notification_id: int,
+        sent_at: int,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            UPDATE admin_activity_notifications
+            SET sent_at=?, attempts=attempts + 1, last_error=NULL
+            WHERE id=?;
+            """,
+            (int(sent_at), notification_id),
+        )
+        await self.conn.commit()
+
+    async def mark_admin_activity_notification_failed(
+        self,
+        *,
+        notification_id: int,
+        last_error: str,
+        next_attempt_at: int,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            UPDATE admin_activity_notifications
+            SET attempts=attempts + 1, last_error=?, next_attempt_at=?
+            WHERE id=?;
+            """,
+            (last_error, int(next_attempt_at), notification_id),
+        )
+        await self.conn.commit()
+
     async def count_panels(self) -> int:
         assert self.conn is not None
         cur = await self.conn.execute("SELECT COUNT(*) AS cnt FROM panels;")
