@@ -199,6 +199,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "سرویسی به اکانت شما متصل نشده است. برای اتصال با ادمین هماهنگ کنید.",
         "en": "No service is connected to your account. Contact admin to bind a service.",
     },
+    "status_choose_service": {
+        "fa": "لطفا یکی از سرویس های خود را انتخاب کنید.",
+        "en": "Please select one of your services.",
+    },
     "status_invalid_id": {"fa": "شناسه نامعتبر است.", "en": "Invalid ID."},
     "status_not_found": {"fa": "سرویس پیدا نشد.", "en": "Service not found."},
     "status_no_access": {"fa": "شما به این سرویس دسترسی ندارید.", "en": "You do not have access to this service."},

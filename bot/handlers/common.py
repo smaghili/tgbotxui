@@ -4,7 +4,7 @@ import asyncio
 import logging
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
@@ -90,6 +90,51 @@ def _status_rotate_confirm_keyboard(service_id: int, lang: str) -> InlineKeyboar
     return yes_no_inline_keyboard(f"status_rotate_yes:{service_id}", f"status_rotate_no:{service_id}", lang)
 
 
+def _status_services_choice_keyboard(service_rows: list[dict], lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for row in service_rows:
+        service_id = int(row["id"])
+        title = str(row.get("service_name") or row.get("client_email") or service_id).strip() or str(service_id)
+        rows.append([inline_button(title[:48], f"status_show:{service_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_status_for_service_row(
+    message: Message,
+    *,
+    row: dict,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str,
+) -> None:
+    card = None
+    try:
+        detail = await services.panel_service.get_client_detail(
+            int(row["panel_id"]),
+            int(row["inbound_id"] or 0),
+            str(row["client_id"] or ""),
+        )
+        card = format_client_detail(detail, settings.timezone, lang)
+    except Exception:
+        pass
+
+    if card is None:
+        try:
+            status_messages = await services.usage_service.get_user_status_messages(int(row["telegram_user_id"]), force_refresh=False)
+            service_rows = await services.db.get_user_services(int(row["telegram_user_id"]))
+            for idx, service_row in enumerate(service_rows):
+                if int(service_row["id"]) == int(row["id"]) and idx < len(status_messages):
+                    card = status_messages[idx]
+                    break
+        except Exception:
+            logger.exception("failed to fallback to cached service status", extra={"service_id": row.get("id")})
+
+    if card is None:
+        raise ValueError(t("status_not_found", lang))
+
+    await message.answer(card, reply_markup=_status_service_keyboard(int(row["id"]), lang))
+
+
 async def _send_service_status(
     message: Message,
     *,
@@ -163,22 +208,19 @@ async def _send_service_status(
         target_type="user_service",
         success=True,
     )
-    for idx, card in enumerate(status_messages):
-        if idx < len(service_rows):
-            row = service_rows[idx]
-            try:
-                detail = await services.panel_service.get_client_detail(
-                    int(row["panel_id"]),
-                    int(row["inbound_id"] or 0),
-                    str(row["client_id"] or ""),
-                )
-                card = format_client_detail(detail, settings.timezone, lang)
-            except Exception:
-                pass
+    if len(service_rows) > 1:
         await message.answer(
-            card,
-            reply_markup=_status_service_keyboard(int(service_rows[idx]["id"]), lang) if idx < len(service_rows) else None,
+            t("status_choose_service", lang),
+            reply_markup=_status_services_choice_keyboard(service_rows, lang),
         )
+        return
+    await _render_status_for_service_row(
+        message,
+        row=service_rows[0],
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
 
 
 @router.message(CommandStart())
@@ -286,6 +328,38 @@ async def rotate_uuid_from_status(callback: CallbackQuery, settings: Settings, s
         t("status_rotate_confirm", lang),
         reply_markup=_status_rotate_confirm_keyboard(service_id, lang),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("status_show:"))
+async def show_status_service(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    lang = await _user_lang(services, callback.from_user.id)
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    try:
+        service_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("status_invalid_id", lang), show_alert=True)
+        return
+    row = await services.db.get_user_service_by_id(service_id)
+    if row is None:
+        await callback.answer(t("status_not_found", lang), show_alert=True)
+        return
+    if int(row["telegram_user_id"]) != callback.from_user.id:
+        await callback.answer(t("status_no_access", lang), show_alert=True)
+        return
+    try:
+        await _render_status_for_service_row(
+            callback.message,
+            row=row,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+    except Exception as exc:
+        await callback_error_alert(callback, exc, lang)
+        return
     await callback.answer()
 
 
