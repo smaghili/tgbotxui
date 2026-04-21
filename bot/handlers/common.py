@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -22,10 +23,15 @@ from .config_bundle import send_existing_config_bundle_for_email, send_rotation_
 
 router = Router(name="common")
 logger = logging.getLogger(__name__)
+STATUS_AUTOBIND_COOLDOWN_SECONDS = 15
 
 
 def _is_admin(user_id: int, settings: Settings) -> bool:
     return user_id in settings.admin_ids
+
+
+def _status_autobind_cache_key(user_id: int) -> str:
+    return f"status_autobind_last:{user_id}"
 
 
 async def _user_lang(services: ServiceContainer, user_id: int) -> str:
@@ -153,8 +159,16 @@ async def _send_service_status(
             username=message.from_user.username,
             is_admin=_is_admin(message.from_user.id, settings),
         )
-        existing = await services.db.get_user_services(user_id)
-        if not existing:
+        existing_services = await services.db.get_user_services(user_id)
+        should_autobind = not existing_services
+        if not should_autobind:
+            last_run_raw = await services.db.get_app_setting(_status_autobind_cache_key(user_id), "0")
+            try:
+                last_run_ts = int(last_run_raw or "0")
+            except ValueError:
+                last_run_ts = 0
+            should_autobind = int(time.time()) - last_run_ts >= STATUS_AUTOBIND_COOLDOWN_SECONDS
+        if should_autobind:
             try:
                 await services.panel_service.bind_services_for_telegram_identity(
                     telegram_user_id=user_id,
@@ -162,6 +176,8 @@ async def _send_service_status(
                 )
             except Exception:
                 logger.exception("auto-bind by telegram identity failed", extra={"telegram_user_id": user_id})
+            else:
+                await services.db.set_app_setting(_status_autobind_cache_key(user_id), str(int(time.time())))
     try:
         status_messages = await services.usage_service.get_user_status_messages(user_id, force_refresh=force_refresh)
         service_rows = await services.db.get_user_services(user_id)
