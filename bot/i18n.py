@@ -35,6 +35,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "btn_sync_usage": {"fa": "همگام‌سازی مصرف", "en": "Sync Usage"},
     "btn_rotate_link": {"fa": "تغییر کانفیگ ⚙️", "en": "Change Config ⚙️"},
     "btn_get_config": {"fa": "دریافت کانفیگ 📥", "en": "Get Config 📥"},
+    "btn_refresh_config": {"fa": "🔄 بروزرسانی", "en": "🔄 Refresh"},
     "btn_yes": {"fa": "بله", "en": "Yes"},
     "btn_no": {"fa": "خیر", "en": "No"},
     "btn_confirm": {"fa": "تایید", "en": "Confirm"},

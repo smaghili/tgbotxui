@@ -477,6 +477,9 @@ def edit_config_actions_keyboard(
     toggle_text = t("admin_toggle_on", lang) if enabled else t("admin_toggle_off", lang)
     rows = [
         [
+            inline_button(t("btn_refresh_config", lang), f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}"),
+        ],
+        [
             inline_button(t("btn_rotate_link", lang), f"pec:rotate_ask:{panel_id}:{inbound_id}:{client_uuid}"),
             inline_button(t("btn_get_config", lang), f"pec:get_config:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
