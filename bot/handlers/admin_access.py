@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -12,9 +11,28 @@ from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
 from bot.states import DelegatedAdminStates
-from bot.utils import relative_remaining_time, to_jalali_datetime, to_local_date, to_persian_digits
+from bot.utils import (
+    format_db_timestamp as shared_format_db_timestamp,
+    format_gb_exact as shared_format_gb_exact,
+    parse_detail_pairs,
+    relative_remaining_time,
+    to_local_date,
+    to_persian_digits,
+)
 
 router = Router(name="admin_access")
+
+
+def _format_gb_exact(value: float | int) -> str:
+    return shared_format_gb_exact(value)
+
+
+def _format_db_timestamp(raw: str | None, *, settings: Settings, lang: str | None) -> str:
+    return shared_format_db_timestamp(raw, tz_name=settings.timezone, lang=lang)
+
+
+def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
+    return parse_detail_pairs(raw)
 
 
 async def _reject_if_not_full_admin(message: Message, settings: Settings, services: ServiceContainer) -> bool:
@@ -187,37 +205,8 @@ def _format_amount(value: int) -> str:
     return f"{value:,}"
 
 
-def _format_gb_exact(value: float | int) -> str:
-    formatted = f"{float(value):.2f}".rstrip("0").rstrip(".")
-    return formatted or "0"
-
-
 def _value_or_unlimited(value: int, lang: str | None) -> str:
     return t("admin_delegated_unlimited", lang) if value <= 0 else str(value)
-
-
-def _format_db_timestamp(raw: str | None, *, settings: Settings, lang: str | None) -> str:
-    if not raw:
-        return t("na_value", lang)
-    try:
-        dt = datetime.fromisoformat(str(raw).replace(" ", "T"))
-    except ValueError:
-        return str(raw)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    if lang == "fa":
-        return to_jalali_datetime(int(dt.timestamp()), settings.timezone)
-    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for part in str(raw or "").split(";"):
-        if "=" not in part:
-            continue
-        key, value = part.split("=", 1)
-        result[key.strip()] = value.strip()
-    return result
 
 
 def _wallet_operation_title(operation: str, email: str | None) -> str:

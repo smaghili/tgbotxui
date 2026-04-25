@@ -8,6 +8,7 @@ from typing import Any, Dict, Awaitable, Callable
 from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 from bot.db import Database
+from bot.utils import inbound_display_name
 from bot.services.crypto import CryptoService
 from bot.services.xui_client import (
     PanelConnection,
@@ -158,6 +159,27 @@ class PanelService:
         if isinstance(obj, dict):
             return [obj]
         return []
+
+    @staticmethod
+    def inbound_label(inbound: dict[str, Any]) -> str:
+        return inbound_display_name(inbound)
+
+    async def panel_inbound_names(self, panel_id: int, inbound_id: int | None) -> tuple[str, str]:
+        panel_name = str(panel_id)
+        inbound_name = "-" if inbound_id is None else f"inbound-{inbound_id}"
+        panel = await self.db.get_panel(panel_id)
+        if panel is not None:
+            panel_name = str(panel.get("name") or panel_id)
+        if inbound_id is None:
+            return panel_name, inbound_name
+        try:
+            inbounds = await self.list_inbounds(panel_id)
+        except Exception:
+            return panel_name, inbound_name
+        inbound = next((item for item in inbounds if int(item.get("id") or 0) == inbound_id), None)
+        if inbound is not None:
+            inbound_name = self.inbound_label(inbound)
+        return panel_name, inbound_name
 
     async def list_online_clients(
         self,
@@ -353,13 +375,14 @@ class PanelService:
         rows.sort(key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"]))
         return rows
 
-    async def cleanup_depleted_clients(self, delete_after_hours: int) -> dict[str, int]:
+    async def cleanup_depleted_clients(self, delete_after_hours: int) -> dict[str, Any]:
         now = int(time.time())
         threshold_seconds = max(0, int(delete_after_hours)) * 3600
         scanned = 0
         deleted = 0
         failed = 0
         skipped_no_last_online = 0
+        deleted_clients: list[dict[str, Any]] = []
 
         for panel in await self.list_panels():
             panel_id = int(panel["id"])
@@ -382,6 +405,7 @@ class PanelService:
                     expiry = parse_epoch(detail.get("expiry"))
                     is_depleted = total > 0 and used >= total
                     is_expired = bool(expiry and expiry <= now)
+                    delete_reason = "expired" if is_expired else "depleted"
                 except Exception:
                     failed += 1
                     continue
@@ -399,12 +423,6 @@ class PanelService:
                 try:
                     await self.delete_client(panel_id, inbound_id, client_uuid)
                     if email:
-                        await self.db.mark_user_services_deleted_by_panel_email(
-                            panel_id=panel_id,
-                            client_email=email,
-                            status="deleted",
-                            last_synced_at=now,
-                        )
                         await self.db.add_audit_log(
                             actor_user_id=None,
                             action="auto_cleanup_deleted_client",
@@ -413,6 +431,17 @@ class PanelService:
                             success=True,
                             details=f"panel={panel_id};inbound={inbound_id};email={email}",
                         )
+                    deleted_clients.append(
+                        {
+                            "panel_id": panel_id,
+                            "panel_name": str(panel.get("name") or panel_id),
+                            "inbound_id": inbound_id,
+                            "inbound_name": (await self.panel_inbound_names(panel_id, inbound_id))[1],
+                            "client_uuid": client_uuid,
+                            "email": email or str(detail.get("email") or client_uuid),
+                            "reason": delete_reason,
+                        }
+                    )
                 except Exception:
                     failed += 1
                     continue
@@ -423,6 +452,7 @@ class PanelService:
             "deleted": deleted,
             "failed": failed,
             "skipped_no_last_online": skipped_no_last_online,
+            "deleted_clients": deleted_clients,
         }
 
     async def bind_services_for_telegram_identity(

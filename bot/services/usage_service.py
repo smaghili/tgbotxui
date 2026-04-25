@@ -91,8 +91,52 @@ class UsageService:
             return False
         return True
 
+    async def _is_active_delegated_admin_user(self, user_id: int) -> bool:
+        delegated = await self.db.get_delegated_admin_by_user_id(user_id)
+        if delegated is None:
+            return False
+        profile = await self.db.get_delegated_admin_profile(user_id)
+        if int(profile.get("is_active") or 0) != 1:
+            return False
+        expires_at = int(profile.get("expires_at") or 0)
+        return not (expires_at > 0 and expires_at <= int(time.time()))
+
+    async def is_active_delegated_admin_user(self, user_id: int) -> bool:
+        return await self._is_active_delegated_admin_user(user_id)
+
+    async def _active_delegated_admin_ids(self) -> list[int]:
+        delegated_rows = await self.db.list_delegated_admin_access_rows(manager_user_id=None)
+        delegated_ids = {
+            int(row["telegram_user_id"])
+            for row in delegated_rows
+            if int(row.get("telegram_user_id") or 0) > 0
+        }
+        result: list[int] = []
+        for delegated_user_id in sorted(delegated_ids):
+            if await self._is_active_delegated_admin_user(delegated_user_id):
+                result.append(delegated_user_id)
+        return result
+
+    async def _queue_admin_notification(
+        self,
+        *,
+        actor_user_id: int | None,
+        chat_id: int,
+        text: str,
+        last_error: str,
+    ) -> int:
+        return await self.db.enqueue_admin_activity_notification(
+            actor_user_id=actor_user_id,
+            chat_id=chat_id,
+            text=text,
+            next_attempt_at=int(time.time()) + 30,
+            last_error=last_error,
+        )
+
     async def _admin_activity_recipient_ids(self, actor_user_id: int) -> list[int]:
         recipients = set(self.root_admin_ids)
+        if not await self._is_active_delegated_admin_user(actor_user_id):
+            return sorted(recipients)
         delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
         if delegated is None:
             return sorted(recipients)
@@ -100,7 +144,8 @@ class UsageService:
         seen_parents: set[int] = set()
         while parent_user_id > 0 and parent_user_id not in seen_parents:
             seen_parents.add(parent_user_id)
-            recipients.add(parent_user_id)
+            if await self._is_active_delegated_admin_user(parent_user_id):
+                recipients.add(parent_user_id)
             parent_row = await self.db.get_delegated_admin_by_user_id(parent_user_id)
             if parent_row is None:
                 break
@@ -138,11 +183,10 @@ class UsageService:
                     details="delivery=immediate",
                 )
                 continue
-            notification_id = await self.db.enqueue_admin_activity_notification(
+            notification_id = await self._queue_admin_notification(
                 actor_user_id=actor_user_id,
                 chat_id=admin_id,
                 text=text,
-                next_attempt_at=int(time.time()) + 30,
                 last_error="immediate_send_failed",
             )
             await self._audit_admin_activity_delivery(
@@ -152,6 +196,36 @@ class UsageService:
                 success=False,
                 details=f"delivery=immediate_failed;notification_id={notification_id}",
             )
+
+    async def _auto_cleanup_recipient_ids(self) -> list[int]:
+        recipients = set(self.root_admin_ids)
+        recipients.update(await self._active_delegated_admin_ids())
+        return sorted(recipients)
+
+    async def _notify_auto_cleanup_deleted_clients(self, *, deleted_clients: list[dict], hours: int) -> None:
+        if not deleted_clients:
+            return
+        recipient_ids = await self._auto_cleanup_recipient_ids()
+        if not recipient_ids:
+            return
+        for deleted_client in deleted_clients:
+            text = t(
+                "admin_auto_cleanup_deleted_notification",
+                "fa",
+                email=str(deleted_client.get("email") or "-"),
+                hours=hours,
+                panel=str(deleted_client.get("panel_name") or deleted_client.get("panel_id") or "-"),
+                inbound=str(deleted_client.get("inbound_name") or deleted_client.get("inbound_id") or "-"),
+            )
+            for admin_id in recipient_ids:
+                if await self._send_chat_message(admin_id, text):
+                    continue
+                await self._queue_admin_notification(
+                    actor_user_id=None,
+                    chat_id=admin_id,
+                    text=text,
+                    last_error="auto_cleanup_notification_send_failed",
+                )
 
     async def flush_pending_admin_activity_notifications(self, *, limit: int = 100) -> None:
         rows = await self.db.list_due_admin_activity_notifications(now_ts=int(time.time()), limit=limit)
@@ -208,29 +282,15 @@ class UsageService:
                 comment = str(detail.get("comment") or "").strip()
                 if comment.isdigit():
                     delegated_id = int(comment)
-                    delegated = await self.db.get_delegated_admin_by_user_id(delegated_id)
-                    if delegated is not None:
+                    if await self._is_active_delegated_admin_user(delegated_id):
                         return [delegated_id]
         return sorted(self.root_admin_ids)
 
     async def _service_location_labels(self, panel_id: int, inbound_id: int | None) -> tuple[str, str]:
-        panel_label = str(panel_id)
-        inbound_label = str(inbound_id) if inbound_id is not None else "-"
         try:
-            panel = await self.panel_service.get_panel(panel_id)
+            return await self.panel_service.panel_inbound_names(panel_id, inbound_id)
         except Exception:
-            panel = None
-        if panel is not None:
-            panel_label = str(panel.get("name") or panel_id)
-        if inbound_id is not None:
-            try:
-                inbounds = await self.panel_service.list_inbounds(panel_id)
-            except Exception:
-                inbounds = []
-            target = next((row for row in inbounds if int(row.get("id") or 0) == inbound_id), None)
-            if target is not None:
-                inbound_label = str(target.get("remark") or f"inbound-{inbound_id}")
-        return panel_label, inbound_label
+            return str(panel_id), "-" if inbound_id is None else f"inbound-{inbound_id}"
 
     async def _notify_user_about_threshold(
         self,
@@ -684,6 +744,10 @@ class UsageService:
         except ValueError:
             hours = self.depleted_delete_after_hours
         result = await self.panel_service.cleanup_depleted_clients(hours)
+        await self._notify_auto_cleanup_deleted_clients(
+            deleted_clients=list(result.get("deleted_clients") or []),
+            hours=hours,
+        )
         logger.info("depleted client cleanup finished", extra={"hours": hours, **result})
 
     async def refresh_cardinality_metrics(self) -> None:

@@ -12,20 +12,22 @@ from bot.i18n import button_variants, t
 from bot.pagination import chunk_buttons, paginate_window
 from bot.services.container import ServiceContainer
 from bot.states import ProvisioningStates
-from bot.utils import format_gb
+from bot.utils import build_admin_activity_notice, format_gb
 
 from .admin_shared import (
+    actor_display_name,
     answer_with_admin_menu,
     answer_with_cancel,
+    ensure_client_access,
     edit_config_actions_keyboard,
     format_client_detail,
     inline_button,
     normalize_tg_id,
     panel_select_keyboard,
     parse_client_callback,
-    notify_delegated_admin_activity,
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
+    render_client_detail,
     yes_no_inline_keyboard,
 )
 from .config_bundle import send_config_bundle_card, send_existing_config_bundle_for_email, send_rotation_preview_bundle_for_email
@@ -165,36 +167,6 @@ async def _send_config_bundle(
     )
 
 
-async def _render_edit_detail(
-    callback: CallbackQuery | Message,
-    *,
-    services: ServiceContainer,
-    settings: Settings,
-    panel_id: int,
-    inbound_id: int,
-    client_uuid: str,
-    lang: str | None,
-    back_callback: str | None = None,
-    back_text: str | None = None,
-) -> None:
-    detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    text = format_client_detail(detail, settings.timezone, lang)
-    markup = edit_config_actions_keyboard(
-        panel_id,
-        inbound_id,
-        client_uuid,
-        bool(detail.get("enabled")),
-        lang,
-        back_callback=back_callback,
-        back_text=back_text,
-    )
-    if isinstance(callback, CallbackQuery):
-        if callback.message is not None:
-            await callback.message.edit_text(text, reply_markup=markup)
-    else:
-        await callback.answer(text, reply_markup=markup)
-
-
 async def _ensure_inbound_access(
     *,
     user_id: int,
@@ -204,61 +176,18 @@ async def _ensure_inbound_access(
     inbound_id: int,
     client_uuid: str | None = None,
 ) -> bool:
-    if await services.access_service.can_access_inbound(
+    return await ensure_client_access(
         user_id=user_id,
         settings=settings,
+        services=services,
         panel_id=panel_id,
         inbound_id=inbound_id,
-    ):
-        return True
-    owner_filter = await services.access_service.owner_filter_for_user(user_id=user_id, settings=settings)
-    if owner_filter is None or not client_uuid:
-        return False
-    detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    return str(detail.get("comment") or "").strip() == str(owner_filter)
-
-
-def _actor_display_name(message_or_callback: Message | CallbackQuery) -> str:
-    user = message_or_callback.from_user if isinstance(message_or_callback, CallbackQuery) else message_or_callback.from_user
-    if user is None:
-        return "unknown"
-    if user.full_name:
-        return user.full_name
-    if user.username:
-        return f"@{user.username}"
-    return str(user.id)
+        client_uuid=client_uuid,
+    )
 
 
 def _resolved_client_email(before: dict, after: dict) -> str:
     return str(after.get("email") or before.get("email") or "")
-
-
-def _activity_details_block(details: list[str]) -> str:
-    if not details:
-        return ""
-    return "\n" + "\n".join(details)
-
-
-def _build_admin_activity_notice(
-    *,
-    lang: str | None,
-    actor: str,
-    action_key: str,
-    user: str,
-    panel: str,
-    inbound: str,
-    details: list[str] | None = None,
-) -> str:
-    return t(
-        "admin_activity_notify_template",
-        lang,
-        actor=actor,
-        action=t(action_key, lang),
-        user=user,
-        panel=panel,
-        inbound=inbound,
-        details=_activity_details_block(details or []),
-    )
 
 
 async def _notify_admin_activity(
@@ -273,14 +202,13 @@ async def _notify_admin_activity(
     inbound: str,
     details: list[str] | None = None,
 ) -> None:
-    await _notify_root_admins_if_delegated(
-        source,
+    await services.admin_provisioning_service.record_admin_activity(
+        actor_user_id=source.from_user.id,
         settings=settings,
-        services=services,
-        text=_build_admin_activity_notice(
+        text=build_admin_activity_notice(
             lang=lang,
-            actor=_actor_display_name(source),
-            action_key=action_key,
+            actor=actor_display_name(source),
+            action_text=t(action_key, lang),
             user=user,
             panel=panel,
             inbound=inbound,
@@ -305,41 +233,16 @@ def _delegated_min_create_error(
     return None
 
 
-async def _notify_root_admins_if_delegated(
-    source: Message | CallbackQuery,
-    *,
-    settings: Settings,
-    services: ServiceContainer,
-    text: str,
-) -> None:
-    await notify_delegated_admin_activity(
-        source,
-        settings=settings,
-        services=services,
-        text=text,
-    )
-
-
 async def _panel_inbound_names(
     services: ServiceContainer,
     *,
     panel_id: int,
     inbound_id: int,
 ) -> tuple[str, str]:
-    panel_name = str(panel_id)
-    inbound_name = str(inbound_id)
-    panel = await services.panel_service.get_panel(panel_id)
-    if panel is not None:
-        panel_name = str(panel.get("name") or panel_id)
     try:
-        inbounds = await services.panel_service.list_inbounds(panel_id)
-        inbound = next((item for item in inbounds if int(item.get("id") or 0) == inbound_id), None)
-        if inbound is not None:
-            remark = str(inbound.get("remark") or "").strip()
-            inbound_name = remark or f"inbound-{inbound_id}"
+        return await services.panel_service.panel_inbound_names(panel_id, inbound_id)
     except Exception:
-        pass
-    return panel_name, inbound_name
+        return str(panel_id), f"inbound-{inbound_id}"
 
 
 async def _restore_admin_menu(
@@ -486,7 +389,7 @@ async def _show_resolved_edit_target(
     back_callback: str | None = None,
     back_text: str | None = None,
 ) -> None:
-    await _render_edit_detail(
+    await render_client_detail(
         target,
         services=services,
         settings=settings,
@@ -968,7 +871,7 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
             client_uuid=client_uuid,
         )
         client_email = str(detail.get("email") or "").strip()
-        await _render_edit_detail(
+        await render_client_detail(
             callback,
             services=services,
             settings=settings,
@@ -1126,7 +1029,7 @@ async def edit_config_rotate_yes(callback: CallbackQuery, settings: Settings, se
             new_uuid=str(prepared["new_uuid"]),
             new_sub_id=str(prepared["new_sub_id"]),
         )
-        await _render_edit_detail(
+        await render_client_detail(
             callback,
             services=services,
             settings=settings,
@@ -1254,7 +1157,7 @@ async def edit_config_show_detail(callback: CallbackQuery, settings: Settings, s
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    await _render_edit_detail(
+    await render_client_detail(
         callback,
         services=services,
         settings=settings,
@@ -1350,7 +1253,7 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
         t("admin_edit_traffic_added", lang),
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
     )
-    await _render_edit_detail(
+    await render_client_detail(
         message,
         services=services,
         settings=settings,

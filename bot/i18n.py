@@ -830,6 +830,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "تنظیم حذف خودکار روی {hours} ساعت ذخیره شد.",
         "en": "Automatic cleanup is now set to {hours} hours.",
     },
+    "admin_auto_cleanup_deleted_notification": {
+        "fa": "حذف خودکار کاربر\nکاربر {email} به علت عدم تمدید و گذشت {hours} ساعت از آخرین آنلاین، حذف شد.\nپنل: {panel}\nاینباند: {inbound}",
+        "en": "Automatic user cleanup\nUser {email} was deleted due to non-renewal after {hours} hours since last online.\nPanel: {panel}\nInbound: {inbound}",
+    },
     "config_full_caption": {
         "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>\n\nلینک ساب:\n<code>{sub_url}</code>",
         "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>\n\nSubscription link:\n<code>{sub_url}</code>",

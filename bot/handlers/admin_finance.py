@@ -18,7 +18,12 @@ from bot.keyboards import (
 )
 from bot.services.container import ServiceContainer
 from bot.states import FinanceStates
-from bot.utils import to_persian_digits
+from bot.utils import (
+    format_db_timestamp as shared_format_db_timestamp,
+    format_gb_exact as shared_format_gb_exact,
+    parse_detail_pairs,
+    to_persian_digits,
+)
 
 from .admin_shared import answer_with_cancel, reject_callback_if_not_any_admin, reject_if_not_any_admin
 
@@ -98,34 +103,16 @@ def _format_amount(value: int) -> str:
     return f"{value:,}"
 
 
-def _format_gb_exact(value: float | int) -> str:
-    formatted = f"{float(value):.2f}".rstrip("0").rstrip(".")
-    return formatted or "0"
-
-
-def _parse_db_timestamp(raw: str) -> datetime | None:
-    value = str(raw or "").strip()
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value.replace(" ", "T"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
 def _format_db_timestamp(raw: str, *, settings: Settings, lang: str | None) -> str:
-    dt = _parse_db_timestamp(raw)
-    if dt is None:
-        return raw
-    local_dt = dt.astimezone(ZoneInfo(settings.timezone))
-    if lang == "fa":
-        from bot.utils import to_jalali_datetime
+    return shared_format_db_timestamp(raw, tz_name=settings.timezone, lang=lang)
 
-        return to_jalali_datetime(int(local_dt.timestamp()), settings.timezone)
-    return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def _format_gb_exact(value: float | int) -> str:
+    return shared_format_gb_exact(value)
+
+
+def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
+    return parse_detail_pairs(raw)
 
 
 def _today_utc_range_strings(tz_name: str) -> tuple[str, str]:
@@ -181,14 +168,6 @@ async def _transaction_email(
     return str(detail.get("email") or "-").strip() or "-"
 
 
-def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for part in str(raw or "").split(";"):
-        if "=" not in part:
-            continue
-        key, value = part.split("=", 1)
-        result[key.strip()] = value.strip()
-    return result
 
 
 def _parse_admin_activity_text(raw: str | None) -> dict[str, str | list[str]]:
@@ -321,18 +300,15 @@ async def _resolve_panel_inbound_names_from_details(
     panel_name = panel_raw or "-"
     inbound_name = inbound_raw or "-"
     if panel_raw.lstrip("-").isdigit():
-        panel = await services.panel_service.get_panel(int(panel_raw))
-        if panel is not None:
-            panel_name = str(panel.get("name") or panel_raw)
+        panel_id = int(panel_raw)
         if inbound_raw.lstrip("-").isdigit():
             try:
-                inbounds = await services.panel_service.list_inbounds(int(panel_raw))
-                inbound = next((item for item in inbounds if int(item.get("id") or 0) == int(inbound_raw)), None)
-                if inbound is not None:
-                    remark = str(inbound.get("remark") or "").strip()
-                    inbound_name = remark or f"inbound-{inbound_raw}"
+                return await services.panel_service.panel_inbound_names(panel_id, int(inbound_raw))
             except Exception:
-                pass
+                return panel_name, inbound_name
+        panel = await services.panel_service.get_panel(panel_id)
+        if panel is not None:
+            panel_name = str(panel.get("name") or panel_raw)
     return panel_name, inbound_name
 
 async def _format_today_sale_line(

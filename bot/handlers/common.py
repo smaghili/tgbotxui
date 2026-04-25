@@ -16,6 +16,7 @@ from .admin_shared import (
     callback_error_alert,
     format_client_detail,
     inline_button,
+    is_root_admin,
     two_button_inline_keyboard,
     yes_no_inline_keyboard,
 )
@@ -27,7 +28,7 @@ STATUS_AUTOBIND_COOLDOWN_SECONDS = 15
 
 
 def _is_admin(user_id: int, settings: Settings) -> bool:
-    return user_id in settings.admin_ids
+    return is_root_admin(user_id, settings)
 
 
 def _status_autobind_cache_key(user_id: int) -> str:

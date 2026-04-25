@@ -11,6 +11,7 @@ from bot.services.container import ServiceContainer
 from bot.states import ClientManageStates
 from .admin_shared import (
     action_panel_select_keyboard,
+    ensure_client_access,
     answer_with_admin_menu,
     answer_with_cancel,
     back_to_detail_keyboard,
@@ -38,7 +39,6 @@ from .admin_shared import (
     single_button_inline_keyboard,
     panel_bulk_actions_keyboard,
     normalize_tg_id,
-    notify_delegated_admin_activity,
     users_clients_keyboard,
     users_panel_select_keyboard,
 )
@@ -92,25 +92,14 @@ async def _ensure_client_scope(
     inbound_id: int,
     client_uuid: str,
 ) -> bool:
-    if await services.access_service.can_access_inbound(
+    return await ensure_client_access(
         user_id=user_id,
         settings=settings,
+        services=services,
         panel_id=panel_id,
         inbound_id=inbound_id,
-    ):
-        return True
-    owner_filter = await services.access_service.owner_filter_for_user(user_id=user_id, settings=settings)
-    if owner_filter is None:
-        return False
-    detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    return str(detail.get("comment") or "").strip() == str(owner_filter)
-
-
-def _actor_display_name(source: Message | CallbackQuery) -> str:
-    user = source.from_user
-    if user is None:
-        return "unknown"
-    return user.full_name or (f"@{user.username}" if user.username else str(user.id))
+        client_uuid=client_uuid,
+    )
 
 
 async def _panel_inbound_names(
@@ -119,34 +108,10 @@ async def _panel_inbound_names(
     panel_id: int,
     inbound_id: int,
 ) -> tuple[str, str]:
-    panel_name = str(panel_id)
-    inbound_name = str(inbound_id)
-    panel = await services.panel_service.get_panel(panel_id)
-    if panel is not None:
-        panel_name = str(panel.get("name") or panel_id)
     try:
-        inbounds = await services.panel_service.list_inbounds(panel_id)
-        inbound = next((item for item in inbounds if int(item.get("id") or 0) == inbound_id), None)
-        if inbound is not None:
-            inbound_name = inbound_display_name(inbound)
+        return await services.panel_service.panel_inbound_names(panel_id, inbound_id)
     except Exception:
-        pass
-    return panel_name, inbound_name
-
-
-async def _notify_root_admins_if_delegated(
-    source: Message | CallbackQuery,
-    *,
-    settings: Settings,
-    services: ServiceContainer,
-    text: str,
-) -> None:
-    await notify_delegated_admin_activity(
-        source,
-        settings=settings,
-        services=services,
-        text=text,
-    )
+        return str(panel_id), f"inbound-{inbound_id}"
 
 
 async def _resolve_panel_or_prompt(

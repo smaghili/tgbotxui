@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 import jdatetime
@@ -57,6 +58,96 @@ def format_bytes(value: int, lang: str = "fa") -> str:
     if lang == "fa":
         amount = to_persian_digits(amount)
     return f"{amount} {unit}"
+
+
+def format_gb_exact(value: float | int) -> str:
+    formatted = f"{float(value):.2f}".rstrip("0").rstrip(".")
+    return formatted or "0"
+
+
+def parse_detail_pairs(raw: str | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for part in str(raw or "").split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result
+
+
+def parse_db_timestamp(raw: str | None) -> datetime | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace(" ", "T"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def format_db_timestamp(raw: str | None, *, tz_name: str, lang: str | None) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return t("na_value", lang)
+    dt = parse_db_timestamp(value)
+    if dt is None:
+        return value
+    local_dt = dt.astimezone(ZoneInfo(tz_name))
+    if lang == "fa":
+        return to_jalali_datetime(int(local_dt.timestamp()), tz_name)
+    return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def inbound_display_name(inbound: Mapping[str, Any]) -> str:
+    remark = str(inbound.get("remark") or "").strip()
+    if remark:
+        return remark
+    port = inbound.get("port")
+    if port:
+        return f"inbound-{port}"
+    inbound_id = inbound.get("id")
+    return f"inbound-{inbound_id}" if inbound_id is not None else "inbound-unknown"
+
+
+def display_name_from_parts(*, full_name: str | None, username: str | None, fallback: str | int) -> str:
+    full_name_value = str(full_name or "").strip()
+    if full_name_value:
+        return full_name_value
+    username_value = str(username or "").strip().lstrip("@")
+    if username_value:
+        return f"@{username_value}"
+    return str(fallback)
+
+
+def activity_details_block(details: list[str] | None) -> str:
+    if not details:
+        return ""
+    return "\n" + "\n".join(details)
+
+
+def build_admin_activity_notice(
+    *,
+    lang: str | None,
+    actor: str,
+    action_text: str,
+    user: str,
+    panel: str,
+    inbound: str,
+    details: list[str] | None = None,
+) -> str:
+    return t(
+        "admin_activity_notify_template",
+        lang,
+        actor=actor,
+        action=action_text,
+        user=user,
+        panel=panel,
+        inbound=inbound,
+        details=activity_details_block(details),
+    )
 
 
 def to_jalali_date(epoch_seconds: int | None, tz_name: str) -> str:

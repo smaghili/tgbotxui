@@ -9,7 +9,16 @@ from bot.i18n import t
 from bot.keyboards import admin_keyboard, cancel_only_keyboard
 from bot.pagination import chunk_buttons, paginate_window
 from bot.services.container import ServiceContainer
-from bot.utils import format_bytes, now_jalali_datetime, parse_epoch, relative_remaining_time, to_jalali_datetime, to_persian_digits
+from bot.utils import (
+    display_name_from_parts,
+    format_bytes,
+    inbound_display_name as format_inbound_display_name,
+    now_jalali_datetime,
+    parse_epoch,
+    relative_remaining_time,
+    to_jalali_datetime,
+    to_persian_digits,
+)
 
 CLIENTS_PER_PAGE = 20
 
@@ -66,19 +75,19 @@ def _pagination_nav_row(
     return row
 
 
-def is_admin(user_id: int, settings: Settings) -> bool:
+def is_root_admin(user_id: int, settings: Settings) -> bool:
     return user_id in settings.admin_ids
 
 
 async def reject_if_not_admin(message: Message, settings: Settings) -> bool:
-    if is_admin(message.from_user.id, settings):
+    if is_root_admin(message.from_user.id, settings):
         return False
     await message.answer(t("no_admin_access", None))
     return True
 
 
 async def reject_callback_if_not_admin(callback: CallbackQuery, settings: Settings) -> bool:
-    if is_admin(callback.from_user.id, settings):
+    if is_root_admin(callback.from_user.id, settings):
         return False
     await callback.answer(t("no_admin_access", None), show_alert=True)
     return True
@@ -245,20 +254,11 @@ async def notify_delegated_admin_activity(
     services: ServiceContainer,
     text: str,
 ) -> None:
-    actor_id = source.from_user.id
-    stamped_text = f"{text}\nزمان: {now_jalali_datetime(settings.timezone)}"
-    await services.db.add_audit_log(
-        actor_user_id=actor_id,
-        action="admin_activity",
-        target_type="admin_activity",
-        target_id=str(actor_id),
-        success=True,
-        details=stamped_text,
+    await services.admin_provisioning_service.record_admin_activity(
+        actor_user_id=source.from_user.id,
+        settings=settings,
+        text=text,
     )
-    delegated = await services.db.get_delegated_admin_by_user_id(actor_id)
-    if delegated is None:
-        return
-    await services.usage_service.notify_admin_activity(actor_user_id=actor_id, text=stamped_text)
 
 
 def back_to_detail_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
@@ -323,14 +323,7 @@ def online_panel_select_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
 
 
 def inbound_display_name(inbound: dict) -> str:
-    remark = str(inbound.get("remark") or "").strip()
-    if remark:
-        return remark
-    port = inbound.get("port")
-    if port:
-        return f"inbound-{port}"
-    inbound_id = inbound.get("id")
-    return f"inbound-{inbound_id}" if inbound_id is not None else "inbound-unknown"
+    return format_inbound_display_name(inbound)
 
 
 def users_inbounds_keyboard(panel_id: int, inbounds: list[dict]) -> InlineKeyboardMarkup:
@@ -840,34 +833,78 @@ def format_client_detail(detail: dict, tz_name: str, lang: str | None = None) ->
 
 
 async def render_client_detail(
-    callback: CallbackQuery,
+    callback: CallbackQuery | Message,
     services: ServiceContainer,
     settings: Settings,
     *,
     panel_id: int,
     inbound_id: int,
     client_uuid: str,
+    lang: str | None = None,
     back_callback: str | None = None,
     back_text: str | None = None,
 ) -> None:
-    if callback.message is None:
+    target_message = callback.message if isinstance(callback, CallbackQuery) else callback
+    if target_message is None:
         return
+    resolved_lang = lang
+    if resolved_lang is None and callback.from_user is not None:
+        resolved_lang = await services.db.get_user_language(callback.from_user.id)
     try:
         detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
     except Exception as exc:
-        await callback.message.edit_text(f"{t('admin_error_fetch_client', None)}:\n{exc}")
+        if isinstance(callback, CallbackQuery):
+            await target_message.edit_text(f"{t('admin_error_fetch_client', resolved_lang)}:\n{exc}")
+        else:
+            await target_message.answer(f"{t('admin_error_fetch_client', resolved_lang)}:\n{exc}")
         return
-    text = format_client_detail(detail, settings.timezone)
-    await callback.message.edit_text(
-        text,
-        reply_markup=edit_config_actions_keyboard(
-            panel_id,
-            inbound_id,
-            client_uuid,
-            bool(detail.get("enabled")),
-            back_callback=back_callback,
-            back_text=back_text,
-        ),
+    text = format_client_detail(detail, settings.timezone, resolved_lang)
+    markup = edit_config_actions_keyboard(
+        panel_id,
+        inbound_id,
+        client_uuid,
+        bool(detail.get("enabled")),
+        resolved_lang,
+        back_callback=back_callback,
+        back_text=back_text,
+    )
+    if isinstance(callback, CallbackQuery):
+        await target_message.edit_text(text, reply_markup=markup)
+    else:
+        await target_message.answer(text, reply_markup=markup)
+
+
+async def ensure_client_access(
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    panel_id: int,
+    inbound_id: int,
+    client_uuid: str | None,
+) -> bool:
+    if await services.access_service.can_access_inbound(
+        user_id=user_id,
+        settings=settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+    ):
+        return True
+    owner_filter = await services.access_service.owner_filter_for_user(user_id=user_id, settings=settings)
+    if owner_filter is None or not client_uuid:
+        return False
+    detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    return str(detail.get("comment") or "").strip() == str(owner_filter)
+
+
+def actor_display_name(source: Message | CallbackQuery) -> str:
+    user = source.from_user
+    if user is None:
+        return "unknown"
+    return display_name_from_parts(
+        full_name=user.full_name,
+        username=user.username,
+        fallback=user.id,
     )
 
 
