@@ -501,6 +501,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_ip_log_for": {"fa": "📋 لاگ IP برای {email}:\n{ips}", "en": "📋 IP log for {email}:\n{ips}"},
     "admin_ip_log_cleared": {"fa": "لاگ IP پاک شد.", "en": "IP log cleared."},
     "admin_back_to_online_list": {"fa": "⬅️ بازگشت به لیست آنلاین", "en": "⬅️ Back to online list"},
+    "admin_back_to_users_list": {"fa": "⬅️ بازگشت به لیست کاربران", "en": "⬅️ Back to users list"},
+    "admin_back_to_disabled_list": {"fa": "⬅️ بازگشت به لیست غیرفعال‌ها", "en": "⬅️ Back to disabled list"},
     "admin_page_prev": {"fa": "◀️ قبلی", "en": "◀️ Prev"},
     "admin_page_next": {"fa": "بعدی ▶️", "en": "Next ▶️"},
     "admin_search_prompt": {

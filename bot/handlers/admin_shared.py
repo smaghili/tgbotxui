@@ -437,7 +437,8 @@ def online_filtered_clients_keyboard(
             text = _truncate_button_text(f"🟢 {email}")
         else:
             text = _truncate_button_text(f"⚫ {email}")
-        page_buttons.append(inline_button(text, f"uol:{panel_id}:{inbound_id}:{uuid}"))
+        detail_prefix = "uodl" if mode == "ds" else "uol"
+        page_buttons.append(inline_button(text, f"{detail_prefix}:{panel_id}:{inbound_id}:{uuid}"))
     rows = chunk_buttons(page_buttons, columns=2)
     nav_row = _pagination_nav_row(
         page=page,
@@ -453,7 +454,6 @@ def online_filtered_clients_keyboard(
     if nav_row is not None:
         rows.append(nav_row)
     rows.append([inline_button(t("admin_refresh_list", lang), f"uolp:{panel_id}")])
-    rows.append([inline_button(t("admin_back_to_online_list", lang), f"uolp:{panel_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

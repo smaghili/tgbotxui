@@ -4,6 +4,7 @@ from bot.handlers.admin_shared import (
     client_traffic_menu_keyboard,
     edit_config_actions_keyboard,
     format_inbounds_overview,
+    online_filtered_clients_keyboard,
     panel_select_keyboard,
     users_clients_keyboard,
     yes_no_inline_keyboard,
@@ -41,8 +42,23 @@ def test_edit_config_actions_keyboard_includes_toggle_button() -> None:
 def test_users_clients_keyboard_does_not_include_bulk_button() -> None:
     markup = users_clients_keyboard(1, 2, [{"email": "u1", "uuid": "uuid-1"}], "fa")
     labels = [button.text for row in markup.inline_keyboard for button in row]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
     assert t("admin_bulk_actions", "fa") not in labels
+    assert "uo:1:2:uuid-1" in callbacks
+
+
+def test_disabled_clients_keyboard_uses_disabled_detail_callback() -> None:
+    markup = online_filtered_clients_keyboard(
+        1,
+        [{"email": "u1", "uuid": "uuid-1", "inbound_id": 2, "enabled": False}],
+        "fa",
+        mode="ds",
+    )
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "uodl:1:2:uuid-1" in callbacks
+    assert "uol:1:2:uuid-1" not in callbacks
 
 
 def test_inbounds_overview_includes_status_and_inactive_counts() -> None:

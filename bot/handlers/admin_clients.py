@@ -1103,6 +1103,41 @@ async def online_open_detail(callback: CallbackQuery, settings: Settings, servic
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("uodl:"))
+async def disabled_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.data is None:
+        await callback.answer()
+        return
+    try:
+        panel_id, inbound_id, client_uuid = parse_client_callback(callback.data, "uodl")
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+        return
+    if not await _ensure_client_scope(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    await render_client_detail(
+        callback,
+        services,
+        settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        back_callback=f"uop:ds:{panel_id}:1",
+        back_text=t("admin_back_to_disabled_list", None),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("uo:"))
 async def client_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
@@ -1125,7 +1160,16 @@ async def client_open_detail(callback: CallbackQuery, settings: Settings, servic
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
+    await render_client_detail(
+        callback,
+        services,
+        settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        back_callback=f"users_inbound_pick:{panel_id}:{inbound_id}",
+        back_text=t("admin_back_to_users_list", None),
+    )
     await callback.answer()
 
 
