@@ -1037,10 +1037,13 @@ class AdminProvisioningService:
                 "clients_count": 0,
                 "allocated_bytes": 0,
                 "consumed_bytes": 0,
+                "remaining_bytes": 0,
                 "allocated_gb": 0,
                 "consumed_gb": 0,
+                "remaining_gb": 0,
                 "sale_amount": 0,
                 "debt_amount": 0,
+                "remaining_amount": 0,
                 "total_transactions": 0,
                 "scope_user_ids": [],
             }
@@ -1049,6 +1052,7 @@ class AdminProvisioningService:
         clients_count = 0
         allocated_bytes = 0
         consumed_bytes = 0
+        remaining_bytes = 0
         panel_total_consumed_bytes = 0
         root_created_consumed_bytes = 0
         root_admin_id_set = {str(admin_id) for admin_id in settings.admin_ids}
@@ -1105,8 +1109,12 @@ class AdminProvisioningService:
                         continue
                     seen.add(key)
                     clients_count += 1
-                    allocated_bytes += max(0, int(client.get("totalGB") or 0))
-                    consumed_bytes += int(usage.get("used") or 0)
+                    client_total_bytes = max(0, int(client.get("totalGB") or 0))
+                    client_used_bytes = max(0, int(usage.get("used") or 0))
+                    allocated_bytes += client_total_bytes
+                    consumed_bytes += client_used_bytes
+                    if client_total_bytes > 0:
+                        remaining_bytes += max(client_total_bytes - client_used_bytes, 0)
         price_per_gb = int(pricing.get("price_per_gb") or 0)
         allocated_gb = allocated_bytes // (1024 ** 3)
         if allocated_bytes % (1024 ** 3):
@@ -1116,6 +1124,7 @@ class AdminProvisioningService:
         if charge_basis == "consumed":
             consumed_bytes = max(0, panel_total_consumed_bytes - root_created_consumed_bytes)
         consumed_gb = float(consumed_bytes) / float(gb_unit) if consumed_bytes > 0 else 0.0
+        remaining_gb = float(remaining_bytes) / float(gb_unit) if remaining_bytes > 0 else 0.0
         scope_totals = (
             await self.financial_service.get_scope_sales_totals(owner_ids)
             if self.financial_service is not None
@@ -1129,16 +1138,20 @@ class AdminProvisioningService:
             debt_amount = (consumed_bytes * price_per_gb) // gb_unit
         else:
             debt_amount = allocated_gb * price_per_gb
+        remaining_amount = (remaining_bytes * price_per_gb) // gb_unit
         return {
             "wallet": wallet,
             "pricing": pricing,
             "clients_count": clients_count,
             "allocated_bytes": allocated_bytes,
             "consumed_bytes": consumed_bytes,
+            "remaining_bytes": remaining_bytes,
             "allocated_gb": allocated_gb,
             "consumed_gb": consumed_gb,
+            "remaining_gb": remaining_gb,
             "sale_amount": sale_amount,
             "debt_amount": debt_amount,
+            "remaining_amount": remaining_amount,
             "total_transactions": int(scope_totals.get("total_transactions") or 0),
             "scope_user_ids": owner_ids,
         }

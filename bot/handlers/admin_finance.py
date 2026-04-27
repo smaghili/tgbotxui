@@ -721,6 +721,8 @@ async def _answer_sales_report(
             lang,
             consumed_gb=_format_gb_exact(summary["consumed_gb"] or 0),
             debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+            remaining_gb=_format_gb_exact(summary["remaining_gb"] or 0),
+            remaining_amount=_format_amount(int(summary["remaining_amount"] or 0)),
             currency=str(wallet["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
         )
     if context.delegated_scope == "full":
@@ -746,6 +748,7 @@ async def _answer_sales_report(
             clients=int(summary["clients_count"] or 0),
             allocated_gb=int(summary["allocated_gb"] or 0),
             sale_amount=_format_amount(int(summary["sale_amount"] or 0)),
+            extra_lines=extra_lines,
         )
     message = target.message if isinstance(target, CallbackQuery) else target
     if message is not None:

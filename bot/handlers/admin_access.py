@@ -321,6 +321,8 @@ async def _render_delegated_detail(
             "admin_delegated_consumed_lines",
             lang,
             consumed_gb=_format_gb_exact(financial_summary.get("consumed_gb") or 0),
+            remaining_gb=_format_gb_exact(financial_summary.get("remaining_gb") or 0),
+            remaining_amount=_format_amount(int(financial_summary.get("remaining_amount") or 0)),
             currency=str(wallet.get("currency") or "تومان"),
         )
         balance_line = ""
@@ -1038,6 +1040,8 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
             lang,
             consumed_gb=_format_gb_exact(summary["consumed_gb"] or 0),
             debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+            remaining_gb=_format_gb_exact(summary["remaining_gb"] or 0),
+            remaining_amount=_format_amount(int(summary["remaining_amount"] or 0)),
             currency=str(summary["wallet"]["currency"] or "تومان"),
         )
     await callback.message.edit_text(

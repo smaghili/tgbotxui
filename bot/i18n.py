@@ -137,8 +137,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nTotal sales: {sale_amount} {currency}\nTransactions: {transactions}\nCreated users: {clients}{extra_lines}",
     },
     "finance_credit_consumed_lines": {
-        "fa": "\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}",
-        "en": "\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}",
+        "fa": "\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
+        "en": "\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
     },
     "finance_today_sales_title": {
         "fa": "فروش امروز",
@@ -237,8 +237,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Overall financial report\n\nWallet: {balance} {currency}\nPer-GB {basis_label}: {price_gb} {currency}\nClients: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal sales: {sale_amount} {currency}\nConsumed traffic: {consumed_gb} GB\nDebt: {debt_amount} {currency}",
     },
     "finance_limited_report_text": {
-        "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nکاربر ساخته‌شده: {clients}\nگیگ تخصیصی: {allocated_gb} گیگ\nقیمت کل: {sale_amount} {currency}",
-        "en": "Overall financial report\n\nWallet: {balance} {currency}\nCreated users: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal price: {sale_amount} {currency}",
+        "fa": "گزارش مالی کلی\n\nکیف پول: {balance} {currency}\nکاربر ساخته‌شده: {clients}\nگیگ تخصیصی: {allocated_gb} گیگ\nقیمت کل: {sale_amount} {currency}{extra_lines}",
+        "en": "Overall financial report\n\nWallet: {balance} {currency}\nCreated users: {clients}\nAllocated traffic: {allocated_gb} GB\nTotal price: {sale_amount} {currency}{extra_lines}",
     },
     "finance_target_unknown": {
         "fa": "کاربر در دیتابیس ربات پیدا نشد.",
@@ -638,8 +638,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "\nBalance: {balance} {currency}",
     },
     "admin_delegated_consumed_lines": {
-        "fa": "\nحجم مصرف‌شده واقعی: {consumed_gb} گیگ",
-        "en": "\nReal consumed traffic: {consumed_gb} GB",
+        "fa": "\nحجم مصرف‌شده واقعی: {consumed_gb} گیگ\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
+        "en": "\nReal consumed traffic: {consumed_gb} GB\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
     },
     "admin_delegated_limit_error_max_clients": {"fa": "سقف تعداد کاربران این نماینده پر شده است.", "en": "Delegate max clients limit reached."},
     "admin_delegated_limit_error_traffic_min": {"fa": "مقدار حجم کمتر از حداقل مجاز نماینده است.", "en": "Traffic is below delegate minimum."},
