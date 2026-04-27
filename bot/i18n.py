@@ -137,8 +137,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nTotal sales: {sale_amount} {currency}\nTransactions: {transactions}\nCreated users: {clients}{extra_lines}",
     },
     "finance_credit_consumed_lines": {
-        "fa": "\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}\nمانده قابل پرداخت: {payable_amount} {currency}\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
-        "en": "\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}\nPayable balance: {payable_amount} {currency}\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
+        "fa": "\n\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}\nمانده قابل پرداخت: {payable_amount} {currency}\n\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
+        "en": "\n\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}\nPayable balance: {payable_amount} {currency}\n\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
     },
     "finance_today_sales_title": {
         "fa": "فروش امروز",
@@ -638,8 +638,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "\nBalance: {balance} {currency}",
     },
     "admin_delegated_consumed_lines": {
-        "fa": "\nحجم مصرف‌شده واقعی: {consumed_gb} گیگ\nمانده قابل پرداخت: {payable_amount} {currency}\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
-        "en": "\nReal consumed traffic: {consumed_gb} GB\nPayable balance: {payable_amount} {currency}\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
+        "fa": "\n\nحجم مصرف‌شده واقعی: {consumed_gb} گیگ\nمانده قابل پرداخت: {payable_amount} {currency}\n\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
+        "en": "\n\nReal consumed traffic: {consumed_gb} GB\nPayable balance: {payable_amount} {currency}\n\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
     },
     "admin_delegated_limit_error_max_clients": {"fa": "سقف تعداد کاربران این نماینده پر شده است.", "en": "Delegate max clients limit reached."},
     "admin_delegated_limit_error_traffic_min": {"fa": "مقدار حجم کمتر از حداقل مجاز نماینده است.", "en": "Traffic is below delegate minimum."},
