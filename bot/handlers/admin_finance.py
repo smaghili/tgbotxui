@@ -716,11 +716,13 @@ async def _answer_sales_report(
     charge_basis = str(pricing.get("charge_basis") or "allocated")
     extra_lines = ""
     if charge_basis == "consumed":
+        payable_amount = int(summary["debt_amount"] or 0) - int(wallet["balance"] or 0)
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,
             consumed_gb=_format_gb_exact(summary["consumed_gb"] or 0),
             debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+            payable_amount=_format_amount(payable_amount),
             remaining_gb=_format_gb_exact(summary["remaining_gb"] or 0),
             remaining_amount=_format_amount(int(summary["remaining_amount"] or 0)),
             currency=str(wallet["currency"] or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),

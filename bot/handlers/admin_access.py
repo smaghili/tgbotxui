@@ -315,26 +315,27 @@ async def _render_delegated_detail(
     charge_basis = str(pricing.get("charge_basis") or "allocated")
     charge_basis_key = "admin_delegated_charge_allocated" if charge_basis == "allocated" else "admin_delegated_charge_consumed"
     allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
+    balance_line = t(
+        "admin_delegated_balance_line",
+        lang,
+        balance=_format_amount(int(wallet.get("balance") or 0)),
+        currency=str(wallet.get("currency") or "تومان"),
+    )
     if charge_basis == "consumed":
         total_sales_value = int(financial_summary.get("debt_amount") or 0)
+        payable_amount = total_sales_value - int(wallet.get("balance") or 0)
         extra_lines = t(
             "admin_delegated_consumed_lines",
             lang,
             consumed_gb=_format_gb_exact(financial_summary.get("consumed_gb") or 0),
+            payable_amount=_format_amount(payable_amount),
             remaining_gb=_format_gb_exact(financial_summary.get("remaining_gb") or 0),
             remaining_amount=_format_amount(int(financial_summary.get("remaining_amount") or 0)),
             currency=str(wallet.get("currency") or "تومان"),
         )
-        balance_line = ""
     else:
         total_sales_value = int(sales_report.get("total_sales") or 0)
         extra_lines = ""
-        balance_line = t(
-            "admin_delegated_balance_line",
-            lang,
-            balance=_format_amount(int(wallet.get("balance") or 0)),
-            currency=str(wallet.get("currency") or "تومان"),
-        )
     text = t(
         "admin_delegated_details_text",
         lang,
@@ -1035,11 +1036,13 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
     )
     extra_lines = ""
     if str(summary["pricing"].get("charge_basis") or "allocated") == "consumed":
+        payable_amount = int(summary["debt_amount"] or 0) - int(summary["wallet"]["balance"] or 0)
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,
             consumed_gb=_format_gb_exact(summary["consumed_gb"] or 0),
             debt_amount=_format_amount(int(summary["debt_amount"] or 0)),
+            payable_amount=_format_amount(payable_amount),
             remaining_gb=_format_gb_exact(summary["remaining_gb"] or 0),
             remaining_amount=_format_amount(int(summary["remaining_amount"] or 0)),
             currency=str(summary["wallet"]["currency"] or "تومان"),

@@ -292,8 +292,6 @@ class FinancialService:
         telegram_user_id: int,
         amount: int,
     ) -> dict[str, Any]:
-        if amount < 0:
-            raise ValueError("wallet balance cannot be negative.")
         wallet = await self.get_wallet(telegram_user_id)
         delta = amount - int(wallet["balance"] or 0)
         return await self._apply_balance_change(
@@ -303,6 +301,7 @@ class FinancialService:
             kind="manual_set",
             operation="wallet_set_balance",
             details=f"set_balance={amount}",
+            allow_negative_balance=True,
         )
 
     async def adjust_wallet_balance(
@@ -322,6 +321,7 @@ class FinancialService:
             kind="manual_adjust",
             operation="wallet_adjust_balance",
             details=details or f"delta={delta}",
+            allow_negative_balance=True,
         )
 
     async def ensure_delegated_actor_active(

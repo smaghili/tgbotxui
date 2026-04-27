@@ -137,8 +137,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nTotal sales: {sale_amount} {currency}\nTransactions: {transactions}\nCreated users: {clients}{extra_lines}",
     },
     "finance_credit_consumed_lines": {
-        "fa": "\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
-        "en": "\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
+        "fa": "\nحجم مصرف‌شده: {consumed_gb} گیگ\nبدهکاری فعلی: {debt_amount} {currency}\nمانده قابل پرداخت: {payable_amount} {currency}\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
+        "en": "\nConsumed traffic: {consumed_gb} GB\nCurrent debt: {debt_amount} {currency}\nPayable balance: {payable_amount} {currency}\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
     },
     "finance_today_sales_title": {
         "fa": "فروش امروز",
@@ -630,16 +630,16 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nSales: {sales} {currency}\nTransactions: {transactions}\nOwned clients: {owned_clients}{extra_lines}\n\nRecent wallet transactions:\n{wallet_lines}\n\nRecent activities:\n{activity_lines}",
     },
     "admin_delegated_details_text": {
-        "fa": "📋 جزئیات نمایندگی\n\nنام کاربری: {title}\nپیشوند نام کاربری: {prefix}\n\nحداکثر کاربران قابل ساخت: {max_users}\nحداقل/حداکثر خرید حجم: {min_traffic}GB / {max_traffic}GB\nحداقل/حداکثر خرید زمان: {min_days} روز / {max_days} روز\n\nقیمت هر روز زمان: {price_day} {currency}\nقیمت هر گیگ حجم: {price_gb} {currency}\nنوع فروش: {charge_basis}{balance_line}\nفروش کل: {total_sales} {currency}{extra_lines}\n\nتاریخ انقضای نماینده: {expires_at}\nوضعیت نماینده: {status}\nکاربران ساخته‌شده: {owned_clients}",
-        "en": "Delegated details\n\nUsername: {title}\nUsername prefix: {prefix}\n\nMax clients: {max_users}\nMin/Max traffic: {min_traffic}GB / {max_traffic}GB\nMin/Max days: {min_days} days / {max_days} days\n\nDay price: {price_day} {currency}\nGB price: {price_gb} {currency}\nCharge basis: {charge_basis}{balance_line}\nTotal sales: {total_sales} {currency}{extra_lines}\n\nExpiry: {expires_at}\nDelegate status: {status}\nOwned clients: {owned_clients}",
+        "fa": "📋 جزئیات نمایندگی\n\nنام کاربری: {title}\nپیشوند نام کاربری: {prefix}\n\nحداکثر کاربران قابل ساخت: {max_users}\nحداقل/حداکثر خرید حجم: {min_traffic}GB / {max_traffic}GB\nحداقل/حداکثر خرید زمان: {min_days} روز / {max_days} روز\n\nقیمت هر روز زمان: {price_day} {currency}\nقیمت هر گیگ حجم: {price_gb} {currency}\nنوع فروش: {charge_basis}\nفروش کل: {total_sales} {currency}{extra_lines}\n\nتاریخ انقضای نماینده: {expires_at}\nوضعیت نماینده: {status}\nکاربران ساخته‌شده: {owned_clients}{balance_line}",
+        "en": "Delegated details\n\nUsername: {title}\nUsername prefix: {prefix}\n\nMax clients: {max_users}\nMin/Max traffic: {min_traffic}GB / {max_traffic}GB\nMin/Max days: {min_days} days / {max_days} days\n\nDay price: {price_day} {currency}\nGB price: {price_gb} {currency}\nCharge basis: {charge_basis}\nTotal sales: {total_sales} {currency}{extra_lines}\n\nExpiry: {expires_at}\nDelegate status: {status}\nOwned clients: {owned_clients}{balance_line}",
     },
     "admin_delegated_balance_line": {
         "fa": "\nموجودی: {balance} {currency}",
         "en": "\nBalance: {balance} {currency}",
     },
     "admin_delegated_consumed_lines": {
-        "fa": "\nحجم مصرف‌شده واقعی: {consumed_gb} گیگ\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
-        "en": "\nReal consumed traffic: {consumed_gb} GB\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
+        "fa": "\nحجم مصرف‌شده واقعی: {consumed_gb} گیگ\nمانده قابل پرداخت: {payable_amount} {currency}\nحجم مصرف‌نشده: {remaining_gb} گیگ\nقیمت حجم مصرف‌نشده: {remaining_amount} {currency}",
+        "en": "\nReal consumed traffic: {consumed_gb} GB\nPayable balance: {payable_amount} {currency}\nUnused traffic: {remaining_gb} GB\nUnused traffic value: {remaining_amount} {currency}",
     },
     "admin_delegated_limit_error_max_clients": {"fa": "سقف تعداد کاربران این نماینده پر شده است.", "en": "Delegate max clients limit reached."},
     "admin_delegated_limit_error_traffic_min": {"fa": "مقدار حجم کمتر از حداقل مجاز نماینده است.", "en": "Traffic is below delegate minimum."},
