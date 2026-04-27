@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -17,6 +18,8 @@ from bot.utils import build_admin_activity_notice, display_name_from_parts, form
 
 if TYPE_CHECKING:
     from bot.services.usage_service import UsageService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -1048,6 +1051,7 @@ class AdminProvisioningService:
         consumed_bytes = 0
         panel_total_consumed_bytes = 0
         root_created_consumed_bytes = 0
+        root_admin_id_set = {str(admin_id) for admin_id in settings.admin_ids}
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
             try:
@@ -1091,7 +1095,7 @@ class AdminProvisioningService:
                     comment = str(client.get("comment") or "").strip()
                     usage = stats_by_uuid.get(client_uuid, {"used": 0, "total": 0})
 
-                    if comment == "":
+                    if comment == "" or comment in root_admin_id_set:
                         root_created_consumed_bytes += int(usage.get("used") or 0)
 
                     if comment not in owner_id_set:
@@ -1194,7 +1198,7 @@ class AdminProvisioningService:
                 total_gb=total_gb,
                 expiry_days=expiry_days,
                 tg_id=tg_id,
-                comment="" if self.access_service.is_root_admin(actor_user_id, settings) else str(actor_user_id),
+                comment=str(actor_user_id),
             )
         except Exception:
             if charge_tx is not None and self.financial_service is not None:
@@ -1204,6 +1208,19 @@ class AdminProvisioningService:
                     reason=f"refund:create_client_failed:{client_email}",
                 )
             raise
+        try:
+            await self.db.upsert_client_owner(
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_uuid=str(created["uuid"]),
+                owner_user_id=actor_user_id,
+                client_email=client_email,
+            )
+        except Exception:
+            logger.exception(
+                "failed to persist client owner mapping",
+                extra={"panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": created.get("uuid")},
+            )
         if tg_id:
             try:
                 resolved_user_id: int | None = None

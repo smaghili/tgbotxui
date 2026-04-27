@@ -4,7 +4,7 @@ from bot.handlers.admin_shared import (
     client_traffic_menu_keyboard,
     edit_config_actions_keyboard,
     format_inbounds_overview,
-    online_filtered_clients_keyboard,
+    client_list_keyboard,
     panel_select_keyboard,
     users_clients_keyboard,
     yes_no_inline_keyboard,
@@ -20,7 +20,8 @@ def test_admin_keyboard_removes_search_user_button() -> None:
     assert btn("btn_search_user", "fa") not in labels
     assert btn("btn_edit_config", "fa") in labels
     assert btn("btn_inbounds_overview", "fa") in labels
-    assert btn("btn_bulk_operations", "fa") not in labels
+    assert btn("btn_low_traffic_users", "fa") in labels
+    assert btn("btn_bulk_operations", "fa") in labels
     assert btn("btn_list_inbounds", "fa") not in labels
     assert btn("btn_last_online_users", "fa") not in labels
 
@@ -49,7 +50,7 @@ def test_users_clients_keyboard_does_not_include_bulk_button() -> None:
 
 
 def test_disabled_clients_keyboard_uses_disabled_detail_callback() -> None:
-    markup = online_filtered_clients_keyboard(
+    markup = client_list_keyboard(
         1,
         [{"email": "u1", "uuid": "uuid-1", "inbound_id": 2, "enabled": False}],
         "fa",
@@ -59,6 +60,21 @@ def test_disabled_clients_keyboard_uses_disabled_detail_callback() -> None:
 
     assert "uodl:1:2:uuid-1" in callbacks
     assert "uol:1:2:uuid-1" not in callbacks
+
+
+def test_low_traffic_clients_keyboard_uses_low_traffic_detail_callback() -> None:
+    markup = client_list_keyboard(
+        1,
+        [{"email": "u1", "uuid": "uuid-1", "inbound_id": 2, "remaining_bytes": 50 * 1024 * 1024}],
+        "fa",
+        mode="lr",
+    )
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert any("u1" in label for label in labels)
+    assert "uolr:1:2:uuid-1" in callbacks
+    assert "uop:lr:1:1" in callbacks
 
 
 def test_inbounds_overview_includes_status_and_inactive_counts() -> None:

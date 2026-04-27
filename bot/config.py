@@ -102,6 +102,7 @@ class Settings:
     admin_rate_limit_window_seconds: int
     depleted_client_delete_after_hours: int
     config_rotate_apply_delay_seconds: int
+    low_traffic_list_threshold_mb: int
     delegated_admin_min_create_gb: int
     delegated_admin_min_create_days: int
     telegram_proxies: tuple[str, ...]
@@ -147,6 +148,9 @@ class Settings:
             ),
             config_rotate_apply_delay_seconds=int(
                 os.getenv("CONFIG_ROTATE_APPLY_DELAY_SECONDS", "4")
+            ),
+            low_traffic_list_threshold_mb=int(
+                os.getenv("LOW_TRAFFIC_LIST_THRESHOLD_MB", "500")
             ),
             delegated_admin_min_create_gb=int(
                 os.getenv("DELEGATED_ADMIN_MIN_CREATE_GB", "2")

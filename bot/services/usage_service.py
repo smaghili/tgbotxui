@@ -286,6 +286,46 @@ class UsageService:
                         return [delegated_id]
         return sorted(self.root_admin_ids)
 
+    async def _direct_owner_chat_ids_for_service(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int | None,
+        client_uuid: str | None,
+    ) -> list[int]:
+        if not inbound_id or not client_uuid:
+            return []
+        owner_id = await self.db.get_client_owner(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        if owner_id is not None:
+            if owner_id in self.root_admin_ids:
+                return [owner_id]
+            if await self._is_active_delegated_admin_user(owner_id):
+                return [owner_id]
+            return []
+        try:
+            detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+        except Exception:
+            logger.exception(
+                "failed to resolve direct service owner for threshold notification",
+                extra={"panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
+            )
+            return []
+        comment = str(detail.get("comment") or "").strip()
+        if not comment and len(self.root_admin_ids) == 1:
+            return sorted(self.root_admin_ids)
+        if not comment.isdigit():
+            return []
+        owner_id = int(comment)
+        if owner_id in self.root_admin_ids:
+            return [owner_id]
+        if not await self._is_active_delegated_admin_user(owner_id):
+            return []
+        return [owner_id]
+
     async def _service_location_labels(self, panel_id: int, inbound_id: int | None) -> tuple[str, str]:
         try:
             return await self.panel_service.panel_inbound_names(panel_id, inbound_id)
@@ -295,25 +335,77 @@ class UsageService:
     async def _notify_user_about_threshold(
         self,
         *,
+        service_row: dict,
         telegram_user_id: int,
         service_name: str,
         remaining_bytes: int,
         threshold_mb: int,
     ) -> None:
         lang = await self.db.get_user_language(telegram_user_id)
-        if lang == "en":
-            text = (
-                "Service warning:\n"
-                f"Your service {service_name} is below {threshold_mb} MB remaining.\n"
-                f"Remaining traffic: {format_bytes(remaining_bytes, lang)}"
-            )
-        else:
-            text = (
-                "هشدار سرویس:\n"
-                f"حجم باقی مانده سرویس {service_name} به کمتر از {threshold_mb} مگابایت رسیده است.\n"
-                f"حجم باقی مانده: {format_bytes(remaining_bytes, lang)}"
-            )
+        text = t(
+            "service_threshold_warning",
+            lang,
+            service_name=service_name,
+            threshold_mb=threshold_mb,
+            remaining=format_bytes(remaining_bytes, lang),
+        )
         await self._send_chat_message(telegram_user_id, text)
+        await self._notify_direct_owner_about_threshold(
+            service_row=service_row,
+            service_name=service_name,
+            remaining_bytes=remaining_bytes,
+            threshold_mb=threshold_mb,
+        )
+
+    async def _notify_direct_owner_about_threshold(
+        self,
+        *,
+        service_row: dict,
+        service_name: str,
+        remaining_bytes: int,
+        threshold_mb: int,
+    ) -> None:
+        if threshold_mb != 100:
+            return
+        panel_id = int(service_row["panel_id"])
+        inbound_id = int(service_row["inbound_id"]) if service_row.get("inbound_id") else None
+        client_uuid = str(service_row.get("client_id") or "").strip() or None
+        manager_chat_ids = await self._direct_owner_chat_ids_for_service(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        if not manager_chat_ids:
+            return
+        panel_label, inbound_label = await self._service_location_labels(panel_id, inbound_id)
+        manager_text = t(
+            "admin_service_threshold_warning",
+            "fa",
+            client_email=str(service_row.get("client_email") or "-"),
+            threshold_mb=threshold_mb,
+            service_name=service_name,
+            panel=panel_label,
+            inbound=inbound_label,
+            remaining=format_bytes(remaining_bytes, "fa"),
+        )
+        for chat_id in manager_chat_ids:
+            sent = await self._send_chat_message(chat_id, manager_text)
+            if sent and inbound_id is not None and client_uuid is not None:
+                _, expiry_state = await self.db.get_delegated_admin_client_alert_states(
+                    delegated_admin_user_id=chat_id,
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                )
+                await self.db.upsert_delegated_admin_client_alert_states(
+                    delegated_admin_user_id=chat_id,
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                    traffic_alert_state="low",
+                    expiry_alert_state=expiry_state or "normal",
+                    mark_notified=True,
+                )
 
     async def _notify_service_depleted(
         self,
@@ -423,6 +515,7 @@ class UsageService:
 
         if previous_remaining > 200 * 1024 * 1024 and current_remaining <= 200 * 1024 * 1024:
             await self._notify_user_about_threshold(
+                service_row=current,
                 telegram_user_id=int(current["telegram_user_id"]),
                 service_name=service_name,
                 remaining_bytes=current_remaining,
@@ -430,6 +523,7 @@ class UsageService:
             )
         if previous_remaining > 100 * 1024 * 1024 and current_remaining <= 100 * 1024 * 1024:
             await self._notify_user_about_threshold(
+                service_row=current,
                 telegram_user_id=int(current["telegram_user_id"]),
                 service_name=service_name,
                 remaining_bytes=current_remaining,

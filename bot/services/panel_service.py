@@ -224,6 +224,11 @@ class PanelService:
             return set()
         return {str(item).strip().lower() for item in obj if str(item).strip()}
 
+    @staticmethod
+    def _owner_id_from_comment(comment: str) -> int | None:
+        value = comment.strip()
+        return int(value) if value.isdigit() else None
+
     async def _get_last_online_map(self, panel_id: int) -> dict[str, int]:
         try:
             raw, _ = await self._with_auth_request(
@@ -264,6 +269,10 @@ class PanelService:
         if include_last_online:
             last_online_map = await self._get_last_online_map(panel_id)
 
+        owner_map: dict[tuple[int, str], int] = {}
+        if owner_admin_user_id is not None:
+            owner_map = await self.db.list_client_owners_for_panel(panel_id)
+
         inbounds = await self.list_inbounds(panel_id)
         matched: list[Dict[str, Any]] = []
         seen: set[tuple[int, str]] = set()
@@ -281,8 +290,10 @@ class PanelService:
                 comment = str(client.get("comment") or "").strip()
                 if not email or not uuid:
                     continue
-                if owner_admin_user_id is not None and comment != str(owner_admin_user_id):
-                    continue
+                if owner_admin_user_id is not None:
+                    owner_id = owner_map.get((inbound_id, uuid)) or self._owner_id_from_comment(comment)
+                    if owner_id != owner_admin_user_id:
+                        continue
                 candidates = {email.lower(), uuid.lower(), sub_id.lower()}
                 if online_only and not any(c and c in online_keys for c in candidates):
                     continue
@@ -374,6 +385,54 @@ class PanelService:
         rows = inactive
         rows.sort(key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"]))
         return rows
+
+    async def list_low_traffic_clients(
+        self,
+        panel_id: int,
+        *,
+        threshold_mb: int,
+        owner_admin_user_id: int | None = None,
+        allowed_inbound_ids: set[int] | None = None,
+    ) -> list[Dict[str, Any]]:
+        threshold_bytes = max(0, int(threshold_mb)) * 1024 * 1024
+        if threshold_bytes <= 0:
+            return []
+        rows = await self.list_clients(
+            panel_id,
+            owner_admin_user_id=owner_admin_user_id,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
+        low_traffic: list[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                detail = await self.get_client_detail(panel_id, int(row["inbound_id"]), str(row["uuid"]))
+            except Exception:
+                continue
+            total = int(detail.get("total") or 0)
+            if total <= 0:
+                continue
+            used = int(detail.get("used") or 0)
+            remaining = max(total - used, 0)
+            if remaining > threshold_bytes:
+                continue
+            row.update(
+                {
+                    "enabled": bool(detail.get("enabled", row.get("enabled", True))),
+                    "remaining_bytes": remaining,
+                    "total": total,
+                    "used": used,
+                }
+            )
+            low_traffic.append(row)
+        low_traffic.sort(
+            key=lambda item: (
+                int(item.get("remaining_bytes") or 0),
+                item["email"].lower(),
+                item["inbound_id"],
+                item["uuid"],
+            )
+        )
+        return low_traffic
 
     async def cleanup_depleted_clients(self, delete_after_hours: int) -> dict[str, Any]:
         now = int(time.time())
@@ -567,6 +626,9 @@ class PanelService:
         if inbound is None:
             raise ValueError("inbound not found.")
         clients = self._extract_inbound_clients(inbound)
+        owner_map: dict[tuple[int, str], int] = {}
+        if owner_admin_user_id is not None:
+            owner_map = await self.db.list_client_owners_for_panel(panel_id)
         out: list[Dict[str, Any]] = []
         for client in clients:
             uuid = str(client.get("uuid") or client.get("id") or "").strip()
@@ -574,8 +636,10 @@ class PanelService:
             comment = str(client.get("comment") or "").strip()
             if not uuid or not email:
                 continue
-            if owner_admin_user_id is not None and comment != str(owner_admin_user_id):
-                continue
+            if owner_admin_user_id is not None:
+                owner_id = owner_map.get((inbound_id, uuid)) or self._owner_id_from_comment(comment)
+                if owner_id != owner_admin_user_id:
+                    continue
             out.append({"uuid": uuid, "email": email, "comment": comment})
         return out
 
@@ -590,6 +654,9 @@ class PanelService:
         target_uuid = client_uuid.strip()
         if not target_uuid:
             return None
+        owner_map: dict[tuple[int, str], int] = {}
+        if owner_admin_user_id is not None:
+            owner_map = await self.db.list_client_owners_for_panel(panel_id)
         inbounds = await self.list_inbounds(panel_id)
         for inbound in inbounds:
             inbound_id = int(inbound.get("id") or 0)
@@ -602,8 +669,10 @@ class PanelService:
                 if uuid != target_uuid:
                     continue
                 comment = str(client.get("comment") or "").strip()
-                if owner_admin_user_id is not None and comment != str(owner_admin_user_id):
-                    continue
+                if owner_admin_user_id is not None:
+                    owner_id = owner_map.get((inbound_id, uuid)) or self._owner_id_from_comment(comment)
+                    if owner_id != owner_admin_user_id:
+                        continue
                 return {
                     "panel_id": panel_id,
                     "inbound_id": inbound_id,

@@ -21,6 +21,8 @@ class FakeDB:
         self.lang_by_user: dict[int, str] = {}
         self.bound_rows: list[dict] = []
         self.delegated_admins: dict[int, dict] = {}
+        self.client_owners: dict[tuple[int, int, str], int] = {}
+        self.client_alert_states: dict[tuple[int, int, int, str], tuple[str | None, str | None]] = {}
         self.audit_logs: list[dict] = []
         self.pending_notifications: list[dict] = []
         self.next_notification_id = 1
@@ -30,6 +32,38 @@ class FakeDB:
 
     async def get_delegated_admin_by_user_id(self, telegram_user_id: int) -> dict | None:
         return self.delegated_admins.get(telegram_user_id)
+
+    async def get_delegated_admin_profile(self, telegram_user_id: int) -> dict:
+        return {"is_active": 1, "expires_at": 0}
+
+    async def get_client_owner(self, *, panel_id: int, inbound_id: int, client_uuid: str) -> int | None:
+        return self.client_owners.get((panel_id, inbound_id, client_uuid))
+
+    async def get_delegated_admin_client_alert_states(
+        self,
+        *,
+        delegated_admin_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> tuple[str | None, str | None]:
+        return self.client_alert_states.get((delegated_admin_user_id, panel_id, inbound_id, client_uuid), (None, None))
+
+    async def upsert_delegated_admin_client_alert_states(
+        self,
+        *,
+        delegated_admin_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        traffic_alert_state: str,
+        expiry_alert_state: str,
+        mark_notified: bool,
+    ) -> None:
+        self.client_alert_states[(delegated_admin_user_id, panel_id, inbound_id, client_uuid)] = (
+            traffic_alert_state,
+            expiry_alert_state,
+        )
 
     async def get_user_services_by_panel_email(self, panel_id: int, client_email: str) -> list[dict]:
         return [
@@ -130,6 +164,37 @@ async def test_threshold_crossing_sends_200mb_and_100mb_messages() -> None:
     assert [chat_id for chat_id, _ in bot.messages] == [42, 42]
     assert "200" in bot.messages[0][1]
     assert "100" in bot.messages[1][1]
+
+
+@pytest.mark.asyncio
+async def test_100mb_threshold_notifies_direct_owner_from_mapping() -> None:
+    db = FakeDB()
+    db.lang_by_user[42] = "fa"
+    db.client_owners[(3, 8, "uuid-1")] = 999
+    service = UsageService(db=db, panel_service=FakePanelService(), timezone="Asia/Tehran", root_admin_ids={999})  # type: ignore[arg-type]
+    bot = DummyBot()
+    service.attach_bot(bot)  # type: ignore[arg-type]
+
+    previous = {
+        "telegram_user_id": 42,
+        "panel_id": 3,
+        "inbound_id": 8,
+        "client_id": "uuid-1",
+        "service_name": "test-service",
+        "client_email": "user@example.com",
+        "total_bytes": 500 * 1024 * 1024,
+        "used_bytes": 350 * 1024 * 1024,
+        "status": "active",
+    }
+    current = {
+        **previous,
+        "used_bytes": 420 * 1024 * 1024,
+    }
+
+    await service._notify_service_state_changes(previous, current)
+
+    assert [chat_id for chat_id, _ in bot.messages] == [42, 999]
+    assert "user@example.com" in bot.messages[1][1]
 
 
 @pytest.mark.asyncio

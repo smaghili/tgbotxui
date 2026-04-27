@@ -20,6 +20,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "btn_list_inbounds": {"fa": "لیست ورودی‌ها", "en": "Inbound List"},
     "btn_list_users": {"fa": "لیست کاربران", "en": "Users List"},
     "btn_online_users": {"fa": "کاربران آنلاین", "en": "Online Users"},
+    "btn_low_traffic_users": {"fa": "🪫 کاربران کم‌حجم", "en": "🪫 Low Traffic Users"},
     "btn_search_user": {"fa": "🔎 جستجوی کاربر", "en": "🔎 Search User"},
     "btn_disabled_users": {"fa": "🚫 کاربران غیرفعال", "en": "🚫 Disabled Users"},
     "btn_last_online_users": {"fa": "🕘 آخرین آنلاین", "en": "🕘 Last Online"},
@@ -361,6 +362,14 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "us_traffic": {"fa": "🔋 ترافیک", "en": "🔋 Traffic"},
     "us_used": {"fa": "📥 حجم مصرفی", "en": "📥 Used"},
     "us_remaining": {"fa": "💢 حجم باقی مانده", "en": "💢 Remaining"},
+    "service_threshold_warning": {
+        "fa": "هشدار سرویس:\nحجم باقی مانده سرویس {service_name} به کمتر از {threshold_mb} مگابایت رسیده است.\nحجم باقی مانده: {remaining}",
+        "en": "Service warning:\nYour service {service_name} is below {threshold_mb} MB remaining.\nRemaining traffic: {remaining}",
+    },
+    "admin_service_threshold_warning": {
+        "fa": "هشدار سرویس:\nکاربر {client_email} کمتر از {threshold_mb} مگابایت حجم دارد.\nسرویس: {service_name}\nپنل: {panel}\nاینباند: {inbound}\nحجم باقی‌مانده: {remaining}",
+        "en": "Service warning:\nUser {client_email} is below {threshold_mb} MB remaining.\nService: {service_name}\nPanel: {panel}\nInbound: {inbound}\nRemaining traffic: {remaining}",
+    },
     "us_expiry_date": {"fa": "📅 تاریخ اتمام", "en": "📅 Expiry Date"},
 
     "config_caption": {
@@ -381,6 +390,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_error_fetch_client": {"fa": "خطا در دریافت اطلاعات کاربر", "en": "Failed to fetch client data"},
     "admin_error_fetch_inbounds": {"fa": "خطا در دریافت لیست اینباندها", "en": "Failed to fetch inbounds"},
     "admin_error_fetch_online": {"fa": "خطا در دریافت کاربران آنلاین", "en": "Failed to fetch online users"},
+    "admin_error_fetch_low_traffic": {"fa": "خطا در دریافت کاربران کم‌حجم", "en": "Failed to fetch low traffic users"},
 
     "admin_back_to_inbounds": {"fa": "⬅️ بازگشت به اینباندها", "en": "⬅️ Back to inbounds"},
     "admin_back_to_users": {"fa": "⬅️ بازگشت به کاربران", "en": "⬅️ Back to users"},
@@ -503,6 +513,19 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_back_to_online_list": {"fa": "⬅️ بازگشت به لیست آنلاین", "en": "⬅️ Back to online list"},
     "admin_back_to_users_list": {"fa": "⬅️ بازگشت به لیست کاربران", "en": "⬅️ Back to users list"},
     "admin_back_to_disabled_list": {"fa": "⬅️ بازگشت به لیست غیرفعال‌ها", "en": "⬅️ Back to disabled list"},
+    "admin_back_to_low_traffic_list": {"fa": "⬅️ بازگشت به لیست کم‌حجم‌ها", "en": "⬅️ Back to low traffic list"},
+    "admin_default_not_selected_low_traffic": {
+        "fa": "برای نمایش کاربران کم‌حجم، پنل را انتخاب کنید:",
+        "en": "Select a panel to show low traffic users:",
+    },
+    "admin_low_traffic_empty": {
+        "fa": "پنل: {panel}\n\nکاربری با حجم باقی‌مانده کمتر از {threshold_mb} مگابایت پیدا نشد.",
+        "en": "Panel: {panel}\n\nNo user below {threshold_mb} MB remaining was found.",
+    },
+    "admin_low_traffic_header": {
+        "fa": "پنل: {panel}\nکاربران با حجم کمتر از {threshold_mb} مگابایت\nتعداد: {count}\n\nروی کاربر کلیک کنید:",
+        "en": "Panel: {panel}\nUsers below {threshold_mb} MB remaining\nCount: {count}\n\nTap a user:",
+    },
     "admin_page_prev": {"fa": "◀️ قبلی", "en": "◀️ Prev"},
     "admin_page_next": {"fa": "بعدی ▶️", "en": "Next ▶️"},
     "admin_search_prompt": {

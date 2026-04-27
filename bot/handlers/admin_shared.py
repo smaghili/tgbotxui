@@ -398,7 +398,7 @@ def online_clients_keyboard(
     *,
     page: int = 1,
 ) -> InlineKeyboardMarkup:
-    return online_filtered_clients_keyboard(
+    return client_list_keyboard(
         panel_id,
         clients,
         lang,
@@ -411,7 +411,7 @@ def action_panel_select_keyboard(panels: list[dict], action_prefix: str) -> Inli
     return panel_select_keyboard(panels, action_prefix)
 
 
-def online_filtered_clients_keyboard(
+def client_list_keyboard(
     panel_id: int,
     clients: list[dict],
     lang: str | None = None,
@@ -433,11 +433,14 @@ def online_filtered_clients_keyboard(
         if show_last_online and client.get("last_online"):
             label = f"{email} | {format_datetime(int(client['last_online']), tz_name)}"
             text = _truncate_button_text(f"🕘 {label}")
+        elif mode == "lr" and client.get("remaining_bytes") is not None:
+            remaining = format_bytes(int(client.get("remaining_bytes") or 0), lang)
+            text = _truncate_button_text(f"🪫 {email} | {remaining}")
         elif bool(client.get("enabled", True)):
             text = _truncate_button_text(f"🟢 {email}")
         else:
             text = _truncate_button_text(f"⚫ {email}")
-        detail_prefix = "uodl" if mode == "ds" else "uol"
+        detail_prefix = "uodl" if mode == "ds" else "uolr" if mode == "lr" else "uol"
         page_buttons.append(inline_button(text, f"{detail_prefix}:{panel_id}:{inbound_id}:{uuid}"))
     rows = chunk_buttons(page_buttons, columns=2)
     nav_row = _pagination_nav_row(
@@ -453,7 +456,13 @@ def online_filtered_clients_keyboard(
     )
     if nav_row is not None:
         rows.append(nav_row)
-    rows.append([inline_button(t("admin_refresh_list", lang), f"uolp:{panel_id}")])
+    refresh_callback = f"uolp:{panel_id}" if mode == "on" else _build_pagination_callback(
+        mode=mode,
+        panel_id=panel_id,
+        page=page,
+        query=query,
+    )
+    rows.append([inline_button(t("admin_refresh_list", lang), refresh_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -865,6 +865,67 @@ class Database:
             return None
         return json.loads(row["cookies_json"])
 
+    async def upsert_client_owner(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        owner_user_id: int,
+        client_email: str | None = None,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO client_owners (
+                panel_id, inbound_id, client_uuid, owner_user_id, client_email, updated_at
+            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(panel_id, inbound_id, client_uuid) DO UPDATE SET
+                owner_user_id=excluded.owner_user_id,
+                client_email=excluded.client_email,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (panel_id, inbound_id, client_uuid, owner_user_id, client_email),
+        )
+        await self.conn.commit()
+
+    async def get_client_owner(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> int | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT owner_user_id
+            FROM client_owners
+            WHERE panel_id=? AND inbound_id=? AND client_uuid=?
+            LIMIT 1;
+            """,
+            (panel_id, inbound_id, client_uuid),
+        )
+        row = await cur.fetchone()
+        return int(row["owner_user_id"]) if row else None
+
+    async def list_client_owners_for_panel(self, panel_id: int) -> dict[tuple[int, str], int]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT inbound_id, client_uuid, owner_user_id
+            FROM client_owners
+            WHERE panel_id=?;
+            """,
+            (panel_id,),
+        )
+        rows = await cur.fetchall()
+        return {
+            (int(row["inbound_id"]), str(row["client_uuid"])):
+            int(row["owner_user_id"])
+            for row in rows
+        }
+
     async def bind_user_service(
         self,
         *,
