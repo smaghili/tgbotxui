@@ -279,9 +279,9 @@ def _extract_create_client_amounts(
         except Exception:
             metadata = {}
         if traffic_value is None:
-            traffic_gb = int(metadata.get("traffic_gb") or 0)
+            traffic_gb = float(metadata.get("traffic_gb") or 0)
             if traffic_gb > 0:
-                traffic_value = str(traffic_gb)
+                traffic_value = str(traffic_gb).rstrip("0").rstrip(".")
         if expiry_value is None:
             expiry_days = int(metadata.get("expiry_days") or 0)
             if expiry_days > 0:
@@ -329,13 +329,13 @@ async def _format_today_sale_line(
     actor_name = await _actor_title(actor_user_id=actor_user_id, services=services)
     email = await _transaction_email(item, services=services)
     created_at = _format_db_timestamp(str(item.get("created_at") or ""), settings=settings, lang=lang)
-    traffic_gb = int(metadata.get("traffic_gb") or 0)
+    traffic_gb = float(metadata.get("traffic_gb") or 0)
     expiry_days = int(metadata.get("expiry_days") or 0)
     amount = _format_amount(abs(int(item.get("amount") or 0)))
     currency = str(item.get("currency") or t("finance_currency_default", lang))
     amount_label = f"{amount} {currency}"
     row_label = str(row_number)
-    traffic_label = str(traffic_gb)
+    traffic_label = str(traffic_gb).rstrip("0").rstrip(".")
     expiry_label = str(expiry_days)
     if lang != "en":
         row_label = to_persian_digits(row_label)

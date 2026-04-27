@@ -17,7 +17,7 @@ from bot.services.xui_client import (
     XUIError,
     parse_login_url,
 )
-from bot.utils import parse_epoch
+from bot.utils import gb_to_bytes, parse_epoch
 
 
 class PanelService:
@@ -413,7 +413,7 @@ class PanelService:
                 continue
             used = int(detail.get("used") or 0)
             remaining = max(total - used, 0)
-            if remaining > threshold_bytes:
+            if remaining <= 0 or remaining > threshold_bytes:
                 continue
             row.update(
                 {
@@ -757,7 +757,7 @@ class PanelService:
         panel_id: int,
         inbound_id: int,
         client_email: str,
-        total_gb: int,
+        total_gb: float,
         expiry_days: int,
         enable: bool = True,
         tg_id: str = "",
@@ -796,7 +796,7 @@ class PanelService:
             if flow:
                 break
 
-        total_bytes = max(0, int(total_gb)) * (1024**3)
+        total_bytes = gb_to_bytes(total_gb)
         expiry_ms = int((time.time() + (max(0, int(expiry_days)) * 86400)) * 1000)
         payload_client = {
             "id": client_uuid,
@@ -912,9 +912,9 @@ class PanelService:
         }
 
     async def set_client_total_gb(
-        self, panel_id: int, inbound_id: int, client_uuid: str, total_gb: int | None
+        self, panel_id: int, inbound_id: int, client_uuid: str, total_gb: float | None
     ) -> None:
-        total_bytes = 0 if total_gb is None else max(0, int(total_gb)) * (1024**3)
+        total_bytes = 0 if total_gb is None else gb_to_bytes(total_gb)
         await self._update_client_by_mutation(
             panel_id=panel_id,
             inbound_id=inbound_id,
@@ -923,13 +923,13 @@ class PanelService:
         )
 
     async def add_client_total_gb(
-        self, panel_id: int, inbound_id: int, client_uuid: str, add_gb: int
+        self, panel_id: int, inbound_id: int, client_uuid: str, add_gb: float
     ) -> int:
         _, current, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
         current_bytes = int(current.get("totalGB") or 0)
         if current_bytes < 0:
             current_bytes = 0
-        new_total = current_bytes + (max(0, int(add_gb)) * (1024**3))
+        new_total = current_bytes + gb_to_bytes(add_gb)
         await self._update_client_by_mutation(
             panel_id=panel_id,
             inbound_id=inbound_id,

@@ -104,17 +104,10 @@ sudo APP_DIR=/opt/mybot SERVICE_NAME=mybot BOT_USER=mybot bash install.sh instal
 - `TIMEZONE`
 - `SYNC_INTERVAL_SECONDS`
 - `DEPLETED_CLIENT_DELETE_AFTER_HOURS`
-- `DELEGATED_ADMIN_MIN_CREATE_GB`
-- `DELEGATED_ADMIN_MIN_CREATE_DAYS`
 - `SUB_URL_STRIP_PORT_RULES`
 - `SUB_URL_BASE_OVERRIDES`
 
-پیش‌فرض محدودیت ساخت برای ادمین فرعی:
-
-- حداقل حجم: `2` گیگ
-- حداقل زمان: `15` روز
-
-این دو محدودیت فقط برای ادمین‌های فرعی اعمال می‌شوند و مدیران اصلی را محدود نمی‌کنند.
+محدودیت ساخت هر ادمین فرعی از پروفایل همان ادمین در بخش مدیریت ادمین‌ها خوانده می‌شود.
 
 ## اجرای محلی توسعه
 

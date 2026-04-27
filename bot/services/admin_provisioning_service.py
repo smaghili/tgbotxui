@@ -14,7 +14,7 @@ from bot.i18n import t
 from bot.services.access_service import AccessService
 from bot.services.financial_service import FinancialService
 from bot.services.panel_service import PanelService
-from bot.utils import build_admin_activity_notice, display_name_from_parts, format_gb, now_jalali_datetime, to_local_date
+from bot.utils import build_admin_activity_notice, bytes_to_gb, display_name_from_parts, format_gb, now_jalali_datetime, to_local_date
 
 if TYPE_CHECKING:
     from bot.services.usage_service import UsageService
@@ -166,7 +166,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
         ref: ManagedClientRef,
-        add_gb: int,
+        add_gb: float,
         operation_name: str,
         refund_reason_prefix: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -414,7 +414,7 @@ class AdminProvisioningService:
         panel_id: int,
         inbound_id: int,
         client_uuid: str,
-        add_gb: int,
+        add_gb: float,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         ref = await self._managed_ref_from_panel_client(
             panel_id=panel_id,
@@ -482,7 +482,7 @@ class AdminProvisioningService:
         panel_id: int,
         inbound_id: int,
         client_uuid: str,
-        total_gb: int | None,
+        total_gb: float | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         ref = await self._managed_ref_from_panel_client(
             panel_id=panel_id,
@@ -500,7 +500,7 @@ class AdminProvisioningService:
             )
         charge_tx = None
         if self.financial_service is not None:
-            before_allocated_gb = max(0, (int(before.get("total") or 0) + (1024**3) - 1) // (1024**3))
+            before_allocated_gb = max(0.0, bytes_to_gb(int(before.get("total") or 0)))
             charge_tx = await self.financial_service.charge_operation(
                 actor_user_id=actor_user_id,
                 settings=settings,
@@ -1151,7 +1151,7 @@ class AdminProvisioningService:
         panel_id: int,
         inbound_id: int,
         client_email: str,
-        total_gb: int,
+        total_gb: float,
         expiry_days: int,
         tg_id: str = "",
     ) -> dict[str, Any]:
@@ -1380,7 +1380,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
         vless_uri: str,
-        add_gb: int,
+        add_gb: float,
     ) -> ManagedClientRef:
         ref = await self.resolve_client_from_vless_for_actor(
             actor_user_id=actor_user_id,

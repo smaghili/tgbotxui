@@ -486,7 +486,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_ip_limit_updated": {"fa": "محدودیت IP بروزرسانی شد.", "en": "IP limit updated."},
     "admin_enable_on": {"fa": "فعال شد.", "en": "Enabled."},
     "admin_enable_off": {"fa": "غیرفعال شد.", "en": "Disabled."},
-    "admin_enter_traffic_gb": {"fa": "حجم ترافیک را به گیگابایت وارد کنید (مثال: 25):", "en": "Enter traffic in GB (example: 25):"},
+    "admin_enter_traffic_gb": {"fa": "حجم ترافیک را به گیگابایت وارد کنید (مثال: 25 یا 0.5):", "en": "Enter traffic in GB (example: 25 or 0.5):"},
     "admin_enter_days": {"fa": "تعداد روز سفارشی را وارد کنید:", "en": "Enter custom days:"},
     "admin_enter_ip_limit": {"fa": "تعداد IP سفارشی را وارد کنید:", "en": "Enter custom IP limit:"},
     "admin_enter_tg": {"fa": "آیدی تلگرام (عددی یا یوزرنیم) را وارد کنید. برای پاک‌کردن: -", "en": "Enter Telegram ID (numeric or username). Send - to clear."},
@@ -619,8 +619,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_not_found": {"fa": "نماینده پیدا نشد.", "en": "Delegated admin not found."},
     "admin_delegated_enter_prefix": {"fa": "پیشوند نام کاربری را وارد کنید. برای حذف، - بفرستید.", "en": "Enter username prefix. Send - to clear."},
     "admin_delegated_enter_max_users": {"fa": "حداکثر کاربر قابل ساخت را وارد کنید. 0 یعنی نامحدود.", "en": "Enter max clients. 0 means unlimited."},
-    "admin_delegated_enter_min_traffic": {"fa": "حداقل خرید حجم را به گیگ وارد کنید.", "en": "Enter minimum traffic in GB."},
-    "admin_delegated_enter_max_traffic": {"fa": "حداکثر خرید حجم را به گیگ وارد کنید. 0 یعنی نامحدود.", "en": "Enter maximum traffic in GB. 0 means unlimited."},
+    "admin_delegated_enter_min_traffic": {"fa": "حداقل خرید حجم را به گیگ وارد کنید. عدد اعشاری و 0 مجاز است.", "en": "Enter minimum traffic in GB. Decimal values and 0 are allowed."},
+    "admin_delegated_enter_max_traffic": {"fa": "حداکثر خرید حجم را به گیگ وارد کنید. عدد اعشاری مجاز است و 0 یعنی نامحدود.", "en": "Enter maximum traffic in GB. Decimal values are allowed; 0 means unlimited."},
     "admin_delegated_enter_min_days": {"fa": "حداقل خرید زمان را به روز وارد کنید.", "en": "Enter minimum days."},
     "admin_delegated_enter_max_days": {"fa": "حداکثر خرید زمان را به روز وارد کنید. 0 یعنی نامحدود.", "en": "Enter maximum days. 0 means unlimited."},
     "admin_delegated_enter_expiry": {"fa": "تعداد روز تا انقضای نماینده را وارد کنید. 0 یعنی نامحدود.", "en": "Enter days until delegate expiry. 0 means unlimited."},
@@ -697,8 +697,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Select a panel for bulk operations:",
     },
     "admin_bulk_enter_traffic": {
-        "fa": "مقدار حجمی که باید به همه کاربران این پنل اضافه شود را به گیگابایت وارد کنید:",
-        "en": "Enter traffic in GB to add to all clients in this panel:",
+        "fa": "مقدار حجمی که باید به همه کاربران این پنل اضافه شود را به گیگابایت وارد کنید (مثال: 0.5 یا 2.6):",
+        "en": "Enter traffic in GB to add to all clients in this panel (example: 0.5 or 2.6):",
     },
     "admin_bulk_enter_days": {
         "fa": "تعداد روزی که باید به همه کاربران این پنل اضافه شود را وارد کنید:",
@@ -729,8 +729,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Enter client name/email:",
     },
     "admin_create_enter_traffic": {
-        "fa": "حجم کاربر را به گیگابایت وارد کنید:",
-        "en": "Enter traffic in GB:",
+        "fa": "حجم کاربر را به گیگابایت وارد کنید (مثال: 0.5 یا 2.6):",
+        "en": "Enter traffic in GB (example: 0.5 or 2.6):",
     },
     "admin_create_enter_days": {
         "fa": "تعداد روز کاربر را وارد کنید:",
@@ -785,8 +785,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_edit_delete_client": {"fa": "🗑 حذف کاربر", "en": "🗑 Delete client"},
     "admin_edit_show_detail": {"fa": "🔎 نمایش جزئیات", "en": "🔎 Show detail"},
     "admin_edit_enter_add_traffic": {
-        "fa": "مقدار حجمی که باید اضافه شود را به گیگابایت وارد کنید:",
-        "en": "Enter GB amount to add:",
+        "fa": "مقدار حجمی که باید اضافه شود را به گیگابایت وارد کنید (مثال: 0.5 یا 2.6):",
+        "en": "Enter GB amount to add (example: 0.5 or 2.6):",
     },
     "admin_edit_enter_add_days": {
         "fa": "تعداد روزی که باید اضافه شود را وارد کنید:",

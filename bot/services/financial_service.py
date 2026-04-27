@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from decimal import Decimal
 from typing import Any
 
 from bot.config import Settings
@@ -187,16 +188,17 @@ class FinancialService:
         self,
         telegram_user_id: int,
         *,
-        traffic_gb: int = 0,
+        traffic_gb: float = 0,
         expiry_days: int = 0,
     ) -> dict[str, Any]:
         pricing = await self.get_pricing(telegram_user_id)
         gb_price = int(pricing["price_per_gb"] or 0)
         day_price = int(pricing["price_per_day"] or 0)
-        traffic_cost = max(0, traffic_gb) * gb_price
+        traffic_amount = max(Decimal("0"), Decimal(str(traffic_gb)))
+        traffic_cost = int(traffic_amount * gb_price)
         expiry_cost = max(0, expiry_days) * day_price
         return {
-            "traffic_gb": max(0, traffic_gb),
+            "traffic_gb": float(traffic_amount),
             "expiry_days": max(0, expiry_days),
             "price_per_gb": gb_price,
             "price_per_day": day_price,
@@ -339,9 +341,9 @@ class FinancialService:
         return profile
 
     @staticmethod
-    def _validate_traffic_range(profile: dict[str, Any], traffic_gb: int) -> None:
-        min_traffic = max(0, int(profile.get("min_traffic_gb") or 0))
-        max_traffic = max(0, int(profile.get("max_traffic_gb") or 0))
+    def _validate_traffic_range(profile: dict[str, Any], traffic_gb: float) -> None:
+        min_traffic = max(0.0, float(profile.get("min_traffic_gb") or 0))
+        max_traffic = max(0.0, float(profile.get("max_traffic_gb") or 0))
         if traffic_gb < min_traffic:
             raise ValueError("delegated traffic is below minimum.")
         if max_traffic > 0 and traffic_gb > max_traffic:
@@ -361,7 +363,7 @@ class FinancialService:
         *,
         actor_user_id: int,
         settings: Settings,
-        traffic_gb: int = 0,
+        traffic_gb: float = 0,
         expiry_days: int = 0,
     ) -> dict[str, Any] | None:
         profile = await self.ensure_delegated_actor_active(actor_user_id=actor_user_id, settings=settings)
@@ -378,7 +380,7 @@ class FinancialService:
         *,
         actor_user_id: int,
         settings: Settings,
-        total_gb: int | None = None,
+        total_gb: float | None = None,
         total_days: int | None = None,
     ) -> dict[str, Any] | None:
         profile = await self.ensure_delegated_actor_active(actor_user_id=actor_user_id, settings=settings)
@@ -396,7 +398,7 @@ class FinancialService:
         actor_user_id: int,
         settings: Settings,
         operation: str,
-        traffic_gb: int = 0,
+        traffic_gb: float = 0,
         expiry_days: int = 0,
         details: str | None = None,
         metadata: dict[str, Any] | None = None,
@@ -431,7 +433,7 @@ class FinancialService:
             details=details or f"traffic_gb={traffic_gb};expiry_days={expiry_days}",
             metadata={
                 **(metadata or {}),
-                "traffic_gb": max(0, traffic_gb),
+                "traffic_gb": max(0.0, float(traffic_gb)),
                 "expiry_days": max(0, expiry_days),
                 "price_per_gb": int(charge["price_per_gb"] or 0),
                 "price_per_day": int(charge["price_per_day"] or 0),

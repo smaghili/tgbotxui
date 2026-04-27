@@ -269,9 +269,9 @@ def _extract_create_client_amounts(
         except Exception:
             metadata = {}
         if traffic_value is None:
-            traffic_gb = int(metadata.get("traffic_gb") or 0)
+            traffic_gb = float(metadata.get("traffic_gb") or 0)
             if traffic_gb > 0:
-                traffic_value = str(traffic_gb)
+                traffic_value = str(traffic_gb).rstrip("0").rstrip(".")
         if expiry_value is None:
             expiry_days = int(metadata.get("expiry_days") or 0)
             if expiry_days > 0:

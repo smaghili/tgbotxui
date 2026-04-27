@@ -12,7 +12,7 @@ from bot.i18n import button_variants, t
 from bot.pagination import chunk_buttons, paginate_window
 from bot.services.container import ServiceContainer
 from bot.states import ProvisioningStates
-from bot.utils import build_admin_activity_notice, format_gb
+from bot.utils import build_admin_activity_notice, format_gb, gb_to_bytes, parse_gb_amount
 
 from .admin_shared import (
     actor_display_name,
@@ -149,7 +149,7 @@ async def _send_config_bundle(
     message: Message,
     *,
     config_name: str,
-    total_gb: int,
+    total_gb: float,
     expiry_days: int,
     vless_uri: str,
     sub_url: str,
@@ -158,7 +158,7 @@ async def _send_config_bundle(
     await send_config_bundle_card(
         message,
         config_name=config_name,
-        total_label=format_gb(total_gb * (1024**3), lang or "fa"),
+        total_label=format_gb(gb_to_bytes(total_gb), lang or "fa"),
         expiry_label=f"{expiry_days} {t('unit_day', lang)}",
         vless_uri=vless_uri,
         sub_url=sub_url,
@@ -220,16 +220,18 @@ async def _notify_admin_activity(
 def _delegated_min_create_error(
     *,
     is_delegated_admin: bool,
-    traffic_gb: int | None = None,
+    profile: dict | None,
+    traffic_gb: float | None = None,
     expiry_days: int | None = None,
-    settings: Settings,
 ) -> tuple[str, int] | None:
-    if not is_delegated_admin:
+    if not is_delegated_admin or profile is None:
         return None
-    if traffic_gb is not None and traffic_gb < settings.delegated_admin_min_create_gb:
-        return "admin_delegated_min_create_traffic", settings.delegated_admin_min_create_gb
-    if expiry_days is not None and expiry_days < settings.delegated_admin_min_create_days:
-        return "admin_delegated_min_create_days", settings.delegated_admin_min_create_days
+    min_traffic_gb = max(0.0, float(profile.get("min_traffic_gb") or 0))
+    min_expiry_days = max(0, int(profile.get("min_expiry_days") or 0))
+    if traffic_gb is not None and traffic_gb < min_traffic_gb:
+        return "admin_delegated_min_create_traffic", min_traffic_gb
+    if expiry_days is not None and expiry_days < min_expiry_days:
+        return "admin_delegated_min_create_days", min_expiry_days
     return None
 
 
@@ -471,16 +473,18 @@ async def create_user_traffic(message: Message, state: FSMContext, settings: Set
         return
     lang = await services.db.get_user_language(message.from_user.id)
     try:
-        gb = int((message.text or "").strip())
+        gb = parse_gb_amount(message.text or "")
         if gb <= 0:
             raise ValueError
     except ValueError:
         await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
         return
+    is_delegated_admin = await services.access_service.is_delegated_admin(message.from_user.id)
+    profile = await services.db.get_delegated_admin_profile(message.from_user.id) if is_delegated_admin else None
     delegated_limit_error = _delegated_min_create_error(
-        is_delegated_admin=await services.access_service.is_delegated_admin(message.from_user.id),
+        is_delegated_admin=is_delegated_admin,
+        profile=profile,
         traffic_gb=gb,
-        settings=settings,
     )
     if delegated_limit_error is not None:
         error_key, minimum = delegated_limit_error
@@ -503,10 +507,12 @@ async def create_user_days(message: Message, state: FSMContext, settings: Settin
     except ValueError:
         await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
         return
+    is_delegated_admin = await services.access_service.is_delegated_admin(message.from_user.id)
+    profile = await services.db.get_delegated_admin_profile(message.from_user.id) if is_delegated_admin else None
     delegated_limit_error = _delegated_min_create_error(
-        is_delegated_admin=await services.access_service.is_delegated_admin(message.from_user.id),
+        is_delegated_admin=is_delegated_admin,
+        profile=profile,
         expiry_days=days,
-        settings=settings,
     )
     if delegated_limit_error is not None:
         error_key, minimum = delegated_limit_error
@@ -575,7 +581,7 @@ async def _finish_create_user(
             panel_id=int(data["create_panel_id"]),
             inbound_id=int(data["create_inbound_id"]),
             client_email=str(data["create_email"]),
-            total_gb=int(data["create_total_gb"]),
+            total_gb=float(data["create_total_gb"]),
             expiry_days=int(data["create_expiry_days"]),
             tg_id=str(data.get("create_tg_id") or ""),
         )
@@ -591,7 +597,7 @@ async def _finish_create_user(
     await _send_config_bundle(
         message,
         config_name=result["email"],
-        total_gb=int(data["create_total_gb"]),
+        total_gb=float(data["create_total_gb"]),
         expiry_days=int(data["create_expiry_days"]),
         vless_uri=result["vless_uri"],
         sub_url=result["sub_url"],
@@ -1206,7 +1212,7 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
         return
     lang = await services.db.get_user_language(message.from_user.id)
     try:
-        gb = int((message.text or "").strip())
+        gb = parse_gb_amount(message.text or "")
         if gb <= 0:
             raise ValueError
     except ValueError:

@@ -14,6 +14,7 @@ from bot.states import DelegatedAdminStates
 from bot.utils import (
     format_db_timestamp as shared_format_db_timestamp,
     format_gb_exact as shared_format_gb_exact,
+    parse_gb_amount,
     parse_detail_pairs,
     relative_remaining_time,
     to_local_date,
@@ -205,8 +206,8 @@ def _format_amount(value: int) -> str:
     return f"{value:,}"
 
 
-def _value_or_unlimited(value: int, lang: str | None) -> str:
-    return t("admin_delegated_unlimited", lang) if value <= 0 else str(value)
+def _value_or_unlimited(value: float | int, lang: str | None) -> str:
+    return t("admin_delegated_unlimited", lang) if value <= 0 else _format_gb_exact(value)
 
 
 def _wallet_operation_title(operation: str, email: str | None) -> str:
@@ -238,11 +239,12 @@ def _format_wallet_entry(item: dict, *, settings: Settings, lang: str | None) ->
         metadata = json.loads(item.get("metadata_json") or "{}")
     except Exception:
         metadata = {}
-    traffic_gb = int(metadata.get("traffic_gb") or 0)
+    traffic_gb = float(metadata.get("traffic_gb") or 0)
     expiry_days = int(metadata.get("expiry_days") or 0)
     parts = [f"- {created_at}", _wallet_operation_title(operation, email)]
     if traffic_gb > 0:
-        parts.append(f"مقدار: {to_persian_digits(traffic_gb) if lang == 'fa' else traffic_gb} گیگ")
+        traffic_label = _format_gb_exact(traffic_gb)
+        parts.append(f"مقدار: {to_persian_digits(traffic_label) if lang == 'fa' else traffic_label} گیگ")
     if expiry_days > 0:
         parts.append(f"مقدار: {to_persian_digits(expiry_days) if lang == 'fa' else expiry_days} روز")
     parts.append(f"قیمت: {amount} {currency}")
@@ -337,8 +339,8 @@ async def _render_delegated_detail(
         title=title,
         prefix=str(profile.get("username_prefix") or t("admin_none", lang)),
         max_users=_value_or_unlimited(int(profile.get("max_clients") or 0), lang),
-        min_traffic=int(profile.get("min_traffic_gb") or 1),
-        max_traffic=_value_or_unlimited(int(profile.get("max_traffic_gb") or 0), lang),
+        min_traffic=_format_gb_exact(float(profile.get("min_traffic_gb") or 0)),
+        max_traffic=_value_or_unlimited(float(profile.get("max_traffic_gb") or 0), lang),
         min_days=int(profile.get("min_expiry_days") or 1),
         max_days=_value_or_unlimited(int(profile.get("max_expiry_days") or 0), lang),
         price_day=_format_amount(int(pricing.get("price_per_day") or 0)),
@@ -772,6 +774,12 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
                 price_per_gb=new_price_gb,
                 price_per_day=new_price_day,
                 charge_basis=str(pricing.get("charge_basis") or "allocated"),
+            )
+        elif field_name in {"min_traffic_gb", "max_traffic_gb"}:
+            number = parse_gb_amount(raw)
+            await services.db.update_delegated_admin_profile(
+                telegram_user_id=target_user_id,
+                **{field_name: number},
             )
         else:
             number = int(raw)

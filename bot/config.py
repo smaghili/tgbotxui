@@ -103,8 +103,6 @@ class Settings:
     depleted_client_delete_after_hours: int
     config_rotate_apply_delay_seconds: int
     low_traffic_list_threshold_mb: int
-    delegated_admin_min_create_gb: int
-    delegated_admin_min_create_days: int
     telegram_proxies: tuple[str, ...]
     sub_url_strip_port_rules: dict[str, str]
     sub_url_base_overrides: dict[str, str]
@@ -151,12 +149,6 @@ class Settings:
             ),
             low_traffic_list_threshold_mb=int(
                 os.getenv("LOW_TRAFFIC_LIST_THRESHOLD_MB", "500")
-            ),
-            delegated_admin_min_create_gb=int(
-                os.getenv("DELEGATED_ADMIN_MIN_CREATE_GB", "2")
-            ),
-            delegated_admin_min_create_days=int(
-                os.getenv("DELEGATED_ADMIN_MIN_CREATE_DAYS", "15")
             ),
             telegram_proxies=_parse_proxy_list(os.getenv("TELEGRAM_PROXIES", "")),
             sub_url_strip_port_rules=_parse_sub_url_strip_port_rules(

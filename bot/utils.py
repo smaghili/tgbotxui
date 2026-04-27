@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -9,6 +10,8 @@ import jdatetime
 from bot.i18n import t
 
 PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+PERSIAN_TO_ENGLISH_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+BYTES_PER_GB = 1024**3
 
 
 def to_persian_digits(value: str | int) -> str:
@@ -30,7 +33,29 @@ def parse_epoch(raw: int | str | None) -> int | None:
 
 
 def bytes_to_gb(value: int) -> float:
-    return value / (1024**3)
+    return value / BYTES_PER_GB
+
+
+def parse_gb_amount(raw: str) -> float:
+    value = raw.strip().translate(PERSIAN_TO_ENGLISH_DIGITS).replace(",", "")
+    if value.startswith("."):
+        value = f"0{value}"
+    if not value:
+        raise ValueError("empty_gb_amount")
+    try:
+        amount = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError("invalid_gb_amount") from exc
+    if amount < 0:
+        raise ValueError("negative_gb_amount")
+    return float(amount)
+
+
+def gb_to_bytes(value: float | int) -> int:
+    amount = Decimal(str(value))
+    if amount <= 0:
+        return 0
+    return int((amount * BYTES_PER_GB).to_integral_value(rounding=ROUND_FLOOR))
 
 
 def format_gb(value: int, lang: str = "fa") -> str:

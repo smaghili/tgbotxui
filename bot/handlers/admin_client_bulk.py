@@ -8,6 +8,7 @@ from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
 from bot.states import ClientManageStates
+from bot.utils import parse_gb_amount
 from .admin_client_helpers import (
     bulk_clients_for_panel,
     delegated_profile_error_text,
@@ -132,7 +133,7 @@ async def users_bulk_add_days_prompt(
 async def bulk_add_traffic_gb(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     raw = (message.text or "").strip()
     try:
-        gb = int(raw)
+        gb = parse_gb_amount(raw)
         if gb <= 0:
             raise ValueError
     except ValueError:

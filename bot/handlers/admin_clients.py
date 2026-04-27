@@ -9,6 +9,7 @@ from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
 from bot.states import ClientManageStates
+from bot.utils import parse_gb_amount
 from .admin_client_helpers import (
     actor_scope as _actor_scope,
     delegated_profile_error_text as _delegated_profile_error_text,
@@ -1124,7 +1125,7 @@ async def client_traffic_set(callback: CallbackQuery, settings: Settings, servic
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    total_gb: int | None = None if value_raw == "unlimited" else int(value_raw)
+    total_gb: float | None = None if value_raw == "unlimited" else parse_gb_amount(value_raw)
     try:
         await services.admin_provisioning_service.set_client_total_gb_for_actor(
             actor_user_id=callback.from_user.id,
@@ -1515,7 +1516,7 @@ async def client_ips_clear(callback: CallbackQuery, settings: Settings, services
 async def client_custom_traffic_gb(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     raw = (message.text or "").strip()
     try:
-        gb = int(raw)
+        gb = parse_gb_amount(raw)
         if gb < 0:
             raise ValueError
     except ValueError:

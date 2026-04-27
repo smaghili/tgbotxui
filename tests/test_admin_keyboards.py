@@ -26,6 +26,13 @@ def test_admin_keyboard_removes_search_user_button() -> None:
     assert btn("btn_last_online_users", "fa") not in labels
 
 
+def test_limited_admin_keyboard_includes_low_traffic_users() -> None:
+    markup = admin_keyboard(mode="limited", lang="fa")
+    labels = [button.text for row in markup.keyboard for button in row]
+
+    assert btn("btn_low_traffic_users", "fa") in labels
+
+
 def test_edit_config_actions_keyboard_includes_toggle_button() -> None:
     markup = edit_config_actions_keyboard(1, 2, "uuid-1", True, "fa")
     labels = [button.text for row in markup.inline_keyboard for button in row]
