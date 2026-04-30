@@ -167,7 +167,7 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
         class Settings:
             admin_ids = set()
             moaf_admin_ids = {55}
-            moaf_traffic_bytes = {5 * 1024 ** 3}
+            moaf_min_traffic_bytes = 5 * 1024 ** 3
             timezone = "Asia/Tehran"
 
         class FakeAccessService:
@@ -236,6 +236,9 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self) -> None:
                 self.root_messages: list[dict] = []
 
+            async def is_active_delegated_admin_user(self, user_id: int) -> bool:
+                return False
+
             async def notify_root_admin_activity(self, **kwargs) -> None:
                 self.root_messages.append(kwargs)
 
@@ -256,7 +259,7 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
             panel_id=1,
             inbound_id=100,
             client_email="u1",
-            total_gb=5,
+            total_gb=10,
             expiry_days=30,
         )
 
@@ -265,6 +268,107 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["wallet_charge_amount"], 0)
         self.assertEqual(len(usage_service.root_messages), 1)
         self.assertTrue(str(usage_service.root_messages[0]["text"]).startswith("**خرید ویژه**"))
+
+    async def test_moaf_threshold_includes_minimum(self) -> None:
+        class Settings:
+            admin_ids = set()
+            moaf_admin_ids = {55}
+            moaf_min_traffic_bytes = 5 * 1024 ** 3
+            timezone = "Asia/Tehran"
+
+        class FakeAccessService:
+            def is_root_admin(self, user_id, settings) -> bool:
+                return False
+
+            async def can_access_inbound(self, **kwargs) -> bool:
+                return True
+
+            async def get_admin_context(self, user_id, settings) -> AdminContext:
+                return AdminContext(
+                    user_id=user_id,
+                    is_root_admin=False,
+                    is_delegated_admin=True,
+                    delegated_scope="limited",
+                )
+
+        class FakeDB:
+            async def get_delegated_admin_profile(self, user_id: int) -> dict:
+                return {"max_clients": 0}
+
+            async def get_user_language(self, user_id: int) -> str:
+                return "fa"
+
+            async def get_user_by_telegram_id(self, user_id: int) -> dict | None:
+                return None
+
+            async def get_delegated_admin_by_user_id(self, user_id: int) -> dict | None:
+                return {"title": "delegate"}
+
+            async def upsert_client_owner(self, **kwargs) -> None:
+                return None
+
+            async def add_audit_log(self, **kwargs) -> None:
+                return None
+
+        class FakePanelService:
+            def __init__(self) -> None:
+                self.comments: list[str] = []
+
+            async def create_client(self, **kwargs) -> dict:
+                self.comments.append(str(kwargs.get("comment") or ""))
+                return {"uuid": f"uuid-{len(self.comments)}", "email": kwargs["client_email"]}
+
+            async def get_client_vless_uri_by_email(self, **kwargs) -> str:
+                return "vless://uuid@example.com:443"
+
+            async def get_client_subscription_url_by_email(self, **kwargs) -> str:
+                return ""
+
+            async def panel_inbound_names(self, panel_id: int, inbound_id: int) -> tuple[str, str]:
+                return "panel-a", "in-a"
+
+        class FakeFinancialService:
+            def __init__(self) -> None:
+                self.charge_calls: list[dict] = []
+
+            async def charge_operation(self, **kwargs) -> dict:
+                self.charge_calls.append(kwargs)
+                return {"id": len(self.charge_calls), "amount": 1000}
+
+        class FakeUsageService:
+            def __init__(self) -> None:
+                self.root_messages: list[dict] = []
+
+            async def is_active_delegated_admin_user(self, user_id: int) -> bool:
+                return False
+
+            async def notify_root_admin_activity(self, **kwargs) -> None:
+                self.root_messages.append(kwargs)
+
+        panel_service = FakePanelService()
+        financial_service = FakeFinancialService()
+        usage_service = FakeUsageService()
+        service = AdminProvisioningService(
+            db=FakeDB(),  # type: ignore[arg-type]
+            panel_service=panel_service,  # type: ignore[arg-type]
+            access_service=FakeAccessService(),  # type: ignore[arg-type]
+            financial_service=financial_service,  # type: ignore[arg-type]
+            usage_service=usage_service,  # type: ignore[arg-type]
+        )
+
+        await service.create_client_for_actor(
+            actor_user_id=55,
+            settings=Settings(),  # type: ignore[arg-type]
+            panel_id=1,
+            inbound_id=100,
+            client_email="u5",
+            total_gb=5,
+            expiry_days=30,
+        )
+
+        self.assertEqual(panel_service.comments, ["55:Moaf"])
+        self.assertEqual(financial_service.charge_calls, [])
+        self.assertEqual(len(usage_service.root_messages), 1)
 
 
 if __name__ == "__main__":

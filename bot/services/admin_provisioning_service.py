@@ -1345,7 +1345,8 @@ class AdminProvisioningService:
         is_moaf_create = (
             context.is_delegated_admin
             and actor_user_id in getattr(settings, "moaf_admin_ids", set())
-            and gb_to_bytes(total_gb) in getattr(settings, "moaf_traffic_bytes", set())
+            and getattr(settings, "moaf_min_traffic_bytes", 0) > 0
+            and gb_to_bytes(total_gb) >= int(getattr(settings, "moaf_min_traffic_bytes", 0))
         )
         charge_tx = None
         if self.financial_service is not None and not is_moaf_create:

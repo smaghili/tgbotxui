@@ -3,7 +3,7 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 
 from bot.config import (
-    _parse_moaf_traffic_gb_values,
+    _parse_moaf_min_traffic_gb,
     _parse_proxy_list,
     _parse_sub_url_base_overrides,
     _parse_sub_url_strip_port_rules,
@@ -38,11 +38,9 @@ class ConfigAndVlessTests(unittest.TestCase):
             {"1": "http://sub.goldoonam.shop/sub", "3xui": "https://cdn.example.com/sub"},
         )
 
-    def test_parse_moaf_traffic_gb_values(self) -> None:
-        self.assertEqual(
-            _parse_moaf_traffic_gb_values("5, 10\n0\nbad"),
-            {5 * 1024 ** 3, 10 * 1024 ** 3},
-        )
+    def test_parse_moaf_min_traffic_gb(self) -> None:
+        self.assertEqual(_parse_moaf_min_traffic_gb("5"), 5 * 1024 ** 3)
+        self.assertEqual(_parse_moaf_min_traffic_gb("bad"), 0)
 
     def test_extract_uuid_from_vless_uri(self) -> None:
         uri = "vless://0b8ca9c6-9f47-42d5-971f-af595efd842b@example.com:443?encryption=none#test"
