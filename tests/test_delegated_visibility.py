@@ -168,6 +168,7 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
             admin_ids = set()
             moaf_admin_ids = {55}
             moaf_traffic_bytes = {5 * 1024 ** 3}
+            timezone = "Asia/Tehran"
 
         class FakeAccessService:
             def is_root_admin(self, user_id, settings) -> bool:
@@ -191,6 +192,15 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
             async def get_delegated_admin_profile(self, user_id: int) -> dict:
                 return {"max_clients": 0}
 
+            async def get_user_language(self, user_id: int) -> str:
+                return "fa"
+
+            async def get_user_by_telegram_id(self, user_id: int) -> dict | None:
+                return None
+
+            async def get_delegated_admin_by_user_id(self, user_id: int) -> dict | None:
+                return {"title": "delegate"}
+
             async def upsert_client_owner(self, **kwargs) -> None:
                 return None
 
@@ -211,6 +221,9 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
             async def get_client_subscription_url_by_email(self, **kwargs) -> str:
                 return ""
 
+            async def panel_inbound_names(self, panel_id: int, inbound_id: int) -> tuple[str, str]:
+                return "panel-a", "in-a"
+
         class FakeFinancialService:
             def __init__(self) -> None:
                 self.charge_calls: list[dict] = []
@@ -219,13 +232,22 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
                 self.charge_calls.append(kwargs)
                 return {"id": 1, "amount": 1000}
 
+        class FakeUsageService:
+            def __init__(self) -> None:
+                self.root_messages: list[dict] = []
+
+            async def notify_root_admin_activity(self, **kwargs) -> None:
+                self.root_messages.append(kwargs)
+
         panel_service = FakePanelService()
         financial_service = FakeFinancialService()
+        usage_service = FakeUsageService()
         service = AdminProvisioningService(
             db=FakeDB(),  # type: ignore[arg-type]
             panel_service=panel_service,  # type: ignore[arg-type]
             access_service=FakeAccessService(),  # type: ignore[arg-type]
             financial_service=financial_service,  # type: ignore[arg-type]
+            usage_service=usage_service,  # type: ignore[arg-type]
         )
 
         result = await service.create_client_for_actor(
@@ -241,6 +263,8 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(panel_service.comment, "55:Moaf")
         self.assertEqual(financial_service.charge_calls, [])
         self.assertEqual(result["wallet_charge_amount"], 0)
+        self.assertEqual(len(usage_service.root_messages), 1)
+        self.assertTrue(str(usage_service.root_messages[0]["text"]).startswith("**خرید ویژه**"))
 
 
 if __name__ == "__main__":

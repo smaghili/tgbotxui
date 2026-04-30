@@ -157,6 +157,40 @@ class AdminProvisioningService:
             panel_id=panel_id,
         )
 
+    async def _notify_root_special_purchase(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        client_email: str,
+        panel_id: int,
+        inbound_id: int,
+        total_gb: float,
+        expiry_days: int,
+    ) -> None:
+        if self.usage_service is None:
+            return
+        lang = await self.db.get_user_language(actor_user_id)
+        actor = await self._actor_display_name(actor_user_id)
+        panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
+        text = (
+            "**خرید ویژه**\n"
+            + build_admin_activity_notice(
+                lang=lang,
+                actor=actor,
+                action_text=t("admin_activity_action_create_client", lang),
+                user=client_email,
+                panel=panel_name,
+                inbound=inbound_name,
+                details=[
+                    t("admin_activity_detail_amount_gb", lang, value=total_gb),
+                    t("admin_activity_detail_amount_days", lang, value=expiry_days),
+                ],
+            )
+            + f"\nزمان: {now_jalali_datetime(settings.timezone)}"
+        )
+        await self.usage_service.notify_root_admin_activity(actor_user_id=actor_user_id, text=text)
+
     async def _managed_ref_from_panel_client(
         self,
         *,
@@ -1407,7 +1441,17 @@ class AdminProvisioningService:
             success=True,
             details=f"panel={panel_id};inbound={inbound_id};email={client_email}",
         )
-        if not is_moaf_create:
+        if is_moaf_create:
+            await self._notify_root_special_purchase(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                client_email=client_email,
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                total_gb=total_gb,
+                expiry_days=expiry_days,
+            )
+        else:
             lang = await self.db.get_user_language(actor_user_id)
             actor = await self._actor_display_name(actor_user_id)
             panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)

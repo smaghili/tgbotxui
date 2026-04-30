@@ -210,6 +210,31 @@ class UsageService:
                 details=f"delivery=immediate_failed;notification_id={notification_id}",
             )
 
+    async def notify_root_admin_activity(self, *, actor_user_id: int, text: str) -> None:
+        for admin_id in sorted(self.root_admin_ids):
+            if await self._send_chat_message(admin_id, text):
+                await self._audit_admin_activity_delivery(
+                    actor_user_id=actor_user_id,
+                    recipient_user_id=admin_id,
+                    action="root_admin_activity_notification_sent",
+                    success=True,
+                    details="delivery=immediate",
+                )
+                continue
+            notification_id = await self._queue_admin_notification(
+                actor_user_id=actor_user_id,
+                chat_id=admin_id,
+                text=text,
+                last_error="immediate_send_failed",
+            )
+            await self._audit_admin_activity_delivery(
+                actor_user_id=actor_user_id,
+                recipient_user_id=admin_id,
+                action="root_admin_activity_notification_queued",
+                success=False,
+                details=f"delivery=immediate_failed;notification_id={notification_id}",
+            )
+
     async def _auto_cleanup_recipient_ids(self) -> list[int]:
         recipients = set(self.root_admin_ids)
         recipients.update(await self._active_delegated_admin_ids())
