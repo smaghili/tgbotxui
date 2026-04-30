@@ -18,6 +18,7 @@ class AdminActivityService:
         actor_user_id: int,
         settings: Settings,
         text: str,
+        panel_id: int | None = None,
     ) -> str:
         stamped_text = f"{text}\nزمان: {now_jalali_datetime(settings.timezone)}"
         await self.db.add_audit_log(
@@ -29,5 +30,9 @@ class AdminActivityService:
             details=stamped_text,
         )
         if self.usage_service is not None and await self.usage_service.is_active_delegated_admin_user(actor_user_id):
-            await self.usage_service.notify_admin_activity(actor_user_id=actor_user_id, text=stamped_text)
+            await self.usage_service.notify_admin_activity(
+                actor_user_id=actor_user_id,
+                text=stamped_text,
+                panel_id=panel_id,
+            )
         return stamped_text

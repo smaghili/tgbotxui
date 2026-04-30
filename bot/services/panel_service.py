@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import time
@@ -159,6 +160,22 @@ class PanelService:
         if isinstance(obj, dict):
             return [obj]
         return []
+
+    async def _get_inbound_by_id(
+        self,
+        panel_id: int,
+        inbound_id: int,
+        *,
+        attempts: int = 3,
+    ) -> Dict[str, Any] | None:
+        for attempt in range(max(1, attempts)):
+            inbounds = await self.list_inbounds(panel_id)
+            inbound = next((x for x in inbounds if int(x.get("id") or -1) == inbound_id), None)
+            if inbound is not None:
+                return inbound
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.75 * (attempt + 1))
+        return None
 
     @staticmethod
     def inbound_label(inbound: dict[str, Any]) -> str:
@@ -621,8 +638,7 @@ class PanelService:
         *,
         owner_admin_user_id: int | None = None,
     ) -> list[Dict[str, Any]]:
-        inbounds = await self.list_inbounds(panel_id)
-        inbound = next((x for x in inbounds if int(x.get("id") or -1) == inbound_id), None)
+        inbound = await self._get_inbound_by_id(panel_id, inbound_id)
         if inbound is None:
             raise ValueError("inbound not found.")
         clients = self._extract_inbound_clients(inbound)
@@ -687,8 +703,7 @@ class PanelService:
     async def _get_client_config(
         self, panel_id: int, inbound_id: int, client_uuid: str
     ) -> tuple[Dict[str, Any], Dict[str, Any], list[Dict[str, Any]]]:
-        inbounds = await self.list_inbounds(panel_id)
-        inbound = next((x for x in inbounds if int(x.get("id") or -1) == inbound_id), None)
+        inbound = await self._get_inbound_by_id(panel_id, inbound_id)
         if inbound is None:
             raise ValueError("inbound not found.")
         clients = self._extract_inbound_clients(inbound)
@@ -763,8 +778,7 @@ class PanelService:
         tg_id: str = "",
         comment: str = "",
     ) -> Dict[str, Any]:
-        inbounds = await self.list_inbounds(panel_id)
-        inbound = next((x for x in inbounds if int(x.get("id") or -1) == inbound_id), None)
+        inbound = await self._get_inbound_by_id(panel_id, inbound_id)
         if inbound is None:
             raise ValueError("inbound not found.")
 
@@ -1259,6 +1273,9 @@ class PanelService:
             or self.sub_url_base_overrides.get("*", "")
         ).rstrip("/")
 
+    def is_subscription_enabled_for_panel(self, panel: Dict[str, Any]) -> bool:
+        return bool(self._subscription_base_override(panel))
+
     async def _get_panel_default_settings(self, panel_id: int) -> Dict[str, Any]:
         try:
             raw, _ = await self._with_auth_request(
@@ -1507,29 +1524,17 @@ class PanelService:
         if panel is None:
             raise ValueError("panel not found.")
 
+        override = self._subscription_base_override(panel)
+        if not override:
+            return ""
+
         sub_id = str(target_client.get("subId") or "").strip()
         if not sub_id:
             raise ValueError("subscription id not found for client.")
 
-        override = self._subscription_base_override(panel)
-        if override:
-            return self._normalize_subscription_url(
-                panel,
-                f"{override}/{quote(sub_id, safe='')}",
-            )
-
-        settings = await self._get_panel_default_settings(panel_id)
-        sub_uri = str(settings.get("subURI") or "").strip()
-        if sub_uri:
-            return self._normalize_subscription_url(
-                panel,
-                f"{sub_uri.rstrip('/')}/{quote(sub_id, safe='')}",
-            )
-
-        web_base_path = str(panel.get("web_base_path") or "").rstrip("/")
         return self._normalize_subscription_url(
             panel,
-            f"{panel['base_url']}{web_base_path}/sub/{quote(sub_id, safe='')}",
+            f"{override}/{quote(sub_id, safe='')}",
         )
 
     async def get_client_subscription_url_by_email(

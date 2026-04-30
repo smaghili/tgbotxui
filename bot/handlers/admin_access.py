@@ -384,10 +384,18 @@ async def _start_delegated_inbound_selection(
     mode: str,
     existing_access_ids: dict[tuple[int, int], int] | None = None,
 ) -> tuple[str, InlineKeyboardMarkup] | None:
-    rows = await services.admin_provisioning_service.list_all_inbounds()
+    rows = await services.admin_provisioning_service.list_grantable_inbounds_for_delegated_admin(target_user_id)
     if not rows:
         await state.clear()
         return None
+    allowed = {(row.panel_id, row.inbound_id) for row in rows}
+    selected = {item for item in selected if item in allowed}
+    if existing_access_ids is not None:
+        existing_access_ids = {
+            key: value
+            for key, value in existing_access_ids.items()
+            if key in allowed
+        }
     await state.update_data(
         delegated_mode=mode,
         delegated_target_user_id=target_user_id,

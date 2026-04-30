@@ -54,12 +54,13 @@ def _delegated_profile_error_text(exc: Exception, lang: str | None) -> str | Non
     return None
 
 
-def _inbound_access_keyboard(rows: list, prefix: str) -> InlineKeyboardMarkup:
+def _inbound_access_keyboard(rows: list, prefix: str, *, include_panel_name: bool = True) -> InlineKeyboardMarkup:
     buttons = []
     for row in rows:
+        text = f"{row.panel_name} | {row.inbound_name}" if include_panel_name else row.inbound_name
         buttons.append(
             [
-                inline_button(f"{row.panel_name} | {row.inbound_name}", f"{prefix}:{row.panel_id}:{row.inbound_id}")
+                inline_button(text, f"{prefix}:{row.panel_id}:{row.inbound_id}")
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -200,6 +201,7 @@ async def _notify_admin_activity(
     user: str,
     panel: str,
     inbound: str,
+    panel_id: int | None = None,
     details: list[str] | None = None,
 ) -> None:
     await services.admin_provisioning_service.record_admin_activity(
@@ -214,6 +216,7 @@ async def _notify_admin_activity(
             inbound=inbound,
             details=details,
         ),
+        panel_id=panel_id,
     )
 
 
@@ -289,6 +292,16 @@ async def _visible_inbound_ids_for_actor(
     services: ServiceContainer,
     panel_id: int,
 ) -> set[int] | None:
+    context = await services.access_service.get_admin_context(actor_user_id, settings)
+    if context.is_root_admin:
+        return None
+    if context.is_full_admin:
+        allowed = await services.access_service.get_allowed_inbound_ids(
+            user_id=actor_user_id,
+            settings=settings,
+            panel_id=panel_id,
+        )
+        return allowed
     owner_filter = await services.access_service.owner_filter_for_user(user_id=actor_user_id, settings=settings)
     if owner_filter is None:
         return None
@@ -297,6 +310,13 @@ async def _visible_inbound_ids_for_actor(
         settings=settings,
     )
     return {row.inbound_id for row in rows if row.panel_id == panel_id}
+
+
+def _group_inbound_rows_by_panel(rows: list) -> dict[int, list]:
+    grouped_rows: dict[int, list] = {}
+    for inbound_row in rows:
+        grouped_rows.setdefault(int(inbound_row.panel_id), []).append(inbound_row)
+    return grouped_rows
 
 
 async def _resolve_panel_for_edit_search(
@@ -420,6 +440,11 @@ async def start_create_user(
     if not rows:
         await message.answer(t("admin_create_user_no_access", lang))
         return
+    grouped_rows = _group_inbound_rows_by_panel(rows)
+    default_panel = await services.panel_service.get_default_panel()
+    default_panel_id = int(default_panel["id"]) if default_panel is not None else None
+    if default_panel_id is not None and len(grouped_rows) == 1 and default_panel_id in grouped_rows:
+        rows = grouped_rows[default_panel_id]
     if len(rows) == 1:
         selected = rows[0]
         await state.update_data(create_panel_id=selected.panel_id, create_inbound_id=selected.inbound_id)
@@ -428,7 +453,7 @@ async def start_create_user(
         return
     await message.answer(
         t("admin_create_user_pick_inbound", lang),
-        reply_markup=_inbound_access_keyboard(rows, "pcu:pick"),
+        reply_markup=_inbound_access_keyboard(rows, "pcu:pick", include_panel_name=len(grouped_rows) > 1),
     )
 
 
@@ -1059,6 +1084,7 @@ async def edit_config_rotate_yes(callback: CallbackQuery, settings: Settings, se
         user=client_email,
         panel=panel_name,
         inbound=inbound_name,
+        panel_id=panel_id,
     )
     await callback.message.answer(t("admin_edit_rotate_done", lang))
 

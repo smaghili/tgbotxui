@@ -581,6 +581,14 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "panel_deleted": {"fa": "✅ پنل حذف شد.", "en": "✅ Panel deleted."},
     "panel_already_deleted": {"fa": "این پنل قبلا حذف شده است.", "en": "This panel is already deleted."},
     "panel_delete_confirm": {"fa": "نام پنل: {name}\nوضعیت اتصال: {status}\n\nآیا از حذف مطمئن هستید؟", "en": "Panel: {name}\nConnection: {status}\n\nAre you sure to delete?"},
+    "panel_access_select_admin": {
+        "fa": "برای پنل «{name}» ادمینی که باید به این پنل دسترسی داشته باشد را انتخاب کنید:",
+        "en": "Select the admin who should access panel '{name}':",
+    },
+    "panel_access_granted": {
+        "fa": "✅ دسترسی ادمین به این پنل ثبت شد.",
+        "en": "✅ Admin panel access was saved.",
+    },
     "inbounds_select_panel": {"fa": "پنل پیش‌فرض انتخاب نشده است.\nبرای دریافت لیست ورودی‌ها، پنل را انتخاب کنید:", "en": "Default panel is not selected.\nSelect a panel to view inbounds:"},
 
     "admin_manage_admins_title": {
@@ -862,6 +870,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "config_full_caption": {
         "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>\n\nلینک ساب:\n<code>{sub_url}</code>",
         "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>\n\nSubscription link:\n<code>{sub_url}</code>",
+    },
+    "config_without_sub_caption": {
+        "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>",
+        "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>",
     },
 }
 

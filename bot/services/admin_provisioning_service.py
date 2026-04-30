@@ -86,6 +86,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
         text: str,
+        panel_id: int | None = None,
     ) -> None:
         stamped_text = f"{text}\nزمان: {now_jalali_datetime(settings.timezone)}"
         await self.db.add_audit_log(
@@ -98,7 +99,7 @@ class AdminProvisioningService:
         )
         if self.usage_service is None or not await self.usage_service.is_active_delegated_admin_user(actor_user_id):
             return
-        await self.usage_service.notify_admin_activity(actor_user_id=actor_user_id, text=stamped_text)
+        await self.usage_service.notify_admin_activity(actor_user_id=actor_user_id, text=stamped_text, panel_id=panel_id)
 
     async def record_admin_activity(
         self,
@@ -106,11 +107,13 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
         text: str,
+        panel_id: int | None = None,
     ) -> None:
         await self._record_admin_activity(
             actor_user_id=actor_user_id,
             settings=settings,
             text=text,
+            panel_id=panel_id,
         )
 
     async def _record_templated_admin_activity(
@@ -140,6 +143,7 @@ class AdminProvisioningService:
             actor_user_id=actor_user_id,
             settings=settings,
             text=activity_text,
+            panel_id=panel_id,
         )
 
     async def _managed_ref_from_panel_client(
@@ -768,6 +772,10 @@ class AdminProvisioningService:
             parent_user_id=None if self.access_service.is_root_admin(actor_user_id, settings) else actor_user_id,
             admin_scope=admin_scope,
         )
+        await self.db.add_delegated_admin_panel_access(
+            delegated_admin_id=delegated_admin_id,
+            panel_id=panel_id,
+        )
         access_id = await self.db.add_delegated_admin_inbound_access(
             delegated_admin_id=delegated_admin_id,
             panel_id=panel_id,
@@ -781,6 +789,30 @@ class AdminProvisioningService:
             target_id=str(access_id),
             success=True,
             details=f"user={telegram_user_id};panel={panel_id};inbound={inbound_id}",
+        )
+        return access_id
+
+    async def grant_delegated_admin_panel_access(
+        self,
+        *,
+        actor_user_id: int,
+        telegram_user_id: int,
+        panel_id: int,
+    ) -> int:
+        delegated = await self.db.get_delegated_admin_by_user_id(telegram_user_id)
+        if delegated is None:
+            raise ValueError("delegated admin was not found.")
+        access_id = await self.db.add_delegated_admin_panel_access(
+            delegated_admin_id=int(delegated["id"]),
+            panel_id=panel_id,
+        )
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="grant_delegated_admin_panel_access",
+            target_type="delegated_admin_panel",
+            target_id=str(access_id),
+            success=True,
+            details=f"user={telegram_user_id};panel={panel_id}",
         )
         return access_id
 
@@ -840,16 +872,87 @@ class AdminProvisioningService:
                 )
         return rows
 
+    async def list_grantable_inbounds_for_delegated_admin(self, telegram_user_id: int) -> list[InboundAccess]:
+        default_panel = await self.panel_service.get_default_panel()
+        allowed_panel_ids = {int(default_panel["id"])} if default_panel is not None else set()
+        for row in await self.db.list_delegated_admin_panel_access_rows(telegram_user_id):
+            allowed_panel_ids.add(int(row["panel_id"]))
+        panels = [
+            panel
+            for panel in await self.panel_service.list_panels()
+            if int(panel["id"]) in allowed_panel_ids
+        ]
+        rows: list[InboundAccess] = []
+        for panel in panels:
+            rows.extend(await self._list_panel_inbounds(panel=panel))
+        return sorted(rows, key=lambda item: (item.panel_id, item.inbound_id))
+
+    async def _list_panel_inbounds(
+        self,
+        *,
+        panel: dict[str, Any],
+        allowed_inbound_ids: set[int] | None = None,
+        delegated_admin_user_id: int | None = None,
+    ) -> list[InboundAccess]:
+        panel_id = int(panel["id"])
+        try:
+            inbounds = await self.panel_service.list_inbounds(panel_id)
+        except Exception:
+            return []
+        rows: list[InboundAccess] = []
+        for inbound in inbounds:
+            inbound_id = int(inbound.get("id") or 0)
+            if inbound_id <= 0:
+                continue
+            if allowed_inbound_ids is not None and inbound_id not in allowed_inbound_ids:
+                continue
+            rows.append(
+                InboundAccess(
+                    panel_id=panel_id,
+                    panel_name=str(panel["name"]),
+                    inbound_id=inbound_id,
+                    inbound_name=self._inbound_display_name(inbound),
+                    delegated_admin_user_id=delegated_admin_user_id,
+                )
+            )
+        return rows
+
     async def list_accessible_inbounds_for_actor(
         self,
         *,
         actor_user_id: int,
         settings: Settings,
     ) -> list[InboundAccess]:
-        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
+        context = await self.access_service.get_admin_context(actor_user_id, settings)
+        if context.is_root_admin:
             return await self.list_all_inbounds()
 
         access_rows = await self.db.list_admin_access_rows_for_user(actor_user_id)
+        if context.is_full_admin:
+            explicit_by_panel: dict[int, set[int]] = {}
+            for access in access_rows:
+                explicit_by_panel.setdefault(int(access["panel_id"]), set()).add(int(access["inbound_id"]))
+            rows: dict[tuple[int, int], InboundAccess] = {}
+            for panel in await self.panel_service.list_panels():
+                panel_id = int(panel["id"])
+                has_full_panel_access = int(panel.get("is_default") or 0) == 1 or int(panel.get("created_by") or 0) == actor_user_id
+                if has_full_panel_access:
+                    for inbound in await self._list_panel_inbounds(
+                        panel=panel,
+                        delegated_admin_user_id=actor_user_id,
+                    ):
+                        rows[(inbound.panel_id, inbound.inbound_id)] = inbound
+                    continue
+                explicit_inbounds = explicit_by_panel.get(panel_id)
+                if explicit_inbounds:
+                    for inbound in await self._list_panel_inbounds(
+                        panel=panel,
+                        allowed_inbound_ids=explicit_inbounds,
+                        delegated_admin_user_id=actor_user_id,
+                    ):
+                        rows[(inbound.panel_id, inbound.inbound_id)] = inbound
+            return sorted(rows.values(), key=lambda item: (item.panel_id, item.inbound_id))
+
         by_panel: dict[int, dict[int, str]] = {}
         rows: list[InboundAccess] = []
         for access in access_rows:
@@ -877,7 +980,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
     ) -> list[InboundAccess]:
-        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
+        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_root_admin:
             return await self.list_all_inbounds()
 
         panel_rows = await self.panel_service.list_panels()
@@ -920,7 +1023,7 @@ class AdminProvisioningService:
         actor_user_id: int,
         settings: Settings,
     ) -> list[InboundAccess]:
-        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
+        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_root_admin:
             return await self.list_all_inbounds()
 
         rows: dict[tuple[int, int], InboundAccess] = {}
@@ -1181,10 +1284,6 @@ class AdminProvisioningService:
         )
         if not allowed:
             raise ValueError("you do not have access to this inbound.")
-        existing_clients = await self.panel_service.list_inbound_clients(panel_id, inbound_id)
-        normalized_email = client_email.strip().lower()
-        if any(str(item.get("email") or "").strip().lower() == normalized_email for item in existing_clients):
-            raise ValueError("client email already exists on this inbound.")
         if not (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
             profile = await self.db.get_delegated_admin_profile(actor_user_id)
             max_clients = int(profile.get("max_clients") or 0)
@@ -1310,6 +1409,7 @@ class AdminProvisioningService:
             actor_user_id=actor_user_id,
             settings=settings,
             text=activity_text,
+            panel_id=panel_id,
         )
         return {
             **created,
@@ -1342,7 +1442,7 @@ class AdminProvisioningService:
     ) -> ManagedClientRef:
         client_uuid = self.extract_uuid_from_vless_uri(vless_uri)
 
-        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
+        if (await self.access_service.get_admin_context(actor_user_id, settings)).is_root_admin:
             panels = await self.panel_service.list_panels()
             for panel in panels:
                 panel_id = int(panel["id"])

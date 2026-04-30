@@ -179,6 +179,18 @@ class PanelServiceVlessTests(unittest.IsolatedAsyncioTestCase):
             "http://sub.goldoonam.shop:2569/subnist",
         )
 
+    def test_subscription_is_disabled_without_panel_env_rule(self) -> None:
+        service = PanelService(
+            None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            sub_url_strip_port_rules={"1": "http://sub.goldoonam.shop/sub"},
+            sub_url_base_overrides={"1": "http://sub.goldoonam.shop/sub"},
+        )
+
+        self.assertTrue(service.is_subscription_enabled_for_panel({"id": 1, "name": "panel-one"}))
+        self.assertFalse(service.is_subscription_enabled_for_panel({"id": 2, "name": "panel-two"}))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,7 @@ from bot.handlers.admin_shared import (
     edit_config_actions_keyboard,
     format_inbounds_overview,
     client_list_keyboard,
+    panels_glass_keyboard,
     panel_select_keyboard,
     users_clients_keyboard,
     yes_no_inline_keyboard,
@@ -126,6 +127,17 @@ def test_panel_select_keyboard_uses_default_and_health_markers() -> None:
     assert first_row.callback_data == "pick:7"
     assert second_row.text == "❌ Backup"
     assert second_row.callback_data == "pick:8"
+
+
+def test_panels_glass_keyboard_includes_panel_access_button() -> None:
+    markup = panels_glass_keyboard(
+        [{"id": 7, "name": "xui CDN", "last_login_ok": True, "is_default": True}]
+    )
+
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "panel_access_ask:7" in callbacks
+    assert "panel_delete_ask:7" in callbacks
 
 
 def test_yes_no_inline_keyboard_builds_two_buttons() -> None:

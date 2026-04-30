@@ -2,7 +2,7 @@
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
@@ -27,6 +27,24 @@ from .admin_shared import (
 router = Router(name="admin_panels")
 
 
+def _panel_access_admins_keyboard(panel_id: int, admins: list[dict], lang: str | None = None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for admin in admins:
+        user_id = int(admin["telegram_user_id"])
+        title = str(admin.get("title") or admin.get("full_name") or admin.get("username") or user_id)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=title[:42],
+                    callback_data=f"panel_access_grant:{panel_id}:{user_id}",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _reject_if_not_full_admin(message: Message, settings: Settings, services: ServiceContainer) -> bool:
     if await services.access_service.can_manage_panels(user_id=message.from_user.id, settings=settings):
         return False
@@ -36,6 +54,13 @@ async def _reject_if_not_full_admin(message: Message, settings: Settings, servic
 
 async def _reject_callback_if_not_full_admin(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> bool:
     if await services.access_service.can_manage_panels(user_id=callback.from_user.id, settings=settings):
+        return False
+    await callback.answer(t("no_admin_access", None), show_alert=True)
+    return True
+
+
+async def _reject_callback_if_not_root_admin(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> bool:
+    if services.access_service.is_root_admin(callback.from_user.id, settings):
         return False
     await callback.answer(t("no_admin_access", None), show_alert=True)
     return True
@@ -225,7 +250,10 @@ async def add_panel_get_two_factor_code(message: Message, state: FSMContext, set
 async def list_panels(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_if_not_full_admin(message, settings, services):
         return
-    panels = await services.panel_service.list_panels()
+    panels = await services.access_service.list_accessible_panels(
+        user_id=message.from_user.id,
+        settings=settings,
+    )
     if not panels:
         await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
@@ -234,7 +262,7 @@ async def list_panels(message: Message, settings: Settings, services: ServiceCon
 
 @router.callback_query(F.data.startswith("panel_default_toggle:"))
 async def panel_default_toggle(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await _reject_callback_if_not_full_admin(callback, settings, services):
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     if callback.data is None:
         await callback.answer()
@@ -251,8 +279,77 @@ async def panel_default_toggle(callback: CallbackQuery, settings: Settings, serv
     if not changed:
         await callback.answer(t("admin_panel_not_found", None), show_alert=True)
         return
-    await refresh_panels_message(callback, services)
+    await refresh_panels_message(callback, services, settings)
     await callback.answer(t("panel_default_set", None) if now_default else t("panel_default_unset", None))
+
+
+@router.callback_query(F.data.startswith("panel_access_ask:"))
+async def panel_access_ask(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        panel_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    panel = await services.panel_service.get_panel(panel_id)
+    if panel is None:
+        await callback.answer(t("admin_panel_not_found", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    admins = await services.db.list_delegated_admins(
+        manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+    )
+    await callback.message.edit_text(
+        t("panel_access_select_admin", lang, name=panel["name"]),
+        reply_markup=_panel_access_admins_keyboard(panel_id, admins, lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel_access_grant:"))
+async def panel_access_grant(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        _, panel_raw, user_raw = callback.data.split(":", 2)
+        panel_id = int(panel_raw)
+        target_user_id = int(user_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    try:
+        await services.admin_provisioning_service.grant_delegated_admin_panel_access(
+            actor_user_id=callback.from_user.id,
+            telegram_user_id=target_user_id,
+            panel_id=panel_id,
+        )
+    except ValueError:
+        await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
+        return
+    await refresh_panels_message(callback, services, settings)
+    await callback.answer(t("panel_access_granted", lang))
 
 
 @router.callback_query(F.data.startswith("panel_delete_ask:"))
@@ -270,6 +367,13 @@ async def panel_delete_ask(callback: CallbackQuery, settings: Settings, services
     panel = await services.panel_service.get_panel(panel_id)
     if not panel:
         await callback.answer(t("panel_already_deleted", None), show_alert=True)
+        return
+    if not await services.access_service.can_delete_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     ok = "✅" if panel["last_login_ok"] else "❌"
     star = "⭐ " if panel.get("is_default") else ""
@@ -292,9 +396,16 @@ async def panel_delete_yes(callback: CallbackQuery, settings: Settings, services
     except ValueError:
         await callback.answer(t("bind_invalid_id", None), show_alert=True)
         return
+    if not await services.access_service.can_delete_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     deleted = await services.admin_panel_service.delete_panel(actor_user_id=callback.from_user.id, panel_id=panel_id)
     if deleted:
-        await refresh_panels_message(callback, services)
+        await refresh_panels_message(callback, services, settings)
         await callback.answer(t("panel_deleted", None))
     else:
         await callback.answer(t("panel_already_deleted", None), show_alert=True)
@@ -304,7 +415,7 @@ async def panel_delete_yes(callback: CallbackQuery, settings: Settings, services
 async def panel_delete_no(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
-    await refresh_panels_message(callback, services)
+    await refresh_panels_message(callback, services, settings)
     await callback.answer()
 
 

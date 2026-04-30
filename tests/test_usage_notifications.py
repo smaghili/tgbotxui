@@ -20,6 +20,8 @@ class FakeDB:
     def __init__(self) -> None:
         self.lang_by_user: dict[int, str] = {}
         self.bound_rows: list[dict] = []
+        self.panels: dict[int, dict] = {}
+        self.panel_access: set[tuple[int, int]] = set()
         self.delegated_admins: dict[int, dict] = {}
         self.client_owners: dict[tuple[int, int, str], int] = {}
         self.client_alert_states: dict[tuple[int, int, int, str], tuple[str | None, str | None]] = {}
@@ -35,6 +37,12 @@ class FakeDB:
 
     async def get_delegated_admin_profile(self, telegram_user_id: int) -> dict:
         return {"is_active": 1, "expires_at": 0}
+
+    async def get_panel(self, panel_id: int) -> dict | None:
+        return self.panels.get(panel_id)
+
+    async def has_admin_access_to_panel(self, *, telegram_user_id: int, panel_id: int) -> bool:
+        return (telegram_user_id, panel_id) in self.panel_access
 
     async def get_client_owner(self, *, panel_id: int, inbound_id: int, client_uuid: str) -> int | None:
         return self.client_owners.get((panel_id, inbound_id, client_uuid))
@@ -334,6 +342,21 @@ async def test_failed_admin_activity_is_queued_for_retry() -> None:
     assert bot.messages == []
     assert len(db.pending_notifications) == 1
     assert int(db.pending_notifications[0]["chat_id"]) == 999
+
+
+@pytest.mark.asyncio
+async def test_admin_activity_skips_parent_without_panel_access() -> None:
+    db = FakeDB()
+    db.panels[4] = {"id": 4, "is_default": 0, "created_by": 777}
+    db.delegated_admins[555] = {"telegram_user_id": 555, "parent_user_id": 111}
+    db.delegated_admins[111] = {"telegram_user_id": 111, "parent_user_id": 0}
+    service = UsageService(db=db, panel_service=FakePanelService(), timezone="Asia/Tehran", root_admin_ids={999})  # type: ignore[arg-type]
+    bot = DummyBot()
+    service.attach_bot(bot)  # type: ignore[arg-type]
+
+    await service.notify_admin_activity(actor_user_id=555, text="admin event", panel_id=4)
+
+    assert [chat_id for chat_id, _ in bot.messages] == [999]
 
 
 @pytest.mark.asyncio

@@ -529,6 +529,82 @@ class Database:
         await self.conn.commit()
         return (cur.rowcount or 0) > 0
 
+    async def add_delegated_admin_panel_access(self, *, delegated_admin_id: int, panel_id: int) -> int:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegated_admin_panels (delegated_admin_id, panel_id, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(delegated_admin_id, panel_id) DO UPDATE SET
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (delegated_admin_id, panel_id),
+        )
+        await self.conn.commit()
+        cur = await self.conn.execute(
+            """
+            SELECT id
+            FROM delegated_admin_panels
+            WHERE delegated_admin_id=? AND panel_id=?
+            LIMIT 1;
+            """,
+            (delegated_admin_id, panel_id),
+        )
+        row = await cur.fetchone()
+        return int(row["id"])
+
+    async def list_delegated_admin_panel_access_rows(self, telegram_user_id: int) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT
+                dap.id AS panel_access_id,
+                da.id AS delegated_admin_id,
+                da.telegram_user_id,
+                da.title,
+                dap.panel_id,
+                p.name AS panel_name
+            FROM delegated_admin_panels AS dap
+            JOIN delegated_admins AS da ON da.id = dap.delegated_admin_id
+            JOIN panels AS p ON p.id = dap.panel_id
+            WHERE da.telegram_user_id=? AND da.is_active=1
+            ORDER BY dap.panel_id ASC;
+            """,
+            (telegram_user_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def list_delegated_admins(self, manager_user_id: int | None = None) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT
+                da.id AS delegated_admin_id,
+                da.telegram_user_id,
+                da.title,
+                da.parent_user_id,
+                da.admin_scope,
+                da.is_active,
+                da.created_by,
+                u.full_name,
+                u.username
+            FROM delegated_admins AS da
+            LEFT JOIN users AS u ON u.telegram_user_id = da.telegram_user_id
+            WHERE da.is_active=1
+            ORDER BY da.telegram_user_id ASC;
+            """
+        )
+        rows = [dict(row) for row in await cur.fetchall()]
+        if manager_user_id is None:
+            return rows
+        subtree_ids = set(await self.get_delegated_admin_subtree_user_ids(manager_user_id=manager_user_id))
+        return [
+            row
+            for row in rows
+            if int(row["telegram_user_id"]) in subtree_ids and int(row["telegram_user_id"]) != manager_user_id
+        ]
+
     async def deactivate_delegated_admin(self, telegram_user_id: int) -> bool:
         assert self.conn is not None
         cur = await self.conn.execute(
@@ -788,7 +864,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT id, name, base_url, web_base_path, login_path, is_default, last_login_ok, last_error, updated_at
+            SELECT id, name, base_url, web_base_path, login_path, created_by, is_default, last_login_ok, last_error, updated_at
             FROM panels ORDER BY id DESC;
             """
         )
@@ -799,7 +875,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT id, name, base_url, web_base_path, login_path, is_default, last_login_ok, last_error, updated_at
+            SELECT id, name, base_url, web_base_path, login_path, created_by, is_default, last_login_ok, last_error, updated_at
             FROM panels
             WHERE is_default=1
             LIMIT 1;
@@ -807,6 +883,21 @@ class Database:
         )
         row = await cur.fetchone()
         return dict(row) if row else None
+
+    async def has_admin_access_to_panel(self, *, telegram_user_id: int, panel_id: int) -> bool:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT 1
+            FROM delegated_admin_panels AS dap
+            JOIN delegated_admins AS da ON da.id = dap.delegated_admin_id
+            WHERE da.telegram_user_id=? AND da.is_active=1 AND dap.panel_id=?
+            LIMIT 1;
+            """,
+            (telegram_user_id, panel_id),
+        )
+        row = await cur.fetchone()
+        return row is not None
 
     async def set_default_panel(self, panel_id: int) -> bool:
         assert self.conn is not None

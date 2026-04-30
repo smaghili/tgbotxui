@@ -41,6 +41,16 @@ async def actor_scope(
     services: ServiceContainer,
     panel_id: int,
 ) -> tuple[int | None, set[int] | None]:
+    context = await services.access_service.get_admin_context(user_id, settings)
+    if context.is_root_admin:
+        return None, None
+    if context.is_full_admin:
+        allowed = await services.access_service.get_allowed_inbound_ids(
+            user_id=user_id,
+            settings=settings,
+            panel_id=panel_id,
+        )
+        return None, allowed
     owner_filter = await services.access_service.owner_filter_for_user(user_id=user_id, settings=settings)
     if owner_filter is None:
         return owner_filter, None

@@ -31,8 +31,9 @@ async def send_config_bundle_card(
     buf = BytesIO()
     img.save(buf, format="PNG")
     file = BufferedInputFile(buf.getvalue(), filename=filename)
+    caption_key = "config_full_caption" if sub_url.strip() else "config_without_sub_caption"
     caption = t(
-        "config_full_caption",
+        caption_key,
         lang,
         config_name=escape(config_name),
         total=escape(total_label),

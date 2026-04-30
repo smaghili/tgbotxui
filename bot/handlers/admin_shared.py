@@ -296,6 +296,7 @@ def panels_glass_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
         rows.append(
             [
                 inline_button(_panel_button_text(p), f"panel_default_toggle:{p['id']}"),
+                inline_button("🔑", f"panel_access_ask:{p['id']}"),
                 inline_button("🗑️", f"panel_delete_ask:{p['id']}"),
             ]
         )
@@ -925,10 +926,13 @@ async def set_client_action_context(state: FSMContext, *, panel_id: int, inbound
     )
 
 
-async def refresh_panels_message(callback: CallbackQuery, services: ServiceContainer) -> None:
+async def refresh_panels_message(callback: CallbackQuery, services: ServiceContainer, settings: Settings) -> None:
     if callback.message is None:
         return
-    panels = await services.panel_service.list_panels()
+    panels = await services.access_service.list_accessible_panels(
+        user_id=callback.from_user.id,
+        settings=settings,
+    )
     if not panels:
         await callback.message.edit_text(t("bind_no_panel", None))
         return

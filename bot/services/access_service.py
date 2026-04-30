@@ -75,13 +75,78 @@ class AccessService:
         inbound_id: int,
     ) -> bool:
         context = await self.get_admin_context(user_id, settings)
-        if context.is_full_admin:
+        if context.is_root_admin:
             return True
+        if context.is_full_admin and await self.can_access_panel(
+            user_id=user_id,
+            settings=settings,
+            panel_id=panel_id,
+        ):
+            panel = await self.db.get_panel(panel_id)
+            if panel is not None and (int(panel.get("is_default") or 0) == 1 or int(panel.get("created_by") or 0) == user_id):
+                return True
         return await self.db.has_admin_access_to_inbound(
             telegram_user_id=user_id,
             panel_id=panel_id,
             inbound_id=inbound_id,
         )
+
+    async def can_access_panel(
+        self,
+        *,
+        user_id: int,
+        settings: Settings,
+        panel_id: int,
+    ) -> bool:
+        context = await self.get_admin_context(user_id, settings)
+        if context.is_root_admin:
+            return True
+        panel = await self.db.get_panel(panel_id)
+        if panel is None:
+            return False
+        if context.is_full_admin:
+            if int(panel.get("is_default") or 0) == 1:
+                return True
+            if int(panel.get("created_by") or 0) == user_id:
+                return True
+        return await self.db.has_admin_access_to_panel(telegram_user_id=user_id, panel_id=panel_id)
+
+    async def list_accessible_panels(self, *, user_id: int, settings: Settings) -> list[dict]:
+        context = await self.get_admin_context(user_id, settings)
+        panels = await self.db.list_panels()
+        if context.is_root_admin:
+            return panels
+        explicit_panel_ids = {
+            int(row["panel_id"])
+            for row in await self.db.list_delegated_admin_panel_access_rows(user_id)
+        }
+        visible: list[dict] = []
+        for panel in panels:
+            panel_id = int(panel["id"])
+            if int(panel.get("is_default") or 0) == 1:
+                visible.append(panel)
+                continue
+            if context.is_full_admin and int(panel.get("created_by") or 0) == user_id:
+                visible.append(panel)
+                continue
+            if panel_id in explicit_panel_ids:
+                visible.append(panel)
+        return visible
+
+    async def can_delete_panel(
+        self,
+        *,
+        user_id: int,
+        settings: Settings,
+        panel_id: int,
+    ) -> bool:
+        context = await self.get_admin_context(user_id, settings)
+        if context.is_root_admin:
+            return True
+        if not context.is_full_admin:
+            return False
+        panel = await self.db.get_panel(panel_id)
+        return panel is not None and int(panel.get("created_by") or 0) == user_id
 
     async def get_allowed_inbound_ids(
         self,
@@ -91,8 +156,12 @@ class AccessService:
         panel_id: int,
     ) -> set[int] | None:
         context = await self.get_admin_context(user_id, settings)
-        if context.is_full_admin:
+        if context.is_root_admin:
             return None
+        if context.is_full_admin:
+            panel = await self.db.get_panel(panel_id)
+            if panel is not None and (int(panel.get("is_default") or 0) == 1 or int(panel.get("created_by") or 0) == user_id):
+                return None
         rows = await self.db.list_admin_access_rows_for_user(user_id)
         allowed = {
             int(row["inbound_id"])

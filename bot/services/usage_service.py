@@ -133,7 +133,17 @@ class UsageService:
             last_error=last_error,
         )
 
-    async def _admin_activity_recipient_ids(self, actor_user_id: int) -> list[int]:
+    async def _delegated_admin_can_receive_panel_activity(self, user_id: int, panel_id: int) -> bool:
+        panel = await self.db.get_panel(panel_id)
+        if panel is None:
+            return False
+        if int(panel.get("is_default") or 0) == 1:
+            return True
+        if int(panel.get("created_by") or 0) == user_id:
+            return True
+        return await self.db.has_admin_access_to_panel(telegram_user_id=user_id, panel_id=panel_id)
+
+    async def _admin_activity_recipient_ids(self, actor_user_id: int, panel_id: int | None = None) -> list[int]:
         recipients = set(self.root_admin_ids)
         if not await self._is_active_delegated_admin_user(actor_user_id):
             return sorted(recipients)
@@ -144,7 +154,10 @@ class UsageService:
         seen_parents: set[int] = set()
         while parent_user_id > 0 and parent_user_id not in seen_parents:
             seen_parents.add(parent_user_id)
-            if await self._is_active_delegated_admin_user(parent_user_id):
+            if await self._is_active_delegated_admin_user(parent_user_id) and (
+                panel_id is None
+                or await self._delegated_admin_can_receive_panel_activity(parent_user_id, panel_id)
+            ):
                 recipients.add(parent_user_id)
             parent_row = await self.db.get_delegated_admin_by_user_id(parent_user_id)
             if parent_row is None:
@@ -172,8 +185,8 @@ class UsageService:
             details=details,
         )
 
-    async def notify_admin_activity(self, *, actor_user_id: int, text: str) -> None:
-        for admin_id in await self._admin_activity_recipient_ids(actor_user_id):
+    async def notify_admin_activity(self, *, actor_user_id: int, text: str, panel_id: int | None = None) -> None:
+        for admin_id in await self._admin_activity_recipient_ids(actor_user_id, panel_id):
             if await self._send_chat_message(admin_id, text):
                 await self._audit_admin_activity_delivery(
                     actor_user_id=actor_user_id,
@@ -367,7 +380,10 @@ class UsageService:
     ) -> None:
         if threshold_mb != 100:
             return
-        panel_id = int(service_row["panel_id"])
+        panel_id_raw = service_row.get("panel_id")
+        if panel_id_raw is None:
+            return
+        panel_id = int(panel_id_raw)
         inbound_id = int(service_row["inbound_id"]) if service_row.get("inbound_id") else None
         client_uuid = str(service_row.get("client_id") or "").strip() or None
         manager_chat_ids = await self._direct_owner_chat_ids_for_service(
