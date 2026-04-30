@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Set
 from urllib.parse import urlparse, urlunparse
 
@@ -84,6 +85,23 @@ def _env_bool(key: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
+def _parse_moaf_traffic_gb_values(raw: str) -> set[int]:
+    values: set[int] = set()
+    gb_unit = Decimal(1024 ** 3)
+    for chunk in raw.replace("\r", "\n").replace(",", "\n").split("\n"):
+        value = chunk.strip()
+        if not value:
+            continue
+        try:
+            gb_value = Decimal(value)
+        except InvalidOperation:
+            continue
+        if gb_value <= 0:
+            continue
+        values.add(int(gb_value * gb_unit))
+    return values
+
+
 @dataclass(slots=True)
 class Settings:
     bot_token: str
@@ -106,6 +124,8 @@ class Settings:
     telegram_proxies: tuple[str, ...]
     sub_url_strip_port_rules: dict[str, str]
     sub_url_base_overrides: dict[str, str]
+    moaf_admin_ids: set[int]
+    moaf_traffic_bytes: set[int]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -156,5 +176,9 @@ class Settings:
             ),
             sub_url_base_overrides=_parse_sub_url_base_overrides(
                 os.getenv("SUB_URL_BASE_OVERRIDES", "")
+            ),
+            moaf_admin_ids=_parse_admin_ids(os.getenv("MOAF_ADMIN_IDS", "")),
+            moaf_traffic_bytes=_parse_moaf_traffic_gb_values(
+                os.getenv("MOAF_TRAFFIC_GB_VALUES", "")
             ),
         )

@@ -163,6 +163,85 @@ class DelegatedVisibilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([(row.panel_id, row.inbound_id) for row in rows], [(10, 101), (30, 301)])
 
+    async def test_moaf_create_skips_finance_and_marks_comment(self) -> None:
+        class Settings:
+            admin_ids = set()
+            moaf_admin_ids = {55}
+            moaf_traffic_bytes = {5 * 1024 ** 3}
+
+        class FakeAccessService:
+            def is_root_admin(self, user_id, settings) -> bool:
+                return False
+
+            async def can_access_inbound(self, **kwargs) -> bool:
+                return True
+
+            async def get_admin_context(self, user_id, settings) -> AdminContext:
+                return AdminContext(
+                    user_id=user_id,
+                    is_root_admin=False,
+                    is_delegated_admin=True,
+                    delegated_scope="limited",
+                )
+
+        class FakeDB:
+            def __init__(self) -> None:
+                self.audit_logs: list[dict] = []
+
+            async def get_delegated_admin_profile(self, user_id: int) -> dict:
+                return {"max_clients": 0}
+
+            async def upsert_client_owner(self, **kwargs) -> None:
+                return None
+
+            async def add_audit_log(self, **kwargs) -> None:
+                self.audit_logs.append(kwargs)
+
+        class FakePanelService:
+            def __init__(self) -> None:
+                self.comment = ""
+
+            async def create_client(self, **kwargs) -> dict:
+                self.comment = str(kwargs.get("comment") or "")
+                return {"uuid": "uuid-1", "email": kwargs["client_email"]}
+
+            async def get_client_vless_uri_by_email(self, **kwargs) -> str:
+                return "vless://uuid@example.com:443"
+
+            async def get_client_subscription_url_by_email(self, **kwargs) -> str:
+                return ""
+
+        class FakeFinancialService:
+            def __init__(self) -> None:
+                self.charge_calls: list[dict] = []
+
+            async def charge_operation(self, **kwargs) -> dict:
+                self.charge_calls.append(kwargs)
+                return {"id": 1, "amount": 1000}
+
+        panel_service = FakePanelService()
+        financial_service = FakeFinancialService()
+        service = AdminProvisioningService(
+            db=FakeDB(),  # type: ignore[arg-type]
+            panel_service=panel_service,  # type: ignore[arg-type]
+            access_service=FakeAccessService(),  # type: ignore[arg-type]
+            financial_service=financial_service,  # type: ignore[arg-type]
+        )
+
+        result = await service.create_client_for_actor(
+            actor_user_id=55,
+            settings=Settings(),  # type: ignore[arg-type]
+            panel_id=1,
+            inbound_id=100,
+            client_email="u1",
+            total_gb=5,
+            expiry_days=30,
+        )
+
+        self.assertEqual(panel_service.comment, "55:Moaf")
+        self.assertEqual(financial_service.charge_calls, [])
+        self.assertEqual(result["wallet_charge_amount"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

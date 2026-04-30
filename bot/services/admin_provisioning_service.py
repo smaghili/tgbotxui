@@ -14,12 +14,23 @@ from bot.i18n import t
 from bot.services.access_service import AccessService
 from bot.services.financial_service import FinancialService
 from bot.services.panel_service import PanelService
-from bot.utils import build_admin_activity_notice, bytes_to_gb, display_name_from_parts, format_gb, now_jalali_datetime, to_local_date
+from bot.utils import build_admin_activity_notice, bytes_to_gb, display_name_from_parts, format_gb, gb_to_bytes, now_jalali_datetime, to_local_date
 
 if TYPE_CHECKING:
     from bot.services.usage_service import UsageService
 
 logger = logging.getLogger(__name__)
+MOAF_COMMENT_MARKER = "Moaf"
+
+
+def _is_moaf_comment(comment: str) -> bool:
+    parts = [part.strip().lower() for part in comment.split(":")]
+    return len(parts) >= 2 and parts[1] == MOAF_COMMENT_MARKER.lower()
+
+
+def _owner_id_from_comment(comment: str) -> int | None:
+    owner_raw = comment.strip().split(":", 1)[0].strip()
+    return int(owner_raw) if owner_raw.isdigit() else None
 
 
 @dataclass(slots=True, frozen=True)
@@ -1202,10 +1213,14 @@ class AdminProvisioningService:
                     comment = str(client.get("comment") or "").strip()
                     usage = stats_by_uuid.get(client_uuid, {"used": 0, "total": 0})
 
+                    if _is_moaf_comment(comment):
+                        root_created_consumed_bytes += int(usage.get("used") or 0)
+                        continue
+                    comment_owner_id = _owner_id_from_comment(comment)
                     if comment == "" or comment in root_admin_id_set:
                         root_created_consumed_bytes += int(usage.get("used") or 0)
 
-                    if comment not in owner_id_set:
+                    if str(comment_owner_id or "") not in owner_id_set:
                         continue
                     key = (panel_id, inbound_id, client_uuid)
                     if key in seen:
@@ -1284,7 +1299,8 @@ class AdminProvisioningService:
         )
         if not allowed:
             raise ValueError("you do not have access to this inbound.")
-        if not (await self.access_service.get_admin_context(actor_user_id, settings)).is_full_admin:
+        context = await self.access_service.get_admin_context(actor_user_id, settings)
+        if not context.is_full_admin:
             profile = await self.db.get_delegated_admin_profile(actor_user_id)
             max_clients = int(profile.get("max_clients") or 0)
             if max_clients > 0:
@@ -1292,8 +1308,13 @@ class AdminProvisioningService:
                 if current_count >= max_clients:
                     raise ValueError("delegated admin max clients reached.")
 
+        is_moaf_create = (
+            context.is_delegated_admin
+            and actor_user_id in getattr(settings, "moaf_admin_ids", set())
+            and gb_to_bytes(total_gb) in getattr(settings, "moaf_traffic_bytes", set())
+        )
         charge_tx = None
-        if self.financial_service is not None:
+        if self.financial_service is not None and not is_moaf_create:
             charge_tx = await self.financial_service.charge_operation(
                 actor_user_id=actor_user_id,
                 settings=settings,
@@ -1310,7 +1331,7 @@ class AdminProvisioningService:
                 total_gb=total_gb,
                 expiry_days=expiry_days,
                 tg_id=tg_id,
-                comment=str(actor_user_id),
+                comment=f"{actor_user_id}:{MOAF_COMMENT_MARKER}" if is_moaf_create else str(actor_user_id),
             )
         except Exception:
             if charge_tx is not None and self.financial_service is not None:
@@ -1386,31 +1407,32 @@ class AdminProvisioningService:
             success=True,
             details=f"panel={panel_id};inbound={inbound_id};email={client_email}",
         )
-        lang = await self.db.get_user_language(actor_user_id)
-        actor = await self._actor_display_name(actor_user_id)
-        panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
-        activity_text = t(
-            "admin_activity_notify_template",
-            lang,
-            actor=actor,
-            action=t("admin_activity_action_create_client", lang),
-            user=client_email,
-            panel=panel_name,
-            inbound=inbound_name,
-            details="\n"
-            + "\n".join(
-                [
-                    t("admin_activity_detail_amount_gb", lang, value=total_gb),
-                    t("admin_activity_detail_amount_days", lang, value=expiry_days),
-                ]
-            ),
-        )
-        await self._record_admin_activity(
-            actor_user_id=actor_user_id,
-            settings=settings,
-            text=activity_text,
-            panel_id=panel_id,
-        )
+        if not is_moaf_create:
+            lang = await self.db.get_user_language(actor_user_id)
+            actor = await self._actor_display_name(actor_user_id)
+            panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
+            activity_text = t(
+                "admin_activity_notify_template",
+                lang,
+                actor=actor,
+                action=t("admin_activity_action_create_client", lang),
+                user=client_email,
+                panel=panel_name,
+                inbound=inbound_name,
+                details="\n"
+                + "\n".join(
+                    [
+                        t("admin_activity_detail_amount_gb", lang, value=total_gb),
+                        t("admin_activity_detail_amount_days", lang, value=expiry_days),
+                    ]
+                ),
+            )
+            await self._record_admin_activity(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                text=activity_text,
+                panel_id=panel_id,
+            )
         return {
             **created,
             "vless_uri": vless_uri,

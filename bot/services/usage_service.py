@@ -293,8 +293,9 @@ class UsageService:
                 )
             else:
                 comment = str(detail.get("comment") or "").strip()
-                if comment.isdigit():
-                    delegated_id = int(comment)
+                owner_raw = comment.split(":", 1)[0].strip()
+                if owner_raw.isdigit():
+                    delegated_id = int(owner_raw)
                     if await self._is_active_delegated_admin_user(delegated_id):
                         return [delegated_id]
         return sorted(self.root_admin_ids)
@@ -330,9 +331,10 @@ class UsageService:
         comment = str(detail.get("comment") or "").strip()
         if not comment and len(self.root_admin_ids) == 1:
             return sorted(self.root_admin_ids)
-        if not comment.isdigit():
+        owner_raw = comment.split(":", 1)[0].strip()
+        if not owner_raw.isdigit():
             return []
-        owner_id = int(comment)
+        owner_id = int(owner_raw)
         if owner_id in self.root_admin_ids:
             return [owner_id]
         if not await self._is_active_delegated_admin_user(owner_id):

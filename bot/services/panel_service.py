@@ -244,7 +244,8 @@ class PanelService:
     @staticmethod
     def _owner_id_from_comment(comment: str) -> int | None:
         value = comment.strip()
-        return int(value) if value.isdigit() else None
+        owner_raw = value.split(":", 1)[0].strip()
+        return int(owner_raw) if owner_raw.isdigit() else None
 
     async def _get_last_online_map(self, panel_id: int) -> dict[str, int]:
         try:

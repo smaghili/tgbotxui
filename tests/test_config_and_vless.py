@@ -2,7 +2,12 @@ import json
 import unittest
 from urllib.parse import parse_qs, urlparse
 
-from bot.config import _parse_proxy_list, _parse_sub_url_base_overrides, _parse_sub_url_strip_port_rules
+from bot.config import (
+    _parse_moaf_traffic_gb_values,
+    _parse_proxy_list,
+    _parse_sub_url_base_overrides,
+    _parse_sub_url_strip_port_rules,
+)
 from bot.services.admin_provisioning_service import AdminProvisioningService
 from bot.services.panel_service import PanelService
 
@@ -31,6 +36,12 @@ class ConfigAndVlessTests(unittest.TestCase):
         self.assertEqual(
             _parse_sub_url_base_overrides("1=http://sub.goldoonam.shop/sub,\n3xui|https://cdn.example.com/sub"),
             {"1": "http://sub.goldoonam.shop/sub", "3xui": "https://cdn.example.com/sub"},
+        )
+
+    def test_parse_moaf_traffic_gb_values(self) -> None:
+        self.assertEqual(
+            _parse_moaf_traffic_gb_values("5, 10\n0\nbad"),
+            {5 * 1024 ** 3, 10 * 1024 ** 3},
         )
 
     def test_extract_uuid_from_vless_uri(self) -> None:
@@ -190,6 +201,9 @@ class PanelServiceVlessTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(service.is_subscription_enabled_for_panel({"id": 1, "name": "panel-one"}))
         self.assertFalse(service.is_subscription_enabled_for_panel({"id": 2, "name": "panel-two"}))
+
+    def test_owner_id_from_comment_supports_moaf_marker(self) -> None:
+        self.assertEqual(PanelService._owner_id_from_comment("55:Moaf"), 55)
 
 
 if __name__ == "__main__":

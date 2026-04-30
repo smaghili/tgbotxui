@@ -904,7 +904,8 @@ async def ensure_client_access(
     if owner_filter is None or not client_uuid:
         return False
     detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-    return str(detail.get("comment") or "").strip() == str(owner_filter)
+    comment_owner = str(detail.get("comment") or "").strip().split(":", 1)[0].strip()
+    return comment_owner == str(owner_filter)
 
 
 def actor_display_name(source: Message | CallbackQuery) -> str:
