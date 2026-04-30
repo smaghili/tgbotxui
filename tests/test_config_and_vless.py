@@ -203,6 +203,12 @@ class PanelServiceVlessTests(unittest.IsolatedAsyncioTestCase):
     def test_owner_id_from_comment_supports_moaf_marker(self) -> None:
         self.assertEqual(PanelService._owner_id_from_comment("55:Moaf"), 55)
 
+    def test_moaf_comment_owner_overrides_stale_owner_mapping(self) -> None:
+        self.assertEqual(
+            PanelService._owner_id_for_client(mapped_owner_id=1, comment="55:Moaf"),
+            55,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

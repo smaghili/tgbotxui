@@ -247,6 +247,19 @@ class PanelService:
         owner_raw = value.split(":", 1)[0].strip()
         return int(owner_raw) if owner_raw.isdigit() else None
 
+    @staticmethod
+    def _is_moaf_comment(comment: str) -> bool:
+        parts = [part.strip().lower() for part in comment.split(":")]
+        return len(parts) >= 2 and parts[1] == "moaf"
+
+    @classmethod
+    def _owner_id_for_client(cls, *, mapped_owner_id: int | None, comment: str) -> int | None:
+        comment_owner_id = cls._owner_id_from_comment(comment)
+        if comment_owner_id is not None and cls._is_moaf_comment(comment):
+            return comment_owner_id
+        return mapped_owner_id or comment_owner_id
+
+
     async def _get_last_online_map(self, panel_id: int) -> dict[str, int]:
         try:
             raw, _ = await self._with_auth_request(
@@ -309,7 +322,10 @@ class PanelService:
                 if not email or not uuid:
                     continue
                 if owner_admin_user_id is not None:
-                    owner_id = owner_map.get((inbound_id, uuid)) or self._owner_id_from_comment(comment)
+                    owner_id = self._owner_id_for_client(
+                        mapped_owner_id=owner_map.get((inbound_id, uuid)),
+                        comment=comment,
+                    )
                     if owner_id != owner_admin_user_id:
                         continue
                 candidates = {email.lower(), uuid.lower(), sub_id.lower()}
@@ -654,7 +670,10 @@ class PanelService:
             if not uuid or not email:
                 continue
             if owner_admin_user_id is not None:
-                owner_id = owner_map.get((inbound_id, uuid)) or self._owner_id_from_comment(comment)
+                owner_id = self._owner_id_for_client(
+                    mapped_owner_id=owner_map.get((inbound_id, uuid)),
+                    comment=comment,
+                )
                 if owner_id != owner_admin_user_id:
                     continue
             out.append({"uuid": uuid, "email": email, "comment": comment})
@@ -687,7 +706,10 @@ class PanelService:
                     continue
                 comment = str(client.get("comment") or "").strip()
                 if owner_admin_user_id is not None:
-                    owner_id = owner_map.get((inbound_id, uuid)) or self._owner_id_from_comment(comment)
+                    owner_id = self._owner_id_for_client(
+                        mapped_owner_id=owner_map.get((inbound_id, uuid)),
+                        comment=comment,
+                    )
                     if owner_id != owner_admin_user_id:
                         continue
                 return {
