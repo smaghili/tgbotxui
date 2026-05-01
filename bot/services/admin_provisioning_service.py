@@ -33,6 +33,15 @@ def _owner_id_from_comment(comment: str) -> int | None:
     return int(owner_raw) if owner_raw.isdigit() else None
 
 
+def _is_moaf_traffic_operation(*, actor_user_id: int, settings: Settings, add_gb: float) -> bool:
+    min_traffic_bytes = int(getattr(settings, "moaf_min_traffic_bytes", 0) or 0)
+    return (
+        actor_user_id in getattr(settings, "moaf_admin_ids", set())
+        and min_traffic_bytes > 0
+        and gb_to_bytes(add_gb) >= min_traffic_bytes
+    )
+
+
 @dataclass(slots=True, frozen=True)
 class InboundAccess:
     panel_id: int
@@ -221,7 +230,15 @@ class AdminProvisioningService:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         before = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
         charge_tx = None
-        if self.financial_service is not None:
+        is_moaf_add_traffic = False
+        if _is_moaf_traffic_operation(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            add_gb=add_gb,
+        ):
+            context = await self.access_service.get_admin_context(actor_user_id, settings)
+            is_moaf_add_traffic = context.is_delegated_admin
+        if self.financial_service is not None and not is_moaf_add_traffic:
             await self.financial_service.validate_operation_limits(
                 actor_user_id=actor_user_id,
                 settings=settings,
@@ -235,8 +252,36 @@ class AdminProvisioningService:
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
             )
         try:
-            await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
+            moaf_comment = f"{actor_user_id}:{MOAF_COMMENT_MARKER}" if is_moaf_add_traffic else None
+            moaf_owner_user_id = None
+            if is_moaf_add_traffic:
+                moaf_owner_user_id = await self.db.get_client_owner(
+                    panel_id=ref.panel_id,
+                    inbound_id=ref.inbound_id,
+                    client_uuid=ref.client_uuid,
+                )
+                moaf_owner_user_id = moaf_owner_user_id or _owner_id_from_comment(str(before.get("comment") or ""))
+            if moaf_comment is not None:
+                await self.panel_service.add_client_total_gb(
+                    ref.panel_id,
+                    ref.inbound_id,
+                    ref.client_uuid,
+                    add_gb,
+                    comment=moaf_comment,
+                )
+            else:
+                await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
             after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+            if is_moaf_add_traffic and moaf_owner_user_id is not None:
+                await self.db.upsert_moaf_client_exemption(
+                    panel_id=ref.panel_id,
+                    inbound_id=ref.inbound_id,
+                    client_uuid=ref.client_uuid,
+                    owner_user_id=moaf_owner_user_id,
+                    moaf_user_id=actor_user_id,
+                    exempt_after_bytes=max(0, int(before.get("total") or 0)),
+                    client_email=str(after.get("email") or ref.client_email or ""),
+                )
         except Exception:
             if charge_tx is not None and self.financial_service is not None:
                 await self.financial_service.refund_transaction(
@@ -1201,11 +1246,11 @@ class AdminProvisioningService:
         allocated_bytes = 0
         consumed_bytes = 0
         remaining_bytes = 0
-        panel_total_consumed_bytes = 0
-        root_created_consumed_bytes = 0
         root_admin_id_set = {str(admin_id) for admin_id in settings.admin_ids}
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
+            exemption_loader = getattr(self.db, "list_moaf_client_exemptions_for_panel", None)
+            exemptions_by_key = await exemption_loader(panel_id) if exemption_loader is not None else {}
             try:
                 inbounds = await self.panel_service.list_inbounds(panel_id)
             except Exception:
@@ -1214,7 +1259,6 @@ class AdminProvisioningService:
                 inbound_id = int(inbound.get("id") or 0)
                 if inbound_id <= 0:
                     continue
-                panel_total_consumed_bytes += max(0, int(inbound.get("up") or 0)) + max(0, int(inbound.get("down") or 0))
 
                 stats_by_uuid: dict[str, dict[str, int]] = {}
                 for stat in inbound.get("clientStats") or []:
@@ -1246,17 +1290,37 @@ class AdminProvisioningService:
                         continue
                     comment = str(client.get("comment") or "").strip()
                     usage = stats_by_uuid.get(client_uuid, {"used": 0, "total": 0})
+                    key = (panel_id, inbound_id, client_uuid)
+                    exemption = exemptions_by_key.get((inbound_id, client_uuid))
+
+                    comment_owner_id = _owner_id_from_comment(comment)
+                    if exemption is not None:
+                        exemption_owner_id = int(exemption.get("owner_user_id") or 0)
+                        if str(exemption_owner_id) not in owner_id_set:
+                            continue
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        clients_count += 1
+                        client_total_bytes = max(0, int(client.get("totalGB") or 0))
+                        client_used_bytes = max(0, int(usage.get("used") or 0))
+                        billable_limit_bytes = max(0, int(exemption.get("exempt_after_bytes") or 0))
+                        billable_total_bytes = min(client_total_bytes, billable_limit_bytes)
+                        billable_used_bytes = min(client_used_bytes, billable_limit_bytes)
+                        allocated_bytes += billable_total_bytes
+                        consumed_bytes += billable_used_bytes
+                        if billable_total_bytes > 0:
+                            remaining_bytes += max(billable_total_bytes - billable_used_bytes, 0)
+                        continue
+
+                    if comment == "" or comment in root_admin_id_set:
+                        continue
 
                     if _is_moaf_comment(comment):
-                        root_created_consumed_bytes += int(usage.get("used") or 0)
                         continue
-                    comment_owner_id = _owner_id_from_comment(comment)
-                    if comment == "" or comment in root_admin_id_set:
-                        root_created_consumed_bytes += int(usage.get("used") or 0)
 
                     if str(comment_owner_id or "") not in owner_id_set:
                         continue
-                    key = (panel_id, inbound_id, client_uuid)
                     if key in seen:
                         continue
                     seen.add(key)
@@ -1273,8 +1337,6 @@ class AdminProvisioningService:
             allocated_gb += 1
         gb_unit = 1024 ** 3
         charge_basis = str(pricing.get("charge_basis") or "allocated")
-        if charge_basis == "consumed":
-            consumed_bytes = max(0, panel_total_consumed_bytes - root_created_consumed_bytes)
         consumed_gb = float(consumed_bytes) / float(gb_unit) if consumed_bytes > 0 else 0.0
         remaining_gb = float(remaining_bytes) / float(gb_unit) if remaining_bytes > 0 else 0.0
         scope_totals = (

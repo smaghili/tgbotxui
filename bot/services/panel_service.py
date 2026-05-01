@@ -960,18 +960,25 @@ class PanelService:
         )
 
     async def add_client_total_gb(
-        self, panel_id: int, inbound_id: int, client_uuid: str, add_gb: float
+        self,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        add_gb: float,
+        *,
+        comment: str | None = None,
     ) -> int:
         _, current, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
         current_bytes = int(current.get("totalGB") or 0)
         if current_bytes < 0:
             current_bytes = 0
         new_total = current_bytes + gb_to_bytes(add_gb)
+        new_comment = str(comment).strip() if comment is not None else str(current.get("comment") or "")
         await self._update_client_by_mutation(
             panel_id=panel_id,
             inbound_id=inbound_id,
             client_uuid=client_uuid,
-            mutator=lambda c: {**c, "totalGB": new_total},
+            mutator=lambda c: {**c, "totalGB": new_total, "comment": new_comment},
         )
         return new_total
 
