@@ -90,7 +90,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["debt_amount"], 660_000)
         self.assertEqual(summary["total_transactions"], 4)
 
-    async def test_scope_financial_summary_caps_moaf_add_traffic_at_previous_total(self) -> None:
+    async def test_scope_financial_summary_uses_moaf_traffic_segments(self) -> None:
         gb = 1024 ** 3
 
         class FakeDB:
@@ -98,12 +98,33 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
                 return [manager_user_id]
 
             async def list_moaf_client_exemptions_for_panel(self, panel_id: int) -> dict:
+                return {}
+
+            async def list_moaf_client_traffic_segments_for_panel(self, panel_id: int) -> dict:
                 return {
-                    (11, "u-moaf"): {
-                        "owner_user_id": 2001,
-                        "moaf_user_id": 55,
-                        "exempt_after_bytes": 4 * gb,
-                    }
+                    (11, "u-moaf"): [
+                        {
+                            "owner_user_id": 2001,
+                            "actor_user_id": 2001,
+                            "start_bytes": 0,
+                            "end_bytes": 2 * gb,
+                            "is_billable": True,
+                        },
+                        {
+                            "owner_user_id": 2001,
+                            "actor_user_id": 55,
+                            "start_bytes": 2 * gb,
+                            "end_bytes": 7 * gb,
+                            "is_billable": False,
+                        },
+                        {
+                            "owner_user_id": 2001,
+                            "actor_user_id": 55,
+                            "start_bytes": 7 * gb,
+                            "end_bytes": 9 * gb,
+                            "is_billable": True,
+                        },
+                    ]
                 }
 
         class FakePanelService:
@@ -174,9 +195,119 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
             settings=SimpleNamespace(admin_ids=[]),
         )
 
-        self.assertEqual(summary["consumed_gb"], 4)
-        self.assertEqual(summary["remaining_gb"], 0)
-        self.assertEqual(summary["debt_amount"], 1200)
+        self.assertEqual(summary["consumed_gb"], 2)
+        self.assertEqual(summary["remaining_gb"], 2)
+        self.assertEqual(summary["debt_amount"], 600)
+
+        panel_service.used_bytes = 8 * gb
+        summary = await service.get_admin_scope_financial_summary(
+            actor_user_id=2001,
+            settings=SimpleNamespace(admin_ids=[]),
+        )
+
+        self.assertEqual(summary["consumed_gb"], 3)
+        self.assertEqual(summary["remaining_gb"], 1)
+        self.assertEqual(summary["debt_amount"], 900)
+
+    async def test_scope_financial_summary_counts_only_small_add_after_initial_moaf(self) -> None:
+        gb = 1024 ** 3
+
+        class FakeDB:
+            async def get_delegated_admin_subtree_user_ids(self, *, manager_user_id: int, include_self: bool = True) -> list[int]:
+                return [manager_user_id]
+
+            async def list_moaf_client_exemptions_for_panel(self, panel_id: int) -> dict:
+                return {}
+
+            async def list_moaf_client_traffic_segments_for_panel(self, panel_id: int) -> dict:
+                return {
+                    (11, "u-moaf"): [
+                        {
+                            "owner_user_id": 2001,
+                            "actor_user_id": 55,
+                            "start_bytes": 0,
+                            "end_bytes": 10 * gb,
+                            "is_billable": False,
+                        },
+                        {
+                            "owner_user_id": 2001,
+                            "actor_user_id": 55,
+                            "start_bytes": 10 * gb,
+                            "end_bytes": 12 * gb,
+                            "is_billable": True,
+                        },
+                    ]
+                }
+
+        class FakePanelService:
+            def __init__(self) -> None:
+                self.used_bytes = 7 * gb
+
+            async def list_panels(self) -> list[dict]:
+                return [{"id": 7, "name": "main"}]
+
+            async def list_inbounds(self, panel_id: int) -> list[dict]:
+                return [
+                    {
+                        "id": 11,
+                        "settings": json.dumps(
+                            {
+                                "clients": [
+                                    {"id": "u-moaf", "totalGB": 12 * gb, "comment": "55:Moaf"},
+                                ]
+                            }
+                        ),
+                        "clientStats": [
+                            {"id": "u-moaf", "up": self.used_bytes, "down": 0},
+                        ],
+                    }
+                ]
+
+        class FakeAccessService:
+            async def get_admin_context(self, user_id: int, settings) -> SimpleNamespace:
+                return SimpleNamespace(is_root_admin=False, delegated_scope="full")
+
+        class FakeFinancialService:
+            async def get_wallet(self, telegram_user_id: int) -> dict:
+                return {"balance": 0, "currency": "تومان"}
+
+            async def get_pricing(self, telegram_user_id: int) -> dict:
+                return {
+                    "price_per_gb": 300,
+                    "price_per_day": 0,
+                    "currency": "تومان",
+                    "charge_basis": "consumed",
+                }
+
+            async def get_scope_sales_totals(self, telegram_user_ids: list[int]) -> dict:
+                return {"total_sales": 600, "total_transactions": 1}
+
+        panel_service = FakePanelService()
+        service = AdminProvisioningService(
+            db=FakeDB(),  # type: ignore[arg-type]
+            panel_service=panel_service,  # type: ignore[arg-type]
+            access_service=FakeAccessService(),  # type: ignore[arg-type]
+            financial_service=FakeFinancialService(),  # type: ignore[arg-type]
+        )
+
+        summary = await service.get_admin_scope_financial_summary(
+            actor_user_id=2001,
+            settings=SimpleNamespace(admin_ids=[]),
+        )
+
+        self.assertEqual(summary["allocated_gb"], 2)
+        self.assertEqual(summary["consumed_gb"], 0)
+        self.assertEqual(summary["debt_amount"], 0)
+
+        panel_service.used_bytes = 11 * gb
+        summary = await service.get_admin_scope_financial_summary(
+            actor_user_id=2001,
+            settings=SimpleNamespace(admin_ids=[]),
+        )
+
+        self.assertEqual(summary["allocated_gb"], 2)
+        self.assertEqual(summary["consumed_gb"], 1)
+        self.assertEqual(summary["debt_amount"], 300)
 
 
 if __name__ == "__main__":

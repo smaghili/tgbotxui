@@ -1081,6 +1081,103 @@ class Database:
             for row in rows
         }
 
+    async def add_moaf_client_traffic_segment(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        owner_user_id: int,
+        actor_user_id: int,
+        start_bytes: int,
+        end_bytes: int,
+        is_billable: bool,
+        source: str,
+        client_email: str | None = None,
+    ) -> None:
+        assert self.conn is not None
+        start = max(0, int(start_bytes))
+        end = max(start, int(end_bytes))
+        if end <= start:
+            return
+        await self.conn.execute(
+            """
+            INSERT INTO moaf_client_traffic_segments (
+                panel_id,
+                inbound_id,
+                client_uuid,
+                owner_user_id,
+                actor_user_id,
+                start_bytes,
+                end_bytes,
+                is_billable,
+                source,
+                client_email
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                panel_id,
+                inbound_id,
+                client_uuid,
+                owner_user_id,
+                actor_user_id,
+                start,
+                end,
+                int(bool(is_billable)),
+                source,
+                client_email,
+            ),
+        )
+        await self.conn.commit()
+
+    async def get_moaf_client_traffic_segments(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> list[dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, owner_user_id, actor_user_id, start_bytes, end_bytes, is_billable, source, client_email, created_at
+            FROM moaf_client_traffic_segments
+            WHERE panel_id=? AND inbound_id=? AND client_uuid=?
+            ORDER BY start_bytes ASC, id ASC;
+            """,
+            (panel_id, inbound_id, client_uuid),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def list_moaf_client_traffic_segments_for_panel(self, panel_id: int) -> dict[tuple[int, str], list[dict[str, Any]]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT inbound_id, client_uuid, owner_user_id, actor_user_id, start_bytes, end_bytes, is_billable, source, client_email
+            FROM moaf_client_traffic_segments
+            WHERE panel_id=?
+            ORDER BY start_bytes ASC, id ASC;
+            """,
+            (panel_id,),
+        )
+        rows = await cur.fetchall()
+        result: dict[tuple[int, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            key = (int(row["inbound_id"]), str(row["client_uuid"]))
+            result.setdefault(key, []).append(
+                {
+                    "owner_user_id": int(row["owner_user_id"]),
+                    "actor_user_id": int(row["actor_user_id"]),
+                    "start_bytes": max(0, int(row["start_bytes"] or 0)),
+                    "end_bytes": max(0, int(row["end_bytes"] or 0)),
+                    "is_billable": bool(row["is_billable"]),
+                    "source": str(row["source"] or ""),
+                    "client_email": row["client_email"],
+                }
+            )
+        return result
+
     async def bind_user_service(
         self,
         *,
