@@ -1373,6 +1373,9 @@ class AdminProvisioningService:
         allocated_bytes = 0
         consumed_bytes = 0
         remaining_bytes = 0
+        panel_total_consumed_bytes = 0
+        root_created_consumed_bytes = 0
+        billable_moaf_consumed_bytes = 0
         root_admin_id_set = {str(admin_id) for admin_id in settings.admin_ids}
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
@@ -1400,6 +1403,10 @@ class AdminProvisioningService:
                         "used": max(0, int(stat.get("up") or 0)) + max(0, int(stat.get("down") or 0)),
                         "total": max(0, int(stat.get("total") or 0)),
                     }
+                if "up" in inbound or "down" in inbound:
+                    panel_total_consumed_bytes += max(0, int(inbound.get("up") or 0)) + max(0, int(inbound.get("down") or 0))
+                else:
+                    panel_total_consumed_bytes += sum(int(item.get("used") or 0) for item in stats_by_uuid.values())
 
                 settings_raw = inbound.get("settings")
                 settings_obj: dict[str, Any] = {}
@@ -1424,6 +1431,9 @@ class AdminProvisioningService:
                     segments = segments_by_key.get((inbound_id, client_uuid), [])
 
                     comment_owner_id = _owner_id_from_comment(comment)
+                    if comment == "" or comment in root_admin_id_set or _is_moaf_comment(comment):
+                        root_created_consumed_bytes += int(usage.get("used") or 0)
+
                     if segments:
                         client_total_bytes = max(0, int(client.get("totalGB") or 0))
                         client_used_bytes = max(0, int(usage.get("used") or 0))
@@ -1441,6 +1451,7 @@ class AdminProvisioningService:
                         clients_count += count
                         allocated_bytes += billable_total_bytes
                         consumed_bytes += billable_used_bytes
+                        billable_moaf_consumed_bytes += billable_used_bytes
                         remaining_bytes += billable_remaining_bytes
                         continue
 
@@ -1459,6 +1470,7 @@ class AdminProvisioningService:
                         billable_used_bytes = min(client_used_bytes, billable_limit_bytes)
                         allocated_bytes += billable_total_bytes
                         consumed_bytes += billable_used_bytes
+                        billable_moaf_consumed_bytes += billable_used_bytes
                         if billable_total_bytes > 0:
                             remaining_bytes += max(billable_total_bytes - billable_used_bytes, 0)
                         continue
@@ -1487,6 +1499,11 @@ class AdminProvisioningService:
             allocated_gb += 1
         gb_unit = 1024 ** 3
         charge_basis = str(pricing.get("charge_basis") or "allocated")
+        if charge_basis == "consumed":
+            consumed_bytes = max(
+                0,
+                panel_total_consumed_bytes - root_created_consumed_bytes + billable_moaf_consumed_bytes,
+            )
         consumed_gb = float(consumed_bytes) / float(gb_unit) if consumed_bytes > 0 else 0.0
         remaining_gb = float(remaining_bytes) / float(gb_unit) if remaining_bytes > 0 else 0.0
         scope_totals = (
