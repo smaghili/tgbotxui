@@ -334,6 +334,8 @@ class AdminProvisioningService:
         segment_loader = getattr(self.db, "get_moaf_client_traffic_segments", None)
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
+            exemption_loader = getattr(self.db, "list_moaf_client_exemptions_for_panel", None)
+            exemptions_by_key = await exemption_loader(panel_id) if exemption_loader is not None else {}
             try:
                 clients = await self.panel_service.list_clients(panel_id, owner_admin_user_id=child_user_id)
             except Exception:
@@ -356,6 +358,12 @@ class AdminProvisioningService:
                 except Exception:
                     continue
                 total_bytes = max(0, int(detail.get("total") or 0))
+                comment = str(detail.get("comment") or "").strip()
+                exemption = exemptions_by_key.get((inbound_id, client_uuid))
+                if exemption is not None and int(exemption.get("owner_user_id") or 0) == parent_user_id:
+                    total_bytes = min(total_bytes, max(0, int(exemption.get("exempt_after_bytes") or 0)))
+                elif _is_moaf_comment(comment) or _owner_id_from_comment(comment) != child_user_id:
+                    continue
                 if total_bytes <= 0:
                     continue
                 await self._write_hierarchy_segment(

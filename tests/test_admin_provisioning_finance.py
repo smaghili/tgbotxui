@@ -462,19 +462,36 @@ class AdminProvisioningFinanceTests(unittest.IsolatedAsyncioTestCase):
 
         class FakePanelService:
             def __init__(self) -> None:
-                self.total = 2 * 1024 ** 3
+                self.totals = {
+                    "uuid-1": 2 * 1024 ** 3,
+                    "root-uuid": 40 * 1024 ** 3,
+                    "moaf-uuid": 5 * 1024 ** 3,
+                }
+                self.comments = {
+                    "uuid-1": "55",
+                    "root-uuid": "",
+                    "moaf-uuid": "55:Moaf",
+                }
 
             async def list_panels(self) -> list[dict]:
                 return [{"id": 10, "name": "panel-a"}]
 
             async def list_clients(self, panel_id: int, **kwargs) -> list[dict]:
-                return [{"panel_id": panel_id, "inbound_id": 20, "uuid": "uuid-1", "email": "user@example.com"}]
+                return [
+                    {"panel_id": panel_id, "inbound_id": 20, "uuid": "uuid-1", "email": "user@example.com"},
+                    {"panel_id": panel_id, "inbound_id": 20, "uuid": "root-uuid", "email": "root@example.com"},
+                    {"panel_id": panel_id, "inbound_id": 20, "uuid": "moaf-uuid", "email": "moaf@example.com"},
+                ]
 
             async def get_client_detail(self, panel_id: int, inbound_id: int, client_uuid: str) -> dict:
-                return {"email": "user@example.com", "total": self.total, "comment": "55"}
+                return {
+                    "email": f"{client_uuid}@example.com",
+                    "total": self.totals[client_uuid],
+                    "comment": self.comments[client_uuid],
+                }
 
             async def add_client_total_gb(self, panel_id: int, inbound_id: int, client_uuid: str, add_gb: int) -> None:
-                self.total += add_gb * 1024 ** 3
+                self.totals[client_uuid] += add_gb * 1024 ** 3
 
             async def panel_inbound_names(self, panel_id: int, inbound_id: int) -> tuple[str, str]:
                 return "panel-a", "in-a"
@@ -534,7 +551,7 @@ class AdminProvisioningFinanceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(db.segments), 1)
-        self.assertEqual(panel_service.total, 4 * 1024 ** 3)
+        self.assertEqual(panel_service.totals["uuid-1"], 4 * 1024 ** 3)
 
     async def test_toggle_primary_parent_attaches_to_only_full_delegate_then_detaches(self) -> None:
         class FakeDB:
