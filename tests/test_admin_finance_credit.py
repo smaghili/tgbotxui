@@ -372,8 +372,8 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
                         ),
                         "clientStats": [
                             {"id": "valid-child", "up": 1 * gb, "down": 0},
-                            {"id": "root-created", "up": 0, "down": 0},
-                            {"id": "moaf-created", "up": 0, "down": 0},
+                            {"id": "root-created", "up": 4 * gb, "down": 0},
+                            {"id": "moaf-created", "up": 3 * gb, "down": 0},
                         ],
                     }
                 ]
@@ -410,6 +410,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(summary["allocated_gb"], 2)
+        self.assertEqual(summary["consumed_gb"], 8)
         self.assertEqual(summary["remaining_gb"], 1)
         self.assertEqual(summary["remaining_amount"], 220_000)
 

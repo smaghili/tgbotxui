@@ -54,6 +54,7 @@ def _billable_segment_totals(
         return 0, 0, 0, 0
     allocated = 0
     consumed = 0
+    allocated_consumed = 0
     for segment in segments:
         if not segment.get("is_billable"):
             continue
@@ -64,9 +65,13 @@ def _billable_segment_totals(
         capped_end = min(end, current_total_bytes)
         if capped_end <= start:
             continue
+        segment_consumed = max(0, min(used_bytes, capped_end) - start)
+        consumed += segment_consumed
+        if segment.get("_consumed_only"):
+            continue
         allocated += capped_end - start
-        consumed += max(0, min(used_bytes, capped_end) - start)
-    return 1, allocated, consumed, max(allocated - consumed, 0)
+        allocated_consumed += segment_consumed
+    return 1, allocated, consumed, max(allocated - allocated_consumed, 0)
 
 
 def _valid_report_segments(
@@ -94,6 +99,9 @@ def _valid_report_segments(
             valid_segments.append(capped)
             continue
         if comment_owner_id is None or str(comment_owner_id) in root_admin_id_set or _is_moaf_comment(comment):
+            consumed_only = dict(segment)
+            consumed_only["_consumed_only"] = True
+            valid_segments.append(consumed_only)
             continue
         valid_segments.append(segment)
     return valid_segments
