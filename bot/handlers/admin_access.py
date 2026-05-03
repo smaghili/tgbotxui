@@ -105,6 +105,38 @@ def _delegated_access_list_keyboard(rows: list[dict], lang: str | None = None) -
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _delegated_subordinates_keyboard(
+    parent_user_id: int,
+    rows: list[dict],
+    lang: str | None = None,
+) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
+    seen_users: set[int] = set()
+    for row in rows:
+        child_user_id = int(row["telegram_user_id"])
+        if child_user_id == parent_user_id or child_user_id in seen_users:
+            continue
+        seen_users.add(child_user_id)
+        title = str(row.get("title") or row.get("full_name") or row.get("username") or child_user_id)
+        current_parent_user_id = int(row.get("parent_user_id") or 0) or None
+        is_attached = current_parent_user_id == parent_user_id
+        action_label = (
+            t("admin_delegated_subordinate_remove", lang)
+            if is_attached else
+            t("admin_delegated_subordinate_add", lang)
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(text=title[:34], callback_data=f"dag:detail:{child_user_id}"),
+                InlineKeyboardButton(text=action_label, callback_data=f"dag:subtoggle:{parent_user_id}:{child_user_id}"),
+            ]
+        )
+    if not buttons:
+        buttons = [[InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")]]
+    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{parent_user_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def _pricing_history_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -196,10 +228,14 @@ def _delegated_detail_keyboard(
                     callback_data=f"dag:toggle_wallet_mode:{user_id}",
                 ),
             ],
-            [InlineKeyboardButton(text=t("admin_delegated_parent", lang), callback_data=f"dag:toggle_parent:{user_id}")],
-            [InlineKeyboardButton(text=t("admin_delegated_report", lang), callback_data=f"dag:report:{user_id}")],
         ]
     )
+    relation_buttons: list[InlineKeyboardButton] = []
+    if scope_value != "full":
+        relation_buttons.append(InlineKeyboardButton(text=t("admin_delegated_parent", lang), callback_data=f"dag:toggle_parent:{user_id}"))
+    relation_buttons.append(InlineKeyboardButton(text=t("admin_delegated_subordinates", lang), callback_data=f"dag:subs:{user_id}"))
+    rows.append(relation_buttons)
+    rows.append([InlineKeyboardButton(text=t("admin_delegated_report", lang), callback_data=f"dag:report:{user_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -684,6 +720,75 @@ async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, se
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("dag:subs:"))
+async def delegated_admin_subordinates(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        parent_user_id = int(callback.data.split(":", 2)[2])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    parent = await services.db.get_delegated_admin_by_user_id(parent_user_id)
+    if parent is None:
+        await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
+        return
+    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
+    title = str(parent.get("title") or parent_user_id)
+    await callback.message.edit_text(
+        t("admin_delegated_subordinates_title", lang, title=title),
+        reply_markup=_delegated_subordinates_keyboard(parent_user_id, rows, lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dag:subtoggle:"))
+async def delegated_admin_subordinate_toggle(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        _, _, parent_raw, child_raw = callback.data.split(":", 3)
+        parent_user_id = int(parent_raw)
+        child_user_id = int(child_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    parent = await services.db.get_delegated_admin_by_user_id(parent_user_id)
+    child = await services.db.get_delegated_admin_by_user_id(child_user_id)
+    if parent is None or child is None:
+        await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
+        return
+    current_parent_user_id = int(child.get("parent_user_id") or 0) or None
+    new_parent_user_id = None if current_parent_user_id == parent_user_id else parent_user_id
+    try:
+        await services.admin_provisioning_service.change_delegated_admin_parent(
+            actor_user_id=callback.from_user.id,
+            child_user_id=child_user_id,
+            new_parent_user_id=new_parent_user_id,
+        )
+    except Exception as exc:
+        await callback.answer(str(exc)[:180], show_alert=True)
+        return
+    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
+    title = str(parent.get("title") or parent_user_id)
+    await callback.message.edit_text(
+        t("admin_delegated_subordinates_title", lang, title=title),
+        reply_markup=_delegated_subordinates_keyboard(parent_user_id, rows, lang),
+    )
+    await callback.answer(
+        t("admin_delegated_parent_attached" if new_parent_user_id is not None else "admin_delegated_parent_detached", lang),
+        show_alert=True,
+    )
+
+
 @router.callback_query(F.data.startswith("dag:field:"))
 async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
@@ -951,6 +1056,10 @@ async def delegated_admin_toggle_parent(callback: CallbackQuery, settings: Setti
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
+    if str((delegated or {}).get("admin_scope") or "limited").strip().lower() == "full":
+        await callback.answer(t("admin_delegated_parent_not_for_full", lang), show_alert=True)
         return
     try:
         new_parent_user_id = await services.admin_provisioning_service.toggle_delegated_admin_primary_parent(

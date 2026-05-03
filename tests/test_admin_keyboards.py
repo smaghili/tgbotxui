@@ -10,7 +10,7 @@ from bot.handlers.admin_shared import (
     users_clients_keyboard,
     yes_no_inline_keyboard,
 )
-from bot.handlers.admin_access import _delegated_detail_keyboard
+from bot.handlers.admin_access import _delegated_detail_keyboard, _delegated_subordinates_keyboard
 from bot.i18n import btn, t
 from bot.keyboards import admin_keyboard
 
@@ -164,7 +164,41 @@ def test_delegated_detail_keyboard_toggles_primary_parent_directly() -> None:
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
     assert "dag:toggle_parent:55" in callbacks
+    assert "dag:subs:55" in callbacks
     assert "dag:field:parent_user_id:55" not in callbacks
+
+
+def test_delegated_detail_keyboard_hides_primary_parent_for_full_delegate() -> None:
+    markup = _delegated_detail_keyboard(
+        100,
+        is_active=True,
+        charge_basis="consumed",
+        admin_scope="full",
+        allow_negative_wallet=False,
+        lang="fa",
+    )
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "dag:toggle_parent:100" not in callbacks
+    assert "dag:subs:100" in callbacks
+
+
+def test_delegated_subordinates_keyboard_adds_and_removes_children() -> None:
+    markup = _delegated_subordinates_keyboard(
+        100,
+        [
+            {"telegram_user_id": 100, "title": "parent", "parent_user_id": None},
+            {"telegram_user_id": 55, "title": "child", "parent_user_id": 100},
+            {"telegram_user_id": 66, "title": "other", "parent_user_id": None},
+        ],
+        "fa",
+    )
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "dag:subtoggle:100:55" in callbacks
+    assert "dag:subtoggle:100:66" in callbacks
+    assert "dag:subtoggle:100:100" not in callbacks
+    assert "dag:detail:100" in callbacks
 
 
 def test_client_traffic_menu_groups_presets_in_three_columns() -> None:
