@@ -69,6 +69,36 @@ def _billable_segment_totals(
     return 1, allocated, consumed, max(allocated - consumed, 0)
 
 
+def _valid_report_segments(
+    *,
+    segments: list[dict[str, Any]],
+    comment: str,
+    exemption: dict[str, Any] | None,
+    root_admin_id_set: set[str],
+) -> list[dict[str, Any]]:
+    if not segments:
+        return []
+    comment_owner_id = _owner_id_from_comment(comment)
+    valid_segments: list[dict[str, Any]] = []
+    for segment in segments:
+        if str(segment.get("source") or "") != "parent_detach_snapshot":
+            valid_segments.append(segment)
+            continue
+        owner_user_id = int(segment.get("owner_user_id") or 0)
+        if exemption is not None and int(exemption.get("owner_user_id") or 0) == owner_user_id:
+            capped = dict(segment)
+            capped["end_bytes"] = min(
+                max(0, int(segment.get("end_bytes") or 0)),
+                max(0, int(exemption.get("exempt_after_bytes") or 0)),
+            )
+            valid_segments.append(capped)
+            continue
+        if comment_owner_id is None or str(comment_owner_id) in root_admin_id_set or _is_moaf_comment(comment):
+            continue
+        valid_segments.append(segment)
+    return valid_segments
+
+
 @dataclass(slots=True, frozen=True)
 class InboundAccess:
     panel_id: int
@@ -371,7 +401,7 @@ class AdminProvisioningService:
                     inbound_id=inbound_id,
                     client_uuid=client_uuid,
                     owner_user_id=parent_user_id,
-                    actor_user_id=actor_user_id,
+                    actor_user_id=child_user_id,
                     start_bytes=0,
                     end_bytes=total_bytes,
                     is_billable=True,
@@ -1631,6 +1661,12 @@ class AdminProvisioningService:
                     key = (panel_id, inbound_id, client_uuid)
                     exemption = exemptions_by_key.get((inbound_id, client_uuid))
                     segments = segments_by_key.get((inbound_id, client_uuid), [])
+                    segments = _valid_report_segments(
+                        segments=segments,
+                        comment=comment,
+                        exemption=exemption,
+                        root_admin_id_set=root_admin_id_set,
+                    )
 
                     comment_owner_id = _owner_id_from_comment(comment)
                     counted_as_root_created = False
