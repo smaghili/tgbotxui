@@ -26,7 +26,11 @@ class AdminProvisioningFinanceTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
             async def get_delegated_admin_by_user_id(self, user_id: int) -> dict | None:
-                return {"title": "delegate"}
+                if user_id == 55:
+                    return {"title": "delegate", "parent_user_id": 999}
+                if user_id == 999:
+                    return {"title": "parent", "parent_user_id": None}
+                return None
 
             async def get_client_owner(self, **kwargs) -> int:
                 return 999
@@ -136,7 +140,11 @@ class AdminProvisioningFinanceTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
             async def get_delegated_admin_by_user_id(self, user_id: int) -> dict | None:
-                return {"title": "delegate"}
+                if user_id == 55:
+                    return {"title": "delegate", "parent_user_id": 2001}
+                if user_id == 2001:
+                    return {"title": "parent", "parent_user_id": None}
+                return None
 
             async def get_client_owner(self, **kwargs) -> int:
                 return 999
@@ -308,7 +316,11 @@ class AdminProvisioningFinanceTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
             async def get_delegated_admin_by_user_id(self, user_id: int) -> dict | None:
-                return {"title": "delegate"}
+                if user_id == 55:
+                    return {"title": "delegate", "parent_user_id": 2001}
+                if user_id == 2001:
+                    return {"title": "parent", "parent_user_id": None}
+                return None
 
             async def get_client_owner(self, **kwargs) -> int:
                 return 55
@@ -391,12 +403,184 @@ class AdminProvisioningFinanceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(service.financial_service.charge_calls[0]["traffic_gb"], 2)  # type: ignore[union-attr]
         self.assertEqual(
-            [(item["start_bytes"], item["end_bytes"], item["is_billable"], item["source"]) for item in service.db.segments],  # type: ignore[attr-defined]
+            [(item["owner_user_id"], item["start_bytes"], item["end_bytes"], item["is_billable"], item["source"]) for item in service.db.segments],  # type: ignore[attr-defined]
             [
-                (0, 10 * 1024 ** 3, False, "initial_moaf"),
-                (10 * 1024 ** 3, 12 * 1024 ** 3, True, "add_traffic"),
+                (2001, 0, 10 * 1024 ** 3, False, "initial_moaf"),
+                (2001, 10 * 1024 ** 3, 12 * 1024 ** 3, True, "add_traffic"),
             ],
         )
+
+    async def test_detaching_delegate_preserves_existing_usage_but_not_future_adds(self) -> None:
+        class Settings:
+            moaf_admin_ids = set()
+            moaf_min_traffic_bytes = 5 * 1024 ** 3
+            timezone = "Asia/Tehran"
+
+        class FakeDB:
+            def __init__(self) -> None:
+                self.audit_logs: list[dict] = []
+                self.segments: list[dict] = []
+                self.parent_user_id: int | None = 100
+
+            async def get_delegated_admin_by_user_id(self, user_id: int) -> dict | None:
+                if user_id == 55:
+                    return {"id": 1, "telegram_user_id": 55, "parent_user_id": self.parent_user_id}
+                if user_id == 100:
+                    return {"id": 2, "telegram_user_id": 100, "parent_user_id": None}
+                return None
+
+            async def get_delegated_admin_subtree_user_ids(self, *, manager_user_id: int, include_self: bool = True) -> list[int]:
+                return [manager_user_id]
+
+            async def set_delegated_admin_parent(self, *, telegram_user_id: int, parent_user_id: int | None, actor_user_id: int) -> bool:
+                self.parent_user_id = parent_user_id
+                return True
+
+            async def get_last_delegated_admin_parent_event(self, user_id: int) -> dict | None:
+                return {"old_parent_user_id": 100, "new_parent_user_id": self.parent_user_id}
+
+            async def get_moaf_client_traffic_segments(self, **kwargs) -> list[dict]:
+                return self.segments
+
+            async def add_moaf_client_traffic_segment(self, **kwargs) -> None:
+                self.segments.append(kwargs)
+
+            async def get_client_owner(self, **kwargs) -> int:
+                return 55
+
+            async def list_moaf_client_exemptions_for_panel(self, panel_id: int) -> dict:
+                return {}
+
+            async def get_user_language(self, user_id: int) -> str:
+                return "fa"
+
+            async def get_user_by_telegram_id(self, user_id: int) -> dict | None:
+                return None
+
+            async def add_audit_log(self, **kwargs) -> None:
+                self.audit_logs.append(kwargs)
+
+        class FakePanelService:
+            def __init__(self) -> None:
+                self.total = 2 * 1024 ** 3
+
+            async def list_panels(self) -> list[dict]:
+                return [{"id": 10, "name": "panel-a"}]
+
+            async def list_clients(self, panel_id: int, **kwargs) -> list[dict]:
+                return [{"panel_id": panel_id, "inbound_id": 20, "uuid": "uuid-1", "email": "user@example.com"}]
+
+            async def get_client_detail(self, panel_id: int, inbound_id: int, client_uuid: str) -> dict:
+                return {"email": "user@example.com", "total": self.total, "comment": "55"}
+
+            async def add_client_total_gb(self, panel_id: int, inbound_id: int, client_uuid: str, add_gb: int) -> None:
+                self.total += add_gb * 1024 ** 3
+
+            async def panel_inbound_names(self, panel_id: int, inbound_id: int) -> tuple[str, str]:
+                return "panel-a", "in-a"
+
+        class FakeAccessService:
+            pass
+
+        class FakeFinancialService:
+            def __init__(self) -> None:
+                self.charge_calls: list[dict] = []
+
+            async def validate_operation_limits(self, **kwargs) -> None:
+                return None
+
+            async def charge_operation(self, **kwargs):
+                self.charge_calls.append(kwargs)
+                return {"id": 1}
+
+        db = FakeDB()
+        panel_service = FakePanelService()
+        service = AdminProvisioningService(
+            db=db,  # type: ignore[arg-type]
+            panel_service=panel_service,  # type: ignore[arg-type]
+            access_service=FakeAccessService(),  # type: ignore[arg-type]
+            financial_service=FakeFinancialService(),  # type: ignore[arg-type]
+        )
+
+        await service.change_delegated_admin_parent(
+            actor_user_id=1,
+            child_user_id=55,
+            new_parent_user_id=None,
+        )
+
+        self.assertEqual(db.parent_user_id, None)
+        self.assertEqual(
+            [(item["owner_user_id"], item["start_bytes"], item["end_bytes"], item["is_billable"]) for item in db.segments],
+            [(100, 0, 2 * 1024 ** 3, True)],
+        )
+
+        async def fake_resolve_client_from_vless_for_actor(**kwargs) -> ManagedClientRef:
+            return ManagedClientRef(
+                panel_id=10,
+                panel_name="panel-a",
+                inbound_id=20,
+                inbound_name="in-a",
+                client_uuid="uuid-1",
+                client_email="user@example.com",
+            )
+
+        service.resolve_client_from_vless_for_actor = fake_resolve_client_from_vless_for_actor  # type: ignore[method-assign]
+
+        await service.add_traffic_by_vless_for_actor(
+            actor_user_id=55,
+            settings=Settings(),  # type: ignore[arg-type]
+            vless_uri="vless://example",
+            add_gb=2,
+        )
+
+        self.assertEqual(len(db.segments), 1)
+        self.assertEqual(panel_service.total, 4 * 1024 ** 3)
+
+    async def test_toggle_primary_parent_attaches_to_only_full_delegate_then_detaches(self) -> None:
+        class FakeDB:
+            def __init__(self) -> None:
+                self.parent_user_id: int | None = None
+                self.audit_logs: list[dict] = []
+
+            async def get_delegated_admin_by_user_id(self, user_id: int) -> dict | None:
+                if user_id == 55:
+                    return {"id": 1, "telegram_user_id": 55, "parent_user_id": self.parent_user_id}
+                if user_id == 100:
+                    return {"id": 2, "telegram_user_id": 100, "parent_user_id": None, "admin_scope": "full"}
+                return None
+
+            async def list_full_delegated_admins(self) -> list[dict]:
+                return [{"id": 2, "telegram_user_id": 100, "admin_scope": "full"}]
+
+            async def get_delegated_admin_subtree_user_ids(self, *, manager_user_id: int, include_self: bool = True) -> list[int]:
+                return [manager_user_id]
+
+            async def set_delegated_admin_parent(self, *, telegram_user_id: int, parent_user_id: int | None, actor_user_id: int) -> bool:
+                self.parent_user_id = parent_user_id
+                return True
+
+            async def add_audit_log(self, **kwargs) -> None:
+                self.audit_logs.append(kwargs)
+
+        class FakePanelService:
+            async def list_panels(self) -> list[dict]:
+                return []
+
+        service = AdminProvisioningService(
+            db=FakeDB(),  # type: ignore[arg-type]
+            panel_service=FakePanelService(),  # type: ignore[arg-type]
+            access_service=None,  # type: ignore[arg-type]
+        )
+
+        parent = await service.toggle_delegated_admin_primary_parent(actor_user_id=1, child_user_id=55)
+
+        self.assertEqual(parent, 100)
+        self.assertEqual(service.db.parent_user_id, 100)  # type: ignore[attr-defined]
+
+        parent = await service.toggle_delegated_admin_primary_parent(actor_user_id=1, child_user_id=55)
+
+        self.assertEqual(parent, None)
+        self.assertEqual(service.db.parent_user_id, None)  # type: ignore[attr-defined]
 
     async def test_add_days_by_vless_refunds_wallet_when_panel_update_fails(self) -> None:
         class FakeDB:

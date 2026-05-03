@@ -10,6 +10,7 @@ from bot.handlers.admin_shared import (
     users_clients_keyboard,
     yes_no_inline_keyboard,
 )
+from bot.handlers.admin_access import _delegated_detail_keyboard
 from bot.i18n import btn, t
 from bot.keyboards import admin_keyboard
 
@@ -149,6 +150,21 @@ def test_yes_no_inline_keyboard_builds_two_buttons() -> None:
     assert row[0].callback_data == "yes:1"
     assert row[1].text == t("btn_no", "fa")
     assert row[1].callback_data == "no:1"
+
+
+def test_delegated_detail_keyboard_toggles_primary_parent_directly() -> None:
+    markup = _delegated_detail_keyboard(
+        55,
+        is_active=True,
+        charge_basis="consumed",
+        admin_scope="limited",
+        allow_negative_wallet=False,
+        lang="fa",
+    )
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "dag:toggle_parent:55" in callbacks
+    assert "dag:field:parent_user_id:55" not in callbacks
 
 
 def test_client_traffic_menu_groups_presets_in_three_columns() -> None:

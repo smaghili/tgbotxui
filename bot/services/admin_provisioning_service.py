@@ -275,6 +275,102 @@ class AdminProvisioningService:
             client_email=str(detail.get("email") or ""),
         )
 
+    async def _current_parent_user_id(self, actor_user_id: int) -> int | None:
+        delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
+        if delegated is None:
+            return None
+        parent_user_id = int(delegated.get("parent_user_id") or 0)
+        return parent_user_id if parent_user_id > 0 else None
+
+    async def _last_parent_user_id(self, actor_user_id: int) -> int | None:
+        loader = getattr(self.db, "get_last_delegated_admin_parent_event", None)
+        if loader is None:
+            return None
+        event = await loader(actor_user_id)
+        if event is None:
+            return None
+        old_parent_user_id = int(event.get("old_parent_user_id") or 0)
+        new_parent_user_id = int(event.get("new_parent_user_id") or 0)
+        return old_parent_user_id or new_parent_user_id or None
+
+    async def _write_hierarchy_segment(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        owner_user_id: int,
+        actor_user_id: int,
+        start_bytes: int,
+        end_bytes: int,
+        is_billable: bool,
+        source: str,
+        client_email: str,
+    ) -> None:
+        segment_writer = getattr(self.db, "add_moaf_client_traffic_segment", None)
+        if segment_writer is None or end_bytes <= start_bytes:
+            return
+        await segment_writer(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            owner_user_id=owner_user_id,
+            actor_user_id=actor_user_id,
+            start_bytes=start_bytes,
+            end_bytes=end_bytes,
+            is_billable=is_billable,
+            source=source,
+            client_email=client_email,
+        )
+
+    async def _snapshot_existing_clients_for_parent(
+        self,
+        *,
+        actor_user_id: int,
+        child_user_id: int,
+        parent_user_id: int,
+        source: str,
+    ) -> None:
+        segment_loader = getattr(self.db, "get_moaf_client_traffic_segments", None)
+        for panel in await self.panel_service.list_panels():
+            panel_id = int(panel["id"])
+            try:
+                clients = await self.panel_service.list_clients(panel_id, owner_admin_user_id=child_user_id)
+            except Exception:
+                continue
+            for client in clients:
+                inbound_id = int(client.get("inbound_id") or 0)
+                client_uuid = str(client.get("uuid") or "").strip()
+                if inbound_id <= 0 or not client_uuid:
+                    continue
+                if segment_loader is not None:
+                    existing_segments = await segment_loader(
+                        panel_id=panel_id,
+                        inbound_id=inbound_id,
+                        client_uuid=client_uuid,
+                    )
+                    if existing_segments:
+                        continue
+                try:
+                    detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+                except Exception:
+                    continue
+                total_bytes = max(0, int(detail.get("total") or 0))
+                if total_bytes <= 0:
+                    continue
+                await self._write_hierarchy_segment(
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                    owner_user_id=parent_user_id,
+                    actor_user_id=actor_user_id,
+                    start_bytes=0,
+                    end_bytes=total_bytes,
+                    is_billable=True,
+                    source=source,
+                    client_email=str(detail.get("email") or client.get("email") or ""),
+                )
+
     async def _add_client_total_gb_for_ref(
         self,
         *,
@@ -323,11 +419,15 @@ class AdminProvisioningService:
             legacy_loader = getattr(self.db, "list_moaf_client_exemptions_for_panel", None)
             if legacy_loader is not None:
                 legacy_exemption = (await legacy_loader(ref.panel_id)).get((ref.inbound_id, ref.client_uuid))
+            current_parent_user_id = await self._current_parent_user_id(actor_user_id)
+            last_parent_user_id = await self._last_parent_user_id(actor_user_id)
             should_record_segment = (
                 is_moaf_add_traffic
                 or bool(existing_segments)
                 or legacy_exemption is not None
                 or _is_moaf_comment(str(before.get("comment") or ""))
+                or current_parent_user_id is not None
+                or last_parent_user_id is not None
             )
             if should_record_segment:
                 moaf_owner_user_id = (
@@ -370,6 +470,7 @@ class AdminProvisioningService:
             if segment_writer is not None and should_record_segment and moaf_owner_user_id is not None:
                 if not existing_segments and before_total_bytes > 0:
                     was_created_as_moaf = legacy_exemption is None and _is_moaf_comment(str(before.get("comment") or ""))
+                    initial_owner_user_id = current_parent_user_id or moaf_owner_user_id
                     base_end = (
                         max(0, int(legacy_exemption.get("exempt_after_bytes") or 0))
                         if legacy_exemption is not None
@@ -379,26 +480,40 @@ class AdminProvisioningService:
                         panel_id=ref.panel_id,
                         inbound_id=ref.inbound_id,
                         client_uuid=ref.client_uuid,
-                        owner_user_id=moaf_owner_user_id,
-                        actor_user_id=moaf_owner_user_id,
+                        owner_user_id=initial_owner_user_id,
+                        actor_user_id=initial_owner_user_id,
                         start_bytes=0,
                         end_bytes=min(base_end, before_total_bytes),
                         is_billable=not was_created_as_moaf,
                         source="initial_moaf" if was_created_as_moaf else "initial",
                         client_email=str(after.get("email") or ref.client_email or ""),
                     )
-                await segment_writer(
-                    panel_id=ref.panel_id,
-                    inbound_id=ref.inbound_id,
-                    client_uuid=ref.client_uuid,
-                    owner_user_id=moaf_owner_user_id,
-                    actor_user_id=actor_user_id,
-                    start_bytes=before_total_bytes,
-                    end_bytes=after_total_bytes,
-                    is_billable=not is_moaf_add_traffic,
-                    source="add_traffic",
-                    client_email=str(after.get("email") or ref.client_email or ""),
-                )
+                if current_parent_user_id is not None:
+                    await segment_writer(
+                        panel_id=ref.panel_id,
+                        inbound_id=ref.inbound_id,
+                        client_uuid=ref.client_uuid,
+                        owner_user_id=current_parent_user_id,
+                        actor_user_id=actor_user_id,
+                        start_bytes=before_total_bytes,
+                        end_bytes=after_total_bytes,
+                        is_billable=not is_moaf_add_traffic,
+                        source="add_traffic",
+                        client_email=str(after.get("email") or ref.client_email or ""),
+                    )
+                elif is_moaf_add_traffic:
+                    await segment_writer(
+                        panel_id=ref.panel_id,
+                        inbound_id=ref.inbound_id,
+                        client_uuid=ref.client_uuid,
+                        owner_user_id=moaf_owner_user_id,
+                        actor_user_id=actor_user_id,
+                        start_bytes=before_total_bytes,
+                        end_bytes=after_total_bytes,
+                        is_billable=False,
+                        source="add_traffic",
+                        client_email=str(after.get("email") or ref.client_email or ""),
+                    )
         except Exception:
             if charge_tx is not None and self.financial_service is not None:
                 await self.financial_service.refund_transaction(
@@ -1033,6 +1148,85 @@ class AdminProvisioningService:
         )
         return access_id
 
+    async def change_delegated_admin_parent(
+        self,
+        *,
+        actor_user_id: int,
+        child_user_id: int,
+        new_parent_user_id: int | None,
+    ) -> None:
+        delegated = await self.db.get_delegated_admin_by_user_id(child_user_id)
+        if delegated is None:
+            raise ValueError("delegated admin was not found.")
+        if new_parent_user_id == child_user_id:
+            raise ValueError("delegated admin cannot be parent of itself.")
+        old_parent_user_id = int(delegated.get("parent_user_id") or 0) or None
+        if old_parent_user_id == new_parent_user_id:
+            return
+        if old_parent_user_id is not None:
+            await self._snapshot_existing_clients_for_parent(
+                actor_user_id=actor_user_id,
+                child_user_id=child_user_id,
+                parent_user_id=old_parent_user_id,
+                source="parent_detach_snapshot",
+            )
+        if new_parent_user_id is not None:
+            parent = await self.db.get_delegated_admin_by_user_id(new_parent_user_id)
+            if parent is None:
+                raise ValueError("parent delegated admin was not found.")
+            subtree = await self.db.get_delegated_admin_subtree_user_ids(manager_user_id=child_user_id, include_self=True)
+            if new_parent_user_id in subtree:
+                raise ValueError("delegated admin parent cycle is not allowed.")
+        changed = await self.db.set_delegated_admin_parent(
+            telegram_user_id=child_user_id,
+            parent_user_id=new_parent_user_id,
+            actor_user_id=actor_user_id,
+        )
+        if not changed:
+            raise ValueError("delegated admin was not found.")
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="change_delegated_admin_parent",
+            target_type="delegated_admin",
+            target_id=str(child_user_id),
+            success=True,
+            details=f"old_parent={old_parent_user_id or 0};new_parent={new_parent_user_id or 0}",
+        )
+
+    async def toggle_delegated_admin_primary_parent(
+        self,
+        *,
+        actor_user_id: int,
+        child_user_id: int,
+    ) -> int | None:
+        delegated = await self.db.get_delegated_admin_by_user_id(child_user_id)
+        if delegated is None:
+            raise ValueError("delegated admin was not found.")
+        current_parent_user_id = int(delegated.get("parent_user_id") or 0) or None
+        if current_parent_user_id is not None:
+            await self.change_delegated_admin_parent(
+                actor_user_id=actor_user_id,
+                child_user_id=child_user_id,
+                new_parent_user_id=None,
+            )
+            return None
+        full_admins = [
+            row
+            for row in await self.db.list_full_delegated_admins()
+            if int(row.get("telegram_user_id") or 0) != child_user_id
+        ]
+        if not full_admins:
+            raise ValueError("full delegated admin was not found.")
+        if len(full_admins) > 1:
+            raise ValueError("more than one full delegated admin exists.")
+        parent_user_id = int(full_admins[0]["telegram_user_id"])
+        await self.change_delegated_admin_parent(
+            actor_user_id=actor_user_id,
+            child_user_id=child_user_id,
+            new_parent_user_id=parent_user_id,
+        )
+        return parent_user_id
+
     async def revoke_delegated_admin_access(self, *, actor_user_id: int, access_id: int) -> bool:
         revoked = await self.db.revoke_delegated_admin_access(access_id)
         await self.db.add_audit_log(
@@ -1431,10 +1625,14 @@ class AdminProvisioningService:
                     segments = segments_by_key.get((inbound_id, client_uuid), [])
 
                     comment_owner_id = _owner_id_from_comment(comment)
+                    counted_as_root_created = False
                     if comment == "" or comment in root_admin_id_set or _is_moaf_comment(comment):
                         root_created_consumed_bytes += int(usage.get("used") or 0)
+                        counted_as_root_created = True
 
                     if segments:
+                        if not counted_as_root_created:
+                            root_created_consumed_bytes += int(usage.get("used") or 0)
                         client_total_bytes = max(0, int(client.get("totalGB") or 0))
                         client_used_bytes = max(0, int(usage.get("used") or 0))
                         count, billable_total_bytes, billable_used_bytes, billable_remaining_bytes = _billable_segment_totals(
@@ -1618,6 +1816,38 @@ class AdminProvisioningService:
                 "failed to persist client owner mapping",
                 extra={"panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": created.get("uuid")},
             )
+        current_parent_user_id = await self._current_parent_user_id(actor_user_id)
+        last_parent_user_id = await self._last_parent_user_id(actor_user_id)
+        if last_parent_user_id is not None:
+            created_uuid = str(created["uuid"])
+            created_email = str(created.get("email") or client_email)
+            total_bytes = gb_to_bytes(total_gb)
+            if current_parent_user_id is not None:
+                await self._write_hierarchy_segment(
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=created_uuid,
+                    owner_user_id=current_parent_user_id,
+                    actor_user_id=actor_user_id,
+                    start_bytes=0,
+                    end_bytes=total_bytes,
+                    is_billable=not is_moaf_create,
+                    source="create_client",
+                    client_email=created_email,
+                )
+            if last_parent_user_id != current_parent_user_id:
+                await self._write_hierarchy_segment(
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=created_uuid,
+                    owner_user_id=last_parent_user_id,
+                    actor_user_id=actor_user_id,
+                    start_bytes=0,
+                    end_bytes=total_bytes,
+                    is_billable=False,
+                    source="create_client_parent_change",
+                    client_email=created_email,
+                )
         if tg_id:
             try:
                 resolved_user_id: int | None = None

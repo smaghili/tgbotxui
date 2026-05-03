@@ -196,6 +196,7 @@ def _delegated_detail_keyboard(
                     callback_data=f"dag:toggle_wallet_mode:{user_id}",
                 ),
             ],
+            [InlineKeyboardButton(text=t("admin_delegated_parent", lang), callback_data=f"dag:toggle_parent:{user_id}")],
             [InlineKeyboardButton(text=t("admin_delegated_report", lang), callback_data=f"dag:report:{user_id}")],
         ]
     )
@@ -936,6 +937,40 @@ async def delegated_admin_toggle_scope(callback: CallbackQuery, settings: Settin
         lang=lang,
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dag:toggle_parent:"))
+async def delegated_admin_toggle_parent(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        target_user_id = int(callback.data.split(":", 2)[2])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    try:
+        new_parent_user_id = await services.admin_provisioning_service.toggle_delegated_admin_primary_parent(
+            actor_user_id=callback.from_user.id,
+            child_user_id=target_user_id,
+        )
+    except Exception as exc:
+        await callback.answer(str(exc)[:180], show_alert=True)
+        return
+    await _render_delegated_detail(
+        callback,
+        services=services,
+        settings=settings,
+        target_user_id=target_user_id,
+        lang=lang,
+    )
+    await callback.answer(
+        t("admin_delegated_parent_attached" if new_parent_user_id is not None else "admin_delegated_parent_detached", lang),
+        show_alert=True,
+    )
 
 
 @router.callback_query(F.data.startswith("dag:toggle_basis:"))

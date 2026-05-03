@@ -183,6 +183,19 @@ class Database:
         row = await cur.fetchone()
         return dict(row) if row else None
 
+    async def list_full_delegated_admins(self) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, telegram_user_id, title, created_by, parent_user_id, admin_scope, is_active, created_at, updated_at
+            FROM delegated_admins
+            WHERE is_active=1 AND admin_scope='full'
+            ORDER BY telegram_user_id ASC;
+            """
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
     async def set_delegated_admin_scope(self, *, telegram_user_id: int, admin_scope: str) -> bool:
         assert self.conn is not None
         scope = admin_scope if admin_scope in {"limited", "full"} else "limited"
@@ -196,6 +209,52 @@ class Database:
         )
         await self.conn.commit()
         return (cur.rowcount or 0) > 0
+
+    async def set_delegated_admin_parent(
+        self,
+        *,
+        telegram_user_id: int,
+        parent_user_id: int | None,
+        actor_user_id: int,
+    ) -> bool:
+        assert self.conn is not None
+        current = await self.get_delegated_admin_by_user_id(telegram_user_id)
+        if current is None:
+            return False
+        old_parent_user_id = int(current.get("parent_user_id") or 0) or None
+        await self.conn.execute(
+            """
+            UPDATE delegated_admins
+            SET parent_user_id=?, updated_at=CURRENT_TIMESTAMP
+            WHERE telegram_user_id=?;
+            """,
+            (parent_user_id, telegram_user_id),
+        )
+        await self.conn.execute(
+            """
+            INSERT INTO delegated_admin_parent_events (
+                telegram_user_id, old_parent_user_id, new_parent_user_id, actor_user_id
+            ) VALUES (?, ?, ?, ?);
+            """,
+            (telegram_user_id, old_parent_user_id, parent_user_id, actor_user_id),
+        )
+        await self.conn.commit()
+        return True
+
+    async def get_last_delegated_admin_parent_event(self, telegram_user_id: int) -> Dict[str, Any] | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, telegram_user_id, old_parent_user_id, new_parent_user_id, actor_user_id, created_at
+            FROM delegated_admin_parent_events
+            WHERE telegram_user_id=?
+            ORDER BY id DESC
+            LIMIT 1;
+            """,
+            (telegram_user_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
     async def get_delegated_admin_subtree_user_ids(
         self,

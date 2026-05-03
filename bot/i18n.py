@@ -613,6 +613,9 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_max_days": {"fa": "حداکثر خرید زمان ⏱", "en": "Max Days ⏱"},
     "admin_delegated_wallet": {"fa": "کیف پول 👛", "en": "Wallet 👛"},
     "admin_delegated_report": {"fa": "گزارش 📊", "en": "Report 📊"},
+    "admin_delegated_parent": {"fa": "نماینده اصلی 🔗", "en": "Parent Delegate 🔗"},
+    "admin_delegated_parent_attached": {"fa": "ادمین زیر نظر نماینده اصلی قرار گرفت.", "en": "Admin was attached to the primary delegate."},
+    "admin_delegated_parent_detached": {"fa": "ادمین از زیر نظر نماینده اصلی خارج شد.", "en": "Admin was detached from the primary delegate."},
     "admin_delegated_charge_basis": {"fa": "نوع فروش 📦", "en": "Charge Basis 📦"},
     "admin_delegated_charge_allocated": {"fa": "بر اساس حجم تخصیصی", "en": "Allocated Traffic"},
     "admin_delegated_charge_consumed": {"fa": "بر اساس حجم مصرفی", "en": "Consumed Traffic"},
@@ -632,6 +635,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_enter_min_days": {"fa": "حداقل خرید زمان را به روز وارد کنید.", "en": "Enter minimum days."},
     "admin_delegated_enter_max_days": {"fa": "حداکثر خرید زمان را به روز وارد کنید. 0 یعنی نامحدود.", "en": "Enter maximum days. 0 means unlimited."},
     "admin_delegated_enter_expiry": {"fa": "تعداد روز تا انقضای نماینده را وارد کنید. 0 یعنی نامحدود.", "en": "Enter days until delegate expiry. 0 means unlimited."},
+    "admin_delegated_enter_parent": {"fa": "آیدی عددی یا یوزرنیم نماینده اصلی را وارد کنید. برای خروج از زیرمجموعه، 0 یا - بفرستید.", "en": "Enter parent delegate numeric ID or username. Send 0 or - to detach."},
     "admin_delegated_profile_saved": {"fa": "تنظیمات نمایندگی ذخیره شد.", "en": "Delegated profile saved."},
     "admin_delegated_report_text": {
         "fa": "گزارش نمایندگی\n\nنماینده: {title}\nموجودی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nکل فروش: {sales} {currency}\nتعداد تراکنش‌ها: {transactions}\nکاربران ساخته‌شده: {owned_clients}{extra_lines}\n\nآخرین تراکنش‌ها:\n{wallet_lines}\n\nآخرین فعالیت‌ها:\n{activity_lines}",
