@@ -10,6 +10,91 @@ from bot.db import Database
 from bot.services.access_service import AccessService
 
 
+def _parse_consumed_pricing_tiers_json(raw: Any) -> list[dict[str, int]]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="ignore")
+    try:
+        data = json.loads(str(raw))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, int]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            upto = int(item.get("upto_bytes") or 0)
+            price = int(item.get("price_per_gb") or 0)
+        except (TypeError, ValueError):
+            continue
+        out.append({"upto_bytes": max(0, upto), "price_per_gb": max(0, price)})
+    out.sort(key=lambda x: x["upto_bytes"])
+    return out
+
+
+def compute_consumed_basis_debt_amount(
+    *,
+    consumed_bytes: int,
+    price_per_gb: int,
+    tiers: list[dict[str, int]],
+    gb_unit: int,
+) -> int:
+    consumed_bytes = max(0, int(consumed_bytes))
+    price_per_gb = max(0, int(price_per_gb))
+    gb_unit = int(gb_unit)
+    if gb_unit <= 0:
+        return 0
+    if not tiers:
+        return (consumed_bytes * price_per_gb) // gb_unit
+    debt = 0
+    prev = 0
+    for tier in tiers:
+        upto = int(tier.get("upto_bytes") or 0)
+        p = int(tier.get("price_per_gb") or 0)
+        if upto <= prev:
+            continue
+        hi = min(consumed_bytes, upto)
+        if hi > prev:
+            debt += (hi - prev) * p // gb_unit
+        prev = upto
+    if consumed_bytes > prev:
+        debt += (consumed_bytes - prev) * price_per_gb // gb_unit
+    return int(debt)
+
+
+def _next_consumed_pricing_tiers_json(
+    *,
+    current: dict[str, Any],
+    price_per_gb: int,
+    charge_basis: str,
+    apply_to_past: int,
+    consumed_bytes_snapshot: int | None,
+) -> str:
+    old_basis = str(current.get("charge_basis") or "allocated")
+    new_basis = str(charge_basis or "allocated")
+    old_gb = int(current.get("price_per_gb") or 0)
+    old_tiers = _parse_consumed_pricing_tiers_json(current.get("consumed_pricing_tiers_json"))
+
+    if new_basis != "consumed":
+        return json.dumps([], separators=(",", ":"))
+    if old_basis != "consumed":
+        return json.dumps([], separators=(",", ":"))
+    if apply_to_past != 0:
+        return json.dumps([], separators=(",", ":"))
+    if old_gb == price_per_gb:
+        return json.dumps(old_tiers, separators=(",", ":"))
+    if consumed_bytes_snapshot is None:
+        return json.dumps(old_tiers, separators=(",", ":"))
+    snap = max(0, int(consumed_bytes_snapshot))
+    extended = list(old_tiers)
+    extended.append({"upto_bytes": snap, "price_per_gb": old_gb})
+    extended.sort(key=lambda x: x["upto_bytes"])
+    return json.dumps(extended, separators=(",", ":"))
+
+
 class FinancialService:
     def __init__(
         self,
@@ -70,6 +155,7 @@ class FinancialService:
                 currency,
                 charge_basis,
                 apply_price_to_past_reports,
+                consumed_pricing_tiers_json,
                 created_at,
                 updated_at
             FROM user_pricing
@@ -88,7 +174,17 @@ class FinancialService:
             "currency": default_currency,
             "charge_basis": str(profile.get("charge_basis") or "allocated"),
             "apply_price_to_past_reports": 1,
+            "consumed_pricing_tiers_json": "[]",
         }
+
+    def consumed_basis_debt_amount(self, *, consumed_bytes: int, pricing: dict[str, Any]) -> int:
+        tiers = _parse_consumed_pricing_tiers_json(pricing.get("consumed_pricing_tiers_json"))
+        return compute_consumed_basis_debt_amount(
+            consumed_bytes=consumed_bytes,
+            price_per_gb=int(pricing.get("price_per_gb") or 0),
+            tiers=tiers,
+            gb_unit=1024**3,
+        )
 
     async def set_pricing(
         self,
@@ -100,6 +196,7 @@ class FinancialService:
         currency: str | None = None,
         charge_basis: str = "allocated",
         apply_price_to_past_reports: bool | None = None,
+        consumed_bytes_snapshot: int | None = None,
     ) -> dict[str, Any]:
         assert self.db.conn is not None
         if price_per_gb < 0 or price_per_day < 0:
@@ -111,6 +208,13 @@ class FinancialService:
             if apply_price_to_past_reports is None
             else int(bool(apply_price_to_past_reports))
         )
+        tiers_json = _next_consumed_pricing_tiers_json(
+            current=current_pricing,
+            price_per_gb=price_per_gb,
+            charge_basis=charge_basis,
+            apply_to_past=apply_to_past,
+            consumed_bytes_snapshot=consumed_bytes_snapshot,
+        )
         await self.db.conn.execute(
             """
             INSERT INTO user_pricing (
@@ -120,14 +224,16 @@ class FinancialService:
                 currency,
                 charge_basis,
                 apply_price_to_past_reports,
+                consumed_pricing_tiers_json,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(telegram_user_id) DO UPDATE SET
                 price_per_gb=excluded.price_per_gb,
                 price_per_day=excluded.price_per_day,
                 currency=excluded.currency,
                 charge_basis=excluded.charge_basis,
                 apply_price_to_past_reports=excluded.apply_price_to_past_reports,
+                consumed_pricing_tiers_json=excluded.consumed_pricing_tiers_json,
                 updated_at=CURRENT_TIMESTAMP;
             """,
             (
@@ -137,6 +243,7 @@ class FinancialService:
                 pricing_currency,
                 charge_basis,
                 apply_to_past,
+                tiers_json,
             ),
         )
         await self.db.conn.commit()
@@ -148,7 +255,7 @@ class FinancialService:
             success=True,
             details=(
                 f"gb={price_per_gb};day={price_per_day};currency={pricing_currency};"
-                f"basis={charge_basis};apply_to_past={apply_to_past}"
+                f"basis={charge_basis};apply_to_past={apply_to_past};consumed_tiers={tiers_json[:200]}"
             ),
         )
         return await self.get_pricing(telegram_user_id)

@@ -964,6 +964,10 @@ async def delegated_admin_price_history_keep(
     data = await state.get_data()
     await state.clear()
     target_user_id = int(data["delegated_profile_target_user_id"])
+    summary = await services.admin_provisioning_service.get_admin_scope_financial_summary(
+        actor_user_id=target_user_id,
+        settings=settings,
+    )
     await services.financial_service.set_pricing(
         actor_user_id=callback.from_user.id,
         telegram_user_id=target_user_id,
@@ -971,6 +975,7 @@ async def delegated_admin_price_history_keep(
         price_per_day=int(data["delegated_profile_new_price_day"]),
         charge_basis=str(data.get("delegated_profile_charge_basis") or "allocated"),
         apply_price_to_past_reports=False,
+        consumed_bytes_snapshot=int(summary.get("consumed_bytes") or 0),
     )
     await callback.message.answer(t("admin_delegated_profile_saved", lang))
     await _render_delegated_detail(

@@ -1766,7 +1766,16 @@ class AdminProvisioningService:
         )
         sale_amount = int(scope_totals.get("total_sales") or 0)
         if charge_basis == "consumed":
-            debt_amount = (consumed_bytes * price_per_gb) // gb_unit
+            debt_calculator = (
+                getattr(self.financial_service, "consumed_basis_debt_amount", None)
+                if self.financial_service is not None
+                else None
+            )
+            debt_amount = (
+                debt_calculator(consumed_bytes=consumed_bytes, pricing=pricing)
+                if debt_calculator is not None
+                else (consumed_bytes * price_per_gb) // gb_unit
+            )
         else:
             debt_amount = allocated_gb * price_per_gb
         remaining_amount = (remaining_bytes * price_per_gb) // gb_unit

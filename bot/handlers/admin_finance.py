@@ -772,12 +772,22 @@ async def _save_pricing_and_answer(
     services: ServiceContainer,
     lang: str | None,
 ) -> None:
+    current = await services.financial_service.get_pricing(target_user_id)
+    consumed_snap: int | None = None
+    if apply_to_past_reports is False and str(current.get("charge_basis") or "allocated") == "consumed":
+        summary = await services.admin_provisioning_service.get_admin_scope_financial_summary(
+            actor_user_id=target_user_id,
+            settings=settings,
+        )
+        consumed_snap = int(summary.get("consumed_bytes") or 0)
     pricing = await services.financial_service.set_pricing(
         actor_user_id=actor_user_id,
         telegram_user_id=target_user_id,
         price_per_gb=price_gb,
         price_per_day=price_day,
+        charge_basis=str(current.get("charge_basis") or "allocated"),
         apply_price_to_past_reports=apply_to_past_reports,
+        consumed_bytes_snapshot=consumed_snap,
     )
     await message.answer(
         t(

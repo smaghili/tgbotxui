@@ -49,6 +49,7 @@ class FinancialStore:
                 currency,
                 charge_basis,
                 apply_price_to_past_reports,
+                consumed_pricing_tiers_json,
                 created_at,
                 updated_at
             FROM user_pricing
@@ -69,6 +70,7 @@ class FinancialStore:
         currency: str,
         charge_basis: str,
         apply_price_to_past_reports: int,
+        consumed_pricing_tiers_json: str = "[]",
     ) -> None:
         assert self.db.conn is not None
         await self.db.conn.execute(
@@ -80,14 +82,16 @@ class FinancialStore:
                 currency,
                 charge_basis,
                 apply_price_to_past_reports,
+                consumed_pricing_tiers_json,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(telegram_user_id) DO UPDATE SET
                 price_per_gb=excluded.price_per_gb,
                 price_per_day=excluded.price_per_day,
                 currency=excluded.currency,
                 charge_basis=excluded.charge_basis,
                 apply_price_to_past_reports=excluded.apply_price_to_past_reports,
+                consumed_pricing_tiers_json=excluded.consumed_pricing_tiers_json,
                 updated_at=CURRENT_TIMESTAMP;
             """,
             (
@@ -97,6 +101,7 @@ class FinancialStore:
                 currency,
                 charge_basis,
                 apply_price_to_past_reports,
+                consumed_pricing_tiers_json,
             ),
         )
         await self.db.conn.commit()
