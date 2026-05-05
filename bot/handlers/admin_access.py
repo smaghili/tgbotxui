@@ -15,6 +15,7 @@ from bot.utils import (
     format_db_timestamp as shared_format_db_timestamp,
     format_gb_exact as shared_format_gb_exact,
     parse_gb_amount,
+    parse_price_per_gb_with_tiers,
     parse_detail_pairs,
     relative_remaining_time,
     to_local_date,
@@ -48,6 +49,27 @@ async def _reject_callback_if_not_full_admin(callback: CallbackQuery, settings: 
         return False
     await callback.answer(t("no_admin_access", None), show_alert=True)
     return True
+
+
+async def _can_manage_delegated_target(
+    *,
+    actor_user_id: int,
+    target_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+) -> bool:
+    if services.access_service.is_root_admin(actor_user_id, settings):
+        return True
+    context = await services.access_service.get_admin_context(actor_user_id, settings)
+    if not (context.is_delegated_admin and context.delegated_scope == "full"):
+        return False
+    subtree_ids = set(
+        await services.db.get_delegated_admin_subtree_user_ids(
+            manager_user_id=actor_user_id,
+            include_self=True,
+        )
+    )
+    return target_user_id in subtree_ids
 
 
 def _manage_admins_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
@@ -233,6 +255,12 @@ def _delegated_detail_keyboard(
     relation_buttons: list[InlineKeyboardButton] = []
     if scope_value != "full":
         relation_buttons.append(InlineKeyboardButton(text=t("admin_delegated_parent", lang), callback_data=f"dag:toggle_parent:{user_id}"))
+        relation_buttons.append(
+            InlineKeyboardButton(
+                text=t("admin_delegated_parent_root", lang),
+                callback_data=f"dag:set_root_parent:{user_id}",
+            )
+        )
     relation_buttons.append(InlineKeyboardButton(text=t("admin_delegated_subordinates", lang), callback_data=f"dag:subs:{user_id}"))
     rows.append(relation_buttons)
     rows.append([InlineKeyboardButton(text=t("admin_delegated_report", lang), callback_data=f"dag:report:{user_id}")])
@@ -653,6 +681,14 @@ async def delegated_admin_edit(callback: CallbackQuery, state: FSMContext, setti
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     access_rows = await services.db.list_admin_access_rows_for_user(target_user_id)
     delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
     if delegated is None:
@@ -710,6 +746,14 @@ async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, se
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     await _render_delegated_detail(
         callback,
         services=services,
@@ -733,11 +777,21 @@ async def delegated_admin_subordinates(callback: CallbackQuery, settings: Settin
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=parent_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     parent = await services.db.get_delegated_admin_by_user_id(parent_user_id)
     if parent is None:
         await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
         return
-    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
+    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
+        manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+    )
     title = str(parent.get("title") or parent_user_id)
     await callback.message.edit_text(
         t("admin_delegated_subordinates_title", lang, title=title),
@@ -761,6 +815,19 @@ async def delegated_admin_subordinate_toggle(callback: CallbackQuery, settings: 
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=parent_user_id,
+        settings=settings,
+        services=services,
+    ) or not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=child_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     parent = await services.db.get_delegated_admin_by_user_id(parent_user_id)
     child = await services.db.get_delegated_admin_by_user_id(child_user_id)
     if parent is None or child is None:
@@ -777,7 +844,9 @@ async def delegated_admin_subordinate_toggle(callback: CallbackQuery, settings: 
     except Exception as exc:
         await callback.answer(str(exc)[:180], show_alert=True)
         return
-    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
+    rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
+        manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+    )
     title = str(parent.get("title") or parent_user_id)
     await callback.message.edit_text(
         t("admin_delegated_subordinates_title", lang, title=title),
@@ -787,6 +856,46 @@ async def delegated_admin_subordinate_toggle(callback: CallbackQuery, settings: 
         t("admin_delegated_parent_attached" if new_parent_user_id is not None else "admin_delegated_parent_detached", lang),
         show_alert=True,
     )
+
+
+@router.callback_query(F.data.startswith("dag:set_root_parent:"))
+async def delegated_admin_set_root_parent(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        target_user_id = int(callback.data.split(":", 2)[2])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    try:
+        await services.admin_provisioning_service.change_delegated_admin_parent(
+            actor_user_id=callback.from_user.id,
+            child_user_id=target_user_id,
+            new_parent_user_id=None,
+        )
+    except Exception as exc:
+        await callback.answer(str(exc)[:180], show_alert=True)
+        return
+    await _render_delegated_detail(
+        callback,
+        services=services,
+        settings=settings,
+        target_user_id=target_user_id,
+        lang=lang,
+    )
+    await callback.answer(t("admin_delegated_parent_root_set", lang), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("dag:field:"))
@@ -802,6 +911,14 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
         target_user_id = int(target_raw)
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     prompts = {
         "username_prefix": t("admin_delegated_enter_prefix", lang),
@@ -840,6 +957,15 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
         await state.clear()
         await message.answer(t("admin_invalid_data", lang))
         return
+    if not await _can_manage_delegated_target(
+        actor_user_id=message.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await state.clear()
+        await message.answer(t("no_admin_access", None))
+        return
     await state.clear()
     try:
         if field_name == "username_prefix":
@@ -858,7 +984,7 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
                 expires_at=expires_at,
             )
         elif field_name in {"price_gb", "price_day"}:
-            amount = int(raw.replace(",", ""))
+            amount, tiers_json = parse_price_per_gb_with_tiers(raw) if field_name == "price_gb" else (int(raw.replace(",", "")), None)
             if amount < 0:
                 raise ValueError
             pricing = await services.financial_service.get_pricing(target_user_id)
@@ -872,6 +998,7 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
                     delegated_profile_charge_basis=str(pricing.get("charge_basis") or "allocated"),
                     delegated_profile_currency=str(pricing.get("currency") or "تومان"),
                     delegated_profile_old_price_gb=int(pricing.get("price_per_gb") or 0),
+                    delegated_profile_allocated_tiers_json=tiers_json,
                 )
                 await state.set_state(DelegatedAdminStates.waiting_price_history_choice)
                 await message.answer(
@@ -891,6 +1018,11 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
                 price_per_gb=new_price_gb,
                 price_per_day=new_price_day,
                 charge_basis=str(pricing.get("charge_basis") or "allocated"),
+                allocated_pricing_tiers_json=(
+                    tiers_json
+                    if field_name == "price_gb" and tiers_json is not None
+                    else str(pricing.get("allocated_pricing_tiers_json") or "[]")
+                ),
             )
         elif field_name in {"min_traffic_gb", "max_traffic_gb"}:
             number = parse_gb_amount(raw)
@@ -932,6 +1064,14 @@ async def delegated_admin_price_history_apply(
     data = await state.get_data()
     await state.clear()
     target_user_id = int(data["delegated_profile_target_user_id"])
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     await services.financial_service.set_pricing(
         actor_user_id=callback.from_user.id,
         telegram_user_id=target_user_id,
@@ -939,6 +1079,7 @@ async def delegated_admin_price_history_apply(
         price_per_day=int(data["delegated_profile_new_price_day"]),
         charge_basis=str(data.get("delegated_profile_charge_basis") or "allocated"),
         apply_price_to_past_reports=True,
+        allocated_pricing_tiers_json=str(data.get("delegated_profile_allocated_tiers_json") or "[]"),
     )
     await callback.message.answer(t("admin_delegated_profile_saved", lang))
     await _render_delegated_detail(
@@ -964,6 +1105,14 @@ async def delegated_admin_price_history_keep(
     data = await state.get_data()
     await state.clear()
     target_user_id = int(data["delegated_profile_target_user_id"])
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     summary = await services.admin_provisioning_service.get_admin_scope_financial_summary(
         actor_user_id=target_user_id,
         settings=settings,
@@ -976,6 +1125,7 @@ async def delegated_admin_price_history_keep(
         charge_basis=str(data.get("delegated_profile_charge_basis") or "allocated"),
         apply_price_to_past_reports=False,
         consumed_bytes_snapshot=int(summary.get("consumed_bytes") or 0),
+        allocated_pricing_tiers_json=str(data.get("delegated_profile_allocated_tiers_json") or "[]"),
     )
     await callback.message.answer(t("admin_delegated_profile_saved", lang))
     await _render_delegated_detail(
@@ -1000,6 +1150,14 @@ async def delegated_admin_toggle_status(callback: CallbackQuery, settings: Setti
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     profile = await services.db.get_delegated_admin_profile(target_user_id)
     new_status = 0 if int(profile.get("is_active") or 0) == 1 else 1
@@ -1029,6 +1187,14 @@ async def delegated_admin_toggle_scope(callback: CallbackQuery, settings: Settin
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
     if delegated is None:
@@ -1100,6 +1266,14 @@ async def delegated_admin_toggle_basis(callback: CallbackQuery, settings: Settin
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     pricing = await services.financial_service.get_pricing(target_user_id)
     next_basis = "consumed" if str(pricing.get("charge_basis") or "allocated") == "allocated" else "allocated"
     await services.financial_service.set_pricing(
@@ -1108,6 +1282,7 @@ async def delegated_admin_toggle_basis(callback: CallbackQuery, settings: Settin
         price_per_gb=int(pricing.get("price_per_gb") or 0),
         price_per_day=int(pricing.get("price_per_day") or 0),
         charge_basis=next_basis,
+        allocated_pricing_tiers_json=str(pricing.get("allocated_pricing_tiers_json") or "[]"),
     )
     await services.db.update_delegated_admin_profile(
         telegram_user_id=target_user_id,
@@ -1138,6 +1313,14 @@ async def delegated_admin_toggle_wallet_mode(
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
     profile = await services.db.get_delegated_admin_profile(target_user_id)
     next_value = 0 if int(profile.get("allow_negative_wallet") or 0) == 1 else 1
     await services.db.update_delegated_admin_profile(
@@ -1166,6 +1349,14 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     overview = await services.admin_provisioning_service.get_delegated_admin_overview(
         telegram_user_id=target_user_id,

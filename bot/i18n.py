@@ -110,8 +110,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Wallet updated.\nNew balance: {balance} {currency}",
     },
     "finance_enter_price_per_gb": {
-        "fa": "قیمت هر گیگ را وارد کنید:",
-        "en": "Enter price per GB:",
+        "fa": "قیمت هر گیگ را وارد کنید.\nبرای پلکانی: base|5=amount,10=amount\nنمونه: 200000|5=800000,10=1700000",
+        "en": "Enter per-GB price.\nFor tiered pricing: base|5=amount,10=amount\nExample: 200000|5=800000,10=1700000",
     },
     "finance_enter_price_per_day": {
         "fa": "قیمت هر روز را وارد کنید:",
@@ -615,6 +615,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_wallet": {"fa": "کیف پول 👛", "en": "Wallet 👛"},
     "admin_delegated_report": {"fa": "گزارش 📊", "en": "Report 📊"},
     "admin_delegated_parent": {"fa": "نماینده اصلی 🔗", "en": "Parent Delegate 🔗"},
+    "admin_delegated_parent_root": {"fa": "اتصال به روت 👑", "en": "Attach To Root 👑"},
+    "admin_delegated_parent_root_set": {"fa": "این ادمین زیر نظر روت قرار گرفت.", "en": "This admin is now managed by root."},
     "admin_delegated_parent_attached": {"fa": "ادمین زیر نظر نماینده اصلی قرار گرفت.", "en": "Admin was attached to the primary delegate."},
     "admin_delegated_parent_detached": {"fa": "ادمین از زیر نظر نماینده اصلی خارج شد.", "en": "Admin was detached from the primary delegate."},
     "admin_delegated_parent_not_for_full": {"fa": "این ادمین خودش نماینده اصلی است و نیازی به اتصال ندارد.", "en": "This admin is already the primary delegate and does not need a parent."},

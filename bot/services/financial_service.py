@@ -95,6 +95,54 @@ def _next_consumed_pricing_tiers_json(
     return json.dumps(extended, separators=(",", ":"))
 
 
+def _parse_allocated_pricing_tiers_json(raw: Any) -> list[dict[str, int]]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="ignore")
+    try:
+        data = json.loads(str(raw))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, int]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            traffic_gb = int(item.get("traffic_gb") or 0)
+            amount = int(item.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if traffic_gb <= 0 or amount < 0:
+            continue
+        out.append({"traffic_gb": traffic_gb, "amount": amount})
+    out.sort(key=lambda x: x["traffic_gb"])
+    dedup: dict[int, int] = {}
+    for row in out:
+        dedup[int(row["traffic_gb"])] = int(row["amount"])
+    return [{"traffic_gb": key, "amount": dedup[key]} for key in sorted(dedup.keys())]
+
+
+def _allocated_tier_amount_for_traffic(*, traffic_gb: float, tiers: list[dict[str, int]]) -> int | None:
+    if traffic_gb <= 0:
+        return None
+    try:
+        traffic_key = Decimal(str(traffic_gb))
+    except Exception:
+        return None
+    if traffic_key != traffic_key.to_integral_value():
+        return None
+    target_gb = int(traffic_key)
+    if target_gb <= 0:
+        return None
+    for tier in tiers:
+        if int(tier.get("traffic_gb") or 0) == target_gb:
+            return max(0, int(tier.get("amount") or 0))
+    return None
+
+
 class FinancialService:
     def __init__(
         self,
@@ -155,6 +203,7 @@ class FinancialService:
                 currency,
                 charge_basis,
                 apply_price_to_past_reports,
+                allocated_pricing_tiers_json,
                 consumed_pricing_tiers_json,
                 created_at,
                 updated_at
@@ -174,6 +223,7 @@ class FinancialService:
             "currency": default_currency,
             "charge_basis": str(profile.get("charge_basis") or "allocated"),
             "apply_price_to_past_reports": 1,
+            "allocated_pricing_tiers_json": "[]",
             "consumed_pricing_tiers_json": "[]",
         }
 
@@ -197,6 +247,7 @@ class FinancialService:
         charge_basis: str = "allocated",
         apply_price_to_past_reports: bool | None = None,
         consumed_bytes_snapshot: int | None = None,
+        allocated_pricing_tiers_json: str | None = None,
     ) -> dict[str, Any]:
         assert self.db.conn is not None
         if price_per_gb < 0 or price_per_day < 0:
@@ -215,6 +266,9 @@ class FinancialService:
             apply_to_past=apply_to_past,
             consumed_bytes_snapshot=consumed_bytes_snapshot,
         )
+        allocated_tiers_json = allocated_pricing_tiers_json
+        if allocated_tiers_json is None:
+            allocated_tiers_json = str(current_pricing.get("allocated_pricing_tiers_json") or "[]")
         await self.db.conn.execute(
             """
             INSERT INTO user_pricing (
@@ -224,15 +278,17 @@ class FinancialService:
                 currency,
                 charge_basis,
                 apply_price_to_past_reports,
+                allocated_pricing_tiers_json,
                 consumed_pricing_tiers_json,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(telegram_user_id) DO UPDATE SET
                 price_per_gb=excluded.price_per_gb,
                 price_per_day=excluded.price_per_day,
                 currency=excluded.currency,
                 charge_basis=excluded.charge_basis,
                 apply_price_to_past_reports=excluded.apply_price_to_past_reports,
+                allocated_pricing_tiers_json=excluded.allocated_pricing_tiers_json,
                 consumed_pricing_tiers_json=excluded.consumed_pricing_tiers_json,
                 updated_at=CURRENT_TIMESTAMP;
             """,
@@ -243,6 +299,7 @@ class FinancialService:
                 pricing_currency,
                 charge_basis,
                 apply_to_past,
+                allocated_tiers_json,
                 tiers_json,
             ),
         )
@@ -255,7 +312,8 @@ class FinancialService:
             success=True,
             details=(
                 f"gb={price_per_gb};day={price_per_day};currency={pricing_currency};"
-                f"basis={charge_basis};apply_to_past={apply_to_past};consumed_tiers={tiers_json[:200]}"
+                f"basis={charge_basis};apply_to_past={apply_to_past};"
+                f"allocated_tiers={str(allocated_tiers_json)[:200]};consumed_tiers={tiers_json[:200]}"
             ),
         )
         return await self.get_pricing(telegram_user_id)
@@ -303,6 +361,15 @@ class FinancialService:
         day_price = int(pricing["price_per_day"] or 0)
         traffic_amount = max(Decimal("0"), Decimal(str(traffic_gb)))
         traffic_cost = int(traffic_amount * gb_price)
+        charge_basis = str(pricing.get("charge_basis") or "allocated")
+        if charge_basis == "allocated":
+            allocated_tiers = _parse_allocated_pricing_tiers_json(pricing.get("allocated_pricing_tiers_json"))
+            tier_amount = _allocated_tier_amount_for_traffic(
+                traffic_gb=float(traffic_amount),
+                tiers=allocated_tiers,
+            )
+            if tier_amount is not None:
+                traffic_cost = tier_amount
         expiry_cost = max(0, expiry_days) * day_price
         return {
             "traffic_gb": float(traffic_amount),
@@ -311,8 +378,29 @@ class FinancialService:
             "price_per_day": day_price,
             "currency": str(pricing.get("currency") or await self._default_currency()),
             "amount": traffic_cost + expiry_cost,
-            "charge_basis": str(pricing.get("charge_basis") or "allocated"),
+            "charge_basis": charge_basis,
         }
+
+    async def _upstream_charge_targets(self, *, actor_user_id: int, settings: Settings) -> list[int]:
+        if self.access_service.is_root_admin(actor_user_id, settings):
+            return []
+        delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
+        if delegated is None:
+            return []
+        seen: set[int] = {actor_user_id}
+        targets: list[int] = []
+        parent_user_id = int(delegated.get("parent_user_id") or 0)
+        while parent_user_id > 0 and parent_user_id not in seen:
+            seen.add(parent_user_id)
+            targets.append(parent_user_id)
+            parent_row = await self.db.get_delegated_admin_by_user_id(parent_user_id)
+            if parent_row is None:
+                break
+            parent_user_id = int(parent_row.get("parent_user_id") or 0)
+        root_ids = sorted(int(item) for item in getattr(settings, "admin_ids", set()) if int(item) != actor_user_id)
+        if len(root_ids) == 1 and root_ids[0] not in seen:
+            targets.append(root_ids[0])
+        return targets
 
     async def _apply_balance_change(
         self,
@@ -531,7 +619,7 @@ class FinancialService:
         if amount <= 0:
             return None
         allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
-        return await self._apply_balance_change(
+        actor_tx = await self._apply_balance_change(
             telegram_user_id=actor_user_id,
             actor_user_id=actor_user_id,
             delta=-amount,
@@ -547,6 +635,55 @@ class FinancialService:
             },
             allow_negative_balance=allow_negative_wallet,
         )
+        related_transaction_ids: list[int] = []
+        try:
+            for upstream_user_id in await self._upstream_charge_targets(actor_user_id=actor_user_id, settings=settings):
+                upstream_charge = await self.calculate_charge(
+                    upstream_user_id,
+                    traffic_gb=traffic_gb,
+                    expiry_days=expiry_days,
+                )
+                if str(upstream_charge.get("charge_basis") or "allocated") == "consumed":
+                    continue
+                upstream_amount = int(upstream_charge.get("amount") or 0)
+                if upstream_amount <= 0:
+                    continue
+                upstream_profile = await self.db.get_delegated_admin_profile(upstream_user_id)
+                allow_negative_upstream = (
+                    True
+                    if self.access_service.is_root_admin(upstream_user_id, settings)
+                    else int(upstream_profile.get("allow_negative_wallet") or 0) == 1
+                )
+                upstream_tx = await self._apply_balance_change(
+                    telegram_user_id=upstream_user_id,
+                    actor_user_id=actor_user_id,
+                    delta=-upstream_amount,
+                    kind="charge",
+                    operation=f"wholesale_{operation}",
+                    details=(
+                        f"source_actor={actor_user_id};traffic_gb={traffic_gb};"
+                        f"expiry_days={expiry_days}"
+                    ),
+                    metadata={
+                        "source_actor_user_id": actor_user_id,
+                        "traffic_gb": max(0.0, float(traffic_gb)),
+                        "expiry_days": max(0, expiry_days),
+                        "price_per_gb": int(upstream_charge.get("price_per_gb") or 0),
+                        "price_per_day": int(upstream_charge.get("price_per_day") or 0),
+                    },
+                    allow_negative_balance=allow_negative_upstream,
+                )
+                related_transaction_ids.append(int(upstream_tx["id"]))
+        except Exception:
+            await self.refund_transaction(
+                actor_user_id=actor_user_id,
+                transaction_id=int(actor_tx["id"]),
+                reason=f"refund:upstream_charge_failed:{operation}",
+            )
+            raise
+        if related_transaction_ids:
+            actor_tx["related_transaction_ids"] = related_transaction_ids
+        return actor_tx
 
     async def refund_transaction(
         self,

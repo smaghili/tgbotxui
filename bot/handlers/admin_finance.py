@@ -21,6 +21,7 @@ from bot.states import FinanceStates
 from bot.utils import (
     format_db_timestamp as shared_format_db_timestamp,
     format_gb_exact as shared_format_gb_exact,
+    parse_price_per_gb_with_tiers,
     parse_detail_pairs,
     to_persian_digits,
 )
@@ -642,6 +643,27 @@ async def _can_access_today_finance(
     return await _is_any_delegated_admin(user_id=user_id, settings=settings, services=services)
 
 
+async def _can_manage_finance_target(
+    *,
+    actor_user_id: int,
+    target_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+) -> bool:
+    if services.access_service.is_root_admin(actor_user_id, settings):
+        return True
+    context = await services.access_service.get_admin_context(actor_user_id, settings)
+    if not (context.is_delegated_admin and context.delegated_scope == "full"):
+        return False
+    subtree_ids = set(
+        await services.db.get_delegated_admin_subtree_user_ids(
+            manager_user_id=actor_user_id,
+            include_self=True,
+        )
+    )
+    return target_user_id in subtree_ids
+
+
 async def _finance_menu_text_and_keyboard(
     *,
     user_id: int,
@@ -767,6 +789,7 @@ async def _save_pricing_and_answer(
     target_user_id: int,
     price_gb: int,
     price_day: int,
+    allocated_tiers_json: str | None,
     apply_to_past_reports: bool | None,
     settings: Settings,
     services: ServiceContainer,
@@ -786,6 +809,11 @@ async def _save_pricing_and_answer(
         price_per_gb=price_gb,
         price_per_day=price_day,
         charge_basis=str(current.get("charge_basis") or "allocated"),
+        allocated_pricing_tiers_json=(
+            allocated_tiers_json
+            if allocated_tiers_json is not None
+            else str(current.get("allocated_pricing_tiers_json") or "[]")
+        ),
         apply_price_to_past_reports=apply_to_past_reports,
         consumed_bytes_snapshot=consumed_snap,
     )
@@ -1125,9 +1153,6 @@ async def finance_wallet_target_input(message: Message, state: FSMContext, setti
 async def finance_wallet_action(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
-        return
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1137,6 +1162,14 @@ async def finance_wallet_action(callback: CallbackQuery, state: FSMContext, sett
         target_user_id = int(target_raw)
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_finance_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     if action == "show":
         summary = await _wallet_target_summary_text(target_user_id=target_user_id, services=services, lang=lang)
@@ -1156,9 +1189,6 @@ async def finance_wallet_action(callback: CallbackQuery, state: FSMContext, sett
 async def finance_wallet_amount_input(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    if not services.access_service.is_root_admin(message.from_user.id, settings):
-        await message.answer(t("no_admin_access", None))
-        return
     lang = await services.db.get_user_language(message.from_user.id)
     try:
         amount = int((message.text or "").replace(",", "").strip())
@@ -1171,6 +1201,14 @@ async def finance_wallet_amount_input(message: Message, state: FSMContext, setti
     await state.clear()
     target_user_id = int(data["finance_wallet_target_user_id"])
     action = str(data["finance_wallet_action"])
+    if not await _can_manage_finance_target(
+        actor_user_id=message.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await message.answer(t("no_admin_access", None))
+        return
     try:
         if action == "set":
             result = await services.financial_service.set_wallet_balance(
@@ -1240,13 +1278,14 @@ async def finance_pricing_gb_input(message: Message, state: FSMContext, settings
         return
     lang = await services.db.get_user_language(message.from_user.id)
     try:
-        price_gb = int((message.text or "").replace(",", "").strip())
+        price_gb, allocated_tiers_json = parse_price_per_gb_with_tiers((message.text or "").strip())
         if price_gb < 0:
             raise ValueError
     except ValueError:
         await answer_with_cancel(message, t("finance_invalid_amount", lang), lang=lang)
         return
     await state.update_data(finance_price_per_gb=price_gb)
+    await state.update_data(finance_allocated_tiers_json=allocated_tiers_json)
     await state.set_state(FinanceStates.waiting_pricing_day)
     await answer_with_cancel(message, t("finance_enter_price_per_day", lang), lang=lang)
 
@@ -1269,6 +1308,7 @@ async def finance_pricing_day_input(message: Message, state: FSMContext, setting
     data = await state.get_data()
     target_user_id = int(data["finance_pricing_target_user_id"])
     price_gb = int(data["finance_price_per_gb"])
+    allocated_tiers_json = data.get("finance_allocated_tiers_json")
     current_pricing = await services.financial_service.get_pricing(target_user_id)
     old_price_gb = int(current_pricing.get("price_per_gb") or 0)
     if old_price_gb != price_gb:
@@ -1276,6 +1316,7 @@ async def finance_pricing_day_input(message: Message, state: FSMContext, setting
             finance_price_per_day=price_day,
             finance_old_price_per_gb=old_price_gb,
             finance_pricing_currency=str(current_pricing.get("currency") or "Ã˜ÂªÃ™Ë†Ã™â€¦Ã˜Â§Ã™â€ "),
+            finance_allocated_tiers_json=allocated_tiers_json,
         )
         await state.set_state(FinanceStates.waiting_pricing_history_choice)
         await message.answer(
@@ -1296,6 +1337,7 @@ async def finance_pricing_day_input(message: Message, state: FSMContext, setting
         target_user_id=target_user_id,
         price_gb=price_gb,
         price_day=price_day,
+        allocated_tiers_json=allocated_tiers_json if isinstance(allocated_tiers_json, str) else None,
         apply_to_past_reports=None,
         settings=settings,
         services=services,
@@ -1324,6 +1366,11 @@ async def finance_pricing_history_apply(
         target_user_id=int(data["finance_pricing_target_user_id"]),
         price_gb=int(data["finance_price_per_gb"]),
         price_day=int(data["finance_price_per_day"]),
+        allocated_tiers_json=(
+            str(data.get("finance_allocated_tiers_json"))
+            if data.get("finance_allocated_tiers_json") is not None
+            else None
+        ),
         apply_to_past_reports=True,
         settings=settings,
         services=services,
@@ -1353,6 +1400,11 @@ async def finance_pricing_history_keep(
         target_user_id=int(data["finance_pricing_target_user_id"]),
         price_gb=int(data["finance_price_per_gb"]),
         price_day=int(data["finance_price_per_day"]),
+        allocated_tiers_json=(
+            str(data.get("finance_allocated_tiers_json"))
+            if data.get("finance_allocated_tiers_json") is not None
+            else None
+        ),
         apply_to_past_reports=False,
         settings=settings,
         services=services,

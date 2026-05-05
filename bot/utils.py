@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from typing import Any, Mapping
@@ -49,6 +50,37 @@ def parse_gb_amount(raw: str) -> float:
     if amount < 0:
         raise ValueError("negative_gb_amount")
     return float(amount)
+
+
+def parse_price_per_gb_with_tiers(raw: str) -> tuple[int, str | None]:
+    normalized = raw.strip().translate(PERSIAN_TO_ENGLISH_DIGITS)
+    if not normalized:
+        raise ValueError("empty_price")
+    compact = normalized.replace(" ", "")
+    if "|" not in compact:
+        return int(compact.replace(",", "")), None
+    base_raw, tiers_raw = compact.split("|", 1)
+    price_per_gb = int(base_raw.replace(",", ""))
+    if price_per_gb < 0:
+        raise ValueError("negative_base_price")
+    tiers_map: dict[int, int] = {}
+    for part in tiers_raw.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "=" in item:
+            traffic_raw, amount_raw = item.split("=", 1)
+        elif ":" in item:
+            traffic_raw, amount_raw = item.split(":", 1)
+        else:
+            raise ValueError("invalid_tier_format")
+        traffic_gb = int(traffic_raw)
+        amount = int(amount_raw)
+        if traffic_gb <= 0 or amount < 0:
+            raise ValueError("invalid_tier_values")
+        tiers_map[traffic_gb] = amount
+    tiers = [{"traffic_gb": key, "amount": tiers_map[key]} for key in sorted(tiers_map.keys())]
+    return price_per_gb, json.dumps(tiers, separators=(",", ":"))
 
 
 def gb_to_bytes(value: float | int) -> int:

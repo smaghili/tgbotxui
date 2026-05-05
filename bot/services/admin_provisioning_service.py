@@ -436,6 +436,24 @@ class AdminProvisioningService:
                     client_email=str(detail.get("email") or client.get("email") or ""),
                 )
 
+    async def _refund_charge_bundle(self, *, actor_user_id: int, charge_tx: dict[str, Any] | None, reason: str) -> None:
+        if charge_tx is None or self.financial_service is None:
+            return
+        tx_ids: list[int] = [int(charge_tx["id"])]
+        related = charge_tx.get("related_transaction_ids")
+        if isinstance(related, list):
+            for item in related:
+                try:
+                    tx_ids.append(int(item))
+                except Exception:
+                    continue
+        for transaction_id in tx_ids:
+            await self.financial_service.refund_transaction(
+                actor_user_id=actor_user_id,
+                transaction_id=transaction_id,
+                reason=reason,
+            )
+
     async def _add_client_total_gb_for_ref(
         self,
         *,
@@ -580,12 +598,11 @@ class AdminProvisioningService:
                         client_email=str(after.get("email") or ref.client_email or ""),
                     )
         except Exception:
-            if charge_tx is not None and self.financial_service is not None:
-                await self.financial_service.refund_transaction(
-                    actor_user_id=actor_user_id,
-                    transaction_id=int(charge_tx["id"]),
-                    reason=f"{refund_reason_prefix}:{ref.client_uuid}",
-                )
+            await self._refund_charge_bundle(
+                actor_user_id=actor_user_id,
+                charge_tx=charge_tx,
+                reason=f"{refund_reason_prefix}:{ref.client_uuid}",
+            )
             raise
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
@@ -655,12 +672,11 @@ class AdminProvisioningService:
             await self.panel_service.extend_client_expiry_days(ref.panel_id, ref.inbound_id, ref.client_uuid, add_days)
             after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
         except Exception:
-            if charge_tx is not None and self.financial_service is not None:
-                await self.financial_service.refund_transaction(
-                    actor_user_id=actor_user_id,
-                    transaction_id=int(charge_tx["id"]),
-                    reason=f"{refund_reason_prefix}:{ref.client_uuid}",
-                )
+            await self._refund_charge_bundle(
+                actor_user_id=actor_user_id,
+                charge_tx=charge_tx,
+                reason=f"{refund_reason_prefix}:{ref.client_uuid}",
+            )
             raise
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
@@ -913,12 +929,11 @@ class AdminProvisioningService:
             await self.panel_service.set_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, total_gb)
             after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
         except Exception:
-            if charge_tx is not None and self.financial_service is not None:
-                await self.financial_service.refund_transaction(
-                    actor_user_id=actor_user_id,
-                    transaction_id=int(charge_tx["id"]),
-                    reason=f"refund:set_client_total_gb_failed:{ref.client_uuid}",
-                )
+            await self._refund_charge_bundle(
+                actor_user_id=actor_user_id,
+                charge_tx=charge_tx,
+                reason=f"refund:set_client_total_gb_failed:{ref.client_uuid}",
+            )
             raise
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
@@ -996,12 +1011,11 @@ class AdminProvisioningService:
             await self.panel_service.set_client_expiry_days(ref.panel_id, ref.inbound_id, ref.client_uuid, days)
             after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
         except Exception:
-            if charge_tx is not None and self.financial_service is not None:
-                await self.financial_service.refund_transaction(
-                    actor_user_id=actor_user_id,
-                    transaction_id=int(charge_tx["id"]),
-                    reason=f"refund:set_client_expiry_days_failed:{ref.client_uuid}",
-                )
+            await self._refund_charge_bundle(
+                actor_user_id=actor_user_id,
+                charge_tx=charge_tx,
+                reason=f"refund:set_client_expiry_days_failed:{ref.client_uuid}",
+            )
             raise
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
@@ -1876,12 +1890,11 @@ class AdminProvisioningService:
                 comment=f"{actor_user_id}:{MOAF_COMMENT_MARKER}" if is_moaf_create else str(actor_user_id),
             )
         except Exception:
-            if charge_tx is not None and self.financial_service is not None:
-                await self.financial_service.refund_transaction(
-                    actor_user_id=actor_user_id,
-                    transaction_id=int(charge_tx["id"]),
-                    reason=f"refund:create_client_failed:{client_email}",
-                )
+            await self._refund_charge_bundle(
+                actor_user_id=actor_user_id,
+                charge_tx=charge_tx,
+                reason=f"refund:create_client_failed:{client_email}",
+            )
             raise
         try:
             await self.db.upsert_client_owner(
