@@ -9,6 +9,7 @@ from bot.handlers import (
     admin_client_bulk,
     admin_clients,
     admin_finance,
+    admin_notifications,
     admin_panels,
     admin_provisioning,
 )
@@ -16,6 +17,7 @@ from bot.handlers import (
 router = Router(name="admin")
 router.include_router(admin_cancel.router)
 router.include_router(admin_finance.router)
+router.include_router(admin_notifications.router)
 router.include_router(admin_panels.router)
 router.include_router(admin_access.router)
 router.include_router(admin_provisioning.router)

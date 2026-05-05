@@ -80,6 +80,9 @@ class FakeDB:
             if int(row["panel_id"]) == panel_id and str(row["client_email"]).lower() == client_email.lower()
         ]
 
+    async def get_user_notification_disabled_kinds(self, telegram_user_id: int) -> set[str]:
+        return set()
+
     async def enqueue_admin_activity_notification(
         self,
         *,
@@ -88,6 +91,7 @@ class FakeDB:
         text: str,
         next_attempt_at: int = 0,
         last_error: str | None = None,
+        notification_kind: str | None = None,
     ) -> int:
         row = {
             "id": self.next_notification_id,
@@ -98,6 +102,7 @@ class FakeDB:
             "last_error": last_error,
             "next_attempt_at": next_attempt_at,
             "sent_at": None,
+            "notification_kind": notification_kind,
         }
         self.next_notification_id += 1
         self.pending_notifications.append(row)

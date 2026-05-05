@@ -34,5 +34,6 @@ class AdminActivityService:
                 actor_user_id=actor_user_id,
                 text=stamped_text,
                 panel_id=panel_id,
+                notification_kind=None,
             )
         return stamped_text

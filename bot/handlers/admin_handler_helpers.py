@@ -70,4 +70,5 @@ async def notify_admin_activity_for_source(
             inbound=inbound,
             details=details,
         ),
+        notification_kind=action_key,
     )

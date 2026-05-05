@@ -172,6 +172,7 @@ class AdminProvisioningService:
         settings: Settings,
         text: str,
         panel_id: int | None = None,
+        notification_kind: str | None = None,
     ) -> None:
         stamped_text = f"{text}\nزمان: {now_jalali_datetime(settings.timezone)}"
         await self.db.add_audit_log(
@@ -184,7 +185,14 @@ class AdminProvisioningService:
         )
         if self.usage_service is None or not await self.usage_service.is_active_delegated_admin_user(actor_user_id):
             return
-        await self.usage_service.notify_admin_activity(actor_user_id=actor_user_id, text=stamped_text, panel_id=panel_id)
+        if notification_kind is None:
+            return
+        await self.usage_service.notify_admin_activity(
+            actor_user_id=actor_user_id,
+            text=stamped_text,
+            panel_id=panel_id,
+            notification_kind=notification_kind,
+        )
 
     async def record_admin_activity(
         self,
@@ -193,12 +201,14 @@ class AdminProvisioningService:
         settings: Settings,
         text: str,
         panel_id: int | None = None,
+        notification_kind: str | None = None,
     ) -> None:
         await self._record_admin_activity(
             actor_user_id=actor_user_id,
             settings=settings,
             text=text,
             panel_id=panel_id,
+            notification_kind=notification_kind,
         )
 
     async def _record_templated_admin_activity(
@@ -229,6 +239,7 @@ class AdminProvisioningService:
             settings=settings,
             text=activity_text,
             panel_id=panel_id,
+            notification_kind=action_key,
         )
 
     async def _notify_root_special_purchase(
@@ -263,7 +274,11 @@ class AdminProvisioningService:
             )
             + f"\nزمان: {now_jalali_datetime(settings.timezone)}"
         )
-        await self.usage_service.notify_root_admin_activity(actor_user_id=actor_user_id, text=text)
+        await self.usage_service.notify_root_admin_activity(
+            actor_user_id=actor_user_id,
+            text=text,
+            notification_kind="admin_activity_action_create_client",
+        )
 
     async def _notify_root_special_add_traffic(
         self,
@@ -293,7 +308,11 @@ class AdminProvisioningService:
             )
             + f"\nزمان: {now_jalali_datetime(settings.timezone)}"
         )
-        await self.usage_service.notify_root_admin_activity(actor_user_id=actor_user_id, text=text)
+        await self.usage_service.notify_root_admin_activity(
+            actor_user_id=actor_user_id,
+            text=text,
+            notification_kind="admin_activity_action_add_traffic",
+        )
 
     async def _managed_ref_from_panel_client(
         self,
@@ -1997,6 +2016,7 @@ class AdminProvisioningService:
                 settings=settings,
                 text=activity_text,
                 panel_id=panel_id,
+                notification_kind="admin_activity_action_create_client",
             )
         return {
             **created,

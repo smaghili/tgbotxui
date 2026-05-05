@@ -93,6 +93,46 @@ class Database:
         )
         await self.conn.commit()
 
+    async def get_user_notification_disabled_kinds(self, telegram_user_id: int) -> set[str]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT disabled_json
+            FROM user_bot_notification_prefs
+            WHERE telegram_user_id=?
+            LIMIT 1;
+            """,
+            (telegram_user_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return set()
+        raw = row["disabled_json"]
+        if raw is None or raw == "":
+            return set()
+        try:
+            data = json.loads(str(raw))
+        except (json.JSONDecodeError, TypeError):
+            return set()
+        if not isinstance(data, list):
+            return set()
+        return {str(x) for x in data if isinstance(x, str) and x.strip()}
+
+    async def set_user_notification_disabled_kinds(self, telegram_user_id: int, disabled: set[str]) -> None:
+        assert self.conn is not None
+        payload = json.dumps(sorted(disabled), ensure_ascii=False)
+        await self.conn.execute(
+            """
+            INSERT INTO user_bot_notification_prefs (telegram_user_id, disabled_json, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(telegram_user_id) DO UPDATE SET
+                disabled_json=excluded.disabled_json,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (telegram_user_id, payload),
+        )
+        await self.conn.commit()
+
     async def get_app_setting(self, key: str, default: str | None = None) -> str | None:
         assert self.conn is not None
         cur = await self.conn.execute(
@@ -182,6 +222,22 @@ class Database:
         )
         row = await cur.fetchone()
         return dict(row) if row else None
+
+    async def count_active_delegated_children(self, parent_telegram_user_id: int) -> int:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM delegated_admins child
+            LEFT JOIN delegated_admin_profiles p ON p.telegram_user_id = child.telegram_user_id
+            WHERE child.parent_user_id = ?
+              AND child.is_active = 1
+              AND COALESCE(p.is_active, 1) = 1;
+            """,
+            (parent_telegram_user_id,),
+        )
+        row = await cur.fetchone()
+        return int(row["c"] or 0)
 
     async def list_full_delegated_admins(self) -> List[Dict[str, Any]]:
         assert self.conn is not None
@@ -1475,16 +1531,17 @@ class Database:
         text: str,
         next_attempt_at: int = 0,
         last_error: str | None = None,
+        notification_kind: str | None = None,
     ) -> int:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
             INSERT INTO admin_activity_notifications (
-                actor_user_id, chat_id, text, attempts, last_error, next_attempt_at
+                actor_user_id, chat_id, text, attempts, last_error, next_attempt_at, notification_kind
             )
-            VALUES (?, ?, ?, 0, ?, ?);
+            VALUES (?, ?, ?, 0, ?, ?, ?);
             """,
-            (actor_user_id, chat_id, text, last_error, int(next_attempt_at)),
+            (actor_user_id, chat_id, text, last_error, int(next_attempt_at), notification_kind),
         )
         await self.conn.commit()
         return int(cur.lastrowid)
@@ -1498,7 +1555,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT id, actor_user_id, chat_id, text, attempts, last_error, next_attempt_at, sent_at, created_at
+            SELECT id, actor_user_id, chat_id, text, attempts, last_error, next_attempt_at, sent_at, created_at, notification_kind
             FROM admin_activity_notifications
             WHERE sent_at IS NULL AND next_attempt_at <= ?
             ORDER BY id ASC

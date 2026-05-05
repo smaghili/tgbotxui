@@ -29,6 +29,7 @@ def admin_keyboard(mode: str = "full", lang: str | None = None) -> ReplyKeyboard
             [KeyboardButton(text=btn("btn_disabled_users", lang)), KeyboardButton(text=btn("btn_online_users", lang))],
             [KeyboardButton(text=btn("btn_low_traffic_users", lang)), KeyboardButton(text=btn("btn_create_user", lang))],
             [KeyboardButton(text=btn("btn_edit_config", lang)), KeyboardButton(text=btn("btn_bulk_operations", lang))],
+            [KeyboardButton(text=btn("btn_bot_notifications", lang))],
             [KeyboardButton(text=btn("btn_back", lang))],
         ]
     else:
@@ -39,6 +40,7 @@ def admin_keyboard(mode: str = "full", lang: str | None = None) -> ReplyKeyboard
             [KeyboardButton(text=btn("btn_low_traffic_users", lang)), KeyboardButton(text=btn("btn_create_user", lang))],
             [KeyboardButton(text=btn("btn_edit_config", lang)), KeyboardButton(text=btn("btn_bulk_operations", lang))],
             [KeyboardButton(text=btn("btn_cleanup_settings", lang)), KeyboardButton(text=btn("btn_manage_admins", lang))],
+            [KeyboardButton(text=btn("btn_bot_notifications", lang))],
             [KeyboardButton(text=btn("btn_back", lang))],
         ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=False)

@@ -217,6 +217,7 @@ async def _notify_admin_activity(
             details=details,
         ),
         panel_id=panel_id,
+        notification_kind=action_key,
     )
 
 

@@ -15,6 +15,9 @@ from bot.utils import format_bytes, format_gb, relative_remaining_time, status_e
 
 logger = logging.getLogger(__name__)
 
+# Outbound system notifications must go through this module (see scripts/audit_outbound_telegram.py).
+# Handlers may still use message.answer for interactive UX; that is intentional and not part of prefs.
+
 
 class UsageService:
     def __init__(
@@ -34,6 +37,19 @@ class UsageService:
 
     def attach_bot(self, bot: Bot | None) -> None:
         self.bot = bot
+
+    async def is_bot_notification_enabled(self, chat_id: int, notification_kind: str | None) -> bool:
+        if not notification_kind:
+            return True
+        disabled = await self.db.get_user_notification_disabled_kinds(chat_id)
+        return notification_kind not in disabled
+
+    async def _deliver_bot_notification(self, chat_id: int, text: str, *, notification_kind: str | None) -> str:
+        if not await self.is_bot_notification_enabled(chat_id, notification_kind):
+            return "skipped"
+        if await self._send_chat_message(chat_id, text):
+            return "sent"
+        return "failed"
 
     @staticmethod
     def _remaining_bytes(total_bytes: int, used_bytes: int) -> int | None:
@@ -124,6 +140,7 @@ class UsageService:
         chat_id: int,
         text: str,
         last_error: str,
+        notification_kind: str | None,
     ) -> int:
         return await self.db.enqueue_admin_activity_notification(
             actor_user_id=actor_user_id,
@@ -131,6 +148,7 @@ class UsageService:
             text=text,
             next_attempt_at=int(time.time()) + 30,
             last_error=last_error,
+            notification_kind=notification_kind,
         )
 
     async def _delegated_admin_can_receive_panel_activity(self, user_id: int, panel_id: int) -> bool:
@@ -185,9 +203,19 @@ class UsageService:
             details=details,
         )
 
-    async def notify_admin_activity(self, *, actor_user_id: int, text: str, panel_id: int | None = None) -> None:
+    async def notify_admin_activity(
+        self,
+        *,
+        actor_user_id: int,
+        text: str,
+        panel_id: int | None = None,
+        notification_kind: str | None = None,
+    ) -> None:
         for admin_id in await self._admin_activity_recipient_ids(actor_user_id, panel_id):
-            if await self._send_chat_message(admin_id, text):
+            outcome = await self._deliver_bot_notification(admin_id, text, notification_kind=notification_kind)
+            if outcome == "skipped":
+                continue
+            if outcome == "sent":
                 await self._audit_admin_activity_delivery(
                     actor_user_id=actor_user_id,
                     recipient_user_id=admin_id,
@@ -201,6 +229,7 @@ class UsageService:
                 chat_id=admin_id,
                 text=text,
                 last_error="immediate_send_failed",
+                notification_kind=notification_kind,
             )
             await self._audit_admin_activity_delivery(
                 actor_user_id=actor_user_id,
@@ -210,9 +239,18 @@ class UsageService:
                 details=f"delivery=immediate_failed;notification_id={notification_id}",
             )
 
-    async def notify_root_admin_activity(self, *, actor_user_id: int, text: str) -> None:
+    async def notify_root_admin_activity(
+        self,
+        *,
+        actor_user_id: int,
+        text: str,
+        notification_kind: str | None = None,
+    ) -> None:
         for admin_id in sorted(self.root_admin_ids):
-            if await self._send_chat_message(admin_id, text):
+            outcome = await self._deliver_bot_notification(admin_id, text, notification_kind=notification_kind)
+            if outcome == "skipped":
+                continue
+            if outcome == "sent":
                 await self._audit_admin_activity_delivery(
                     actor_user_id=actor_user_id,
                     recipient_user_id=admin_id,
@@ -226,6 +264,7 @@ class UsageService:
                 chat_id=admin_id,
                 text=text,
                 last_error="immediate_send_failed",
+                notification_kind=notification_kind,
             )
             await self._audit_admin_activity_delivery(
                 actor_user_id=actor_user_id,
@@ -256,13 +295,17 @@ class UsageService:
                 inbound=str(deleted_client.get("inbound_name") or deleted_client.get("inbound_id") or "-"),
             )
             for admin_id in recipient_ids:
-                if await self._send_chat_message(admin_id, text):
+                outcome = await self._deliver_bot_notification(
+                    admin_id, text, notification_kind="bot_notify_auto_cleanup_deleted"
+                )
+                if outcome in {"sent", "skipped"}:
                     continue
                 await self._queue_admin_notification(
                     actor_user_id=None,
                     chat_id=admin_id,
                     text=text,
                     last_error="auto_cleanup_notification_send_failed",
+                    notification_kind="bot_notify_auto_cleanup_deleted",
                 )
 
     async def flush_pending_admin_activity_notifications(self, *, limit: int = 100) -> None:
@@ -274,6 +317,21 @@ class UsageService:
             chat_id = int(row["chat_id"])
             text = str(row.get("text") or "")
             attempts = int(row.get("attempts") or 0)
+            kind_raw = row.get("notification_kind")
+            kind = str(kind_raw).strip() if kind_raw is not None else ""
+            if kind and not await self.is_bot_notification_enabled(chat_id, kind):
+                await self.db.mark_admin_activity_notification_sent(
+                    notification_id=notification_id,
+                    sent_at=int(time.time()),
+                )
+                await self._audit_admin_activity_delivery(
+                    actor_user_id=actor_user_id,
+                    recipient_user_id=chat_id,
+                    action="admin_activity_notification_skipped",
+                    success=True,
+                    details=f"delivery=disabled;notification_id={notification_id};kind={kind}",
+                )
+                continue
             if await self._send_chat_message(chat_id, text):
                 await self.db.mark_admin_activity_notification_sent(
                     notification_id=notification_id,
@@ -389,7 +447,7 @@ class UsageService:
             threshold_mb=threshold_mb,
             remaining=format_bytes(remaining_bytes, lang),
         )
-        await self._send_chat_message(telegram_user_id, text)
+        await self._deliver_bot_notification(telegram_user_id, text, notification_kind="bot_notify_user_service_threshold")
         await self._notify_direct_owner_about_threshold(
             service_row=service_row,
             service_name=service_name,
@@ -432,7 +490,9 @@ class UsageService:
             remaining=format_bytes(remaining_bytes, "fa"),
         )
         for chat_id in manager_chat_ids:
-            sent = await self._send_chat_message(chat_id, manager_text)
+            sent = await self._deliver_bot_notification(
+                chat_id, manager_text, notification_kind="bot_notify_manager_service_threshold"
+            ) == "sent"
             if sent and inbound_id is not None and client_uuid is not None:
                 _, expiry_state = await self.db.get_delegated_admin_client_alert_states(
                     delegated_admin_user_id=chat_id,
@@ -468,7 +528,7 @@ class UsageService:
                 "هشدار سرویس:\n"
                 f"سرویس {service_name} به پایان رسیده و حجم آن تمام شده است."
             )
-        await self._send_chat_message(user_id, user_text)
+        await self._deliver_bot_notification(user_id, user_text, notification_kind="bot_notify_user_service_depleted")
 
         panel_label, inbound_label = await self._service_location_labels(
             int(service_row["panel_id"]),
@@ -488,7 +548,9 @@ class UsageService:
             client_uuid=str(service_row.get("client_id") or "").strip() or None,
         )
         for chat_id in manager_chat_ids:
-            await self._send_chat_message(chat_id, manager_text)
+            await self._deliver_bot_notification(
+                chat_id, manager_text, notification_kind="bot_notify_manager_service_depleted"
+            )
 
     async def _notify_service_expired(
         self,
@@ -508,7 +570,7 @@ class UsageService:
                 "هشدار سرویس:\n"
                 f"زمان سرویس {service_name} به پایان رسیده است."
             )
-        await self._send_chat_message(user_id, user_text)
+        await self._deliver_bot_notification(user_id, user_text, notification_kind="bot_notify_user_service_expired")
 
         panel_label, inbound_label = await self._service_location_labels(
             int(service_row["panel_id"]),
@@ -528,7 +590,9 @@ class UsageService:
             client_uuid=str(service_row.get("client_id") or "").strip() or None,
         )
         for chat_id in manager_chat_ids:
-            await self._send_chat_message(chat_id, manager_text)
+            await self._deliver_bot_notification(
+                chat_id, manager_text, notification_kind="bot_notify_manager_service_expired"
+            )
 
     async def _notify_service_state_changes(self, previous: dict, current: dict) -> None:
         service_name = str(current.get("service_name") or previous.get("service_name") or previous.get("client_email") or "service")
@@ -667,7 +731,7 @@ class UsageService:
                     f"{format_bytes(added_bytes, lang)} توسط ادمین به سرویس {service_name} اضافه شد.\n"
                     f"حجم جدید سرویس: {format_gb(new_total_bytes, lang)}"
                 )
-            await self._send_chat_message(user_id, text)
+            await self._deliver_bot_notification(user_id, text, notification_kind="bot_notify_user_traffic_increased")
 
     async def notify_user_expiry_extended(
         self,
@@ -700,7 +764,7 @@ class UsageService:
                     f"{added_days} روز توسط ادمین به سرویس {service_name} اضافه شد.\n"
                     f"تاریخ جدید انقضا: {to_local_date(new_expiry, self.timezone, lang)}"
                 )
-            await self._send_chat_message(user_id, text)
+            await self._deliver_bot_notification(user_id, text, notification_kind="bot_notify_user_expiry_extended")
 
     async def _scan_delegated_admin_alerts(self) -> None:
         if self.bot is None:
@@ -783,14 +847,13 @@ class UsageService:
                             f"اینباند: {inbound_name}\n"
                             f"حجم باقی‌مانده: {format_gb(remaining, 'fa')}"
                         )
-                    try:
-                        await self.bot.send_message(admin_user_id, text)
-                    except Exception:
-                        logger.exception(
-                            "failed to send delegated admin alert",
-                            extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
-                        )
-                    else:
+                    traffic_kind = (
+                        "bot_notify_delegated_panel_traffic_depleted"
+                        if traffic_state == "depleted"
+                        else "bot_notify_delegated_panel_traffic_low"
+                    )
+                    outcome = await self._deliver_bot_notification(admin_user_id, text, notification_kind=traffic_kind)
+                    if outcome in {"sent", "skipped"}:
                         notified = True
 
                 if should_notify_expiry:
@@ -811,14 +874,13 @@ class UsageService:
                             f"تاریخ پایان: {to_local_date(detail.get('expiry'), self.timezone, 'fa')}\n"
                             f"زمان باقی‌مانده: {relative_remaining_time(detail.get('expiry'), self.timezone, 'fa')}"
                         )
-                    try:
-                        await self.bot.send_message(admin_user_id, text)
-                    except Exception:
-                        logger.exception(
-                            "failed to send delegated admin expiry alert",
-                            extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
-                        )
-                    else:
+                    expiry_kind = (
+                        "bot_notify_delegated_panel_expiry_expired"
+                        if expiry_state == "expired"
+                        else "bot_notify_delegated_panel_expiry_low"
+                    )
+                    outcome = await self._deliver_bot_notification(admin_user_id, text, notification_kind=expiry_kind)
+                    if outcome in {"sent", "skipped"}:
                         notified = True
 
                 await self.db.upsert_delegated_admin_client_alert_states(
