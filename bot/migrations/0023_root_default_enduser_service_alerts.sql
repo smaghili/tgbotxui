@@ -1,0 +1,3 @@
+-- Root-only defaults for end-user service alerts (stored in app_settings).
+-- Key: root_default_enduser_service_alerts_disabled_json
+-- Value: JSON list of disabled notification kind strings, e.g. ["bot_notify_user_service_threshold"].

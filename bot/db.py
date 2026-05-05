@@ -133,6 +133,24 @@ class Database:
         )
         await self.conn.commit()
 
+    ROOT_DEFAULT_ENDUSER_SERVICE_ALERTS_DISABLED_KEY = "root_default_enduser_service_alerts_disabled_json"
+
+    async def get_root_default_enduser_service_alert_disabled_kinds(self) -> set[str]:
+        raw = await self.get_app_setting(self.ROOT_DEFAULT_ENDUSER_SERVICE_ALERTS_DISABLED_KEY, "[]")
+        if raw is None or raw == "":
+            return set()
+        try:
+            data = json.loads(str(raw))
+        except (json.JSONDecodeError, TypeError):
+            return set()
+        if not isinstance(data, list):
+            return set()
+        return {str(x) for x in data if isinstance(x, str) and x.strip()}
+
+    async def set_root_default_enduser_service_alert_disabled_kinds(self, disabled: set[str]) -> None:
+        payload = json.dumps(sorted(disabled), ensure_ascii=False)
+        await self.set_app_setting(self.ROOT_DEFAULT_ENDUSER_SERVICE_ALERTS_DISABLED_KEY, payload)
+
     async def get_app_setting(self, key: str, default: str | None = None) -> str | None:
         assert self.conn is not None
         cur = await self.conn.execute(

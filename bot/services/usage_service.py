@@ -9,6 +9,7 @@ from aiogram import Bot
 from bot.db import Database
 from bot.i18n import t
 from bot.metrics import PANEL_COUNT, SYNC_RUNS, USER_SERVICE_COUNT, USER_STATUS_REQUESTS
+from bot.notification_kinds import ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS
 from bot.services.panel_service import PanelService
 from bot.services.xui_client import XUIError
 from bot.utils import format_bytes, format_gb, relative_remaining_time, status_emoji, to_local_date
@@ -42,7 +43,16 @@ class UsageService:
         if not notification_kind:
             return True
         disabled = await self.db.get_user_notification_disabled_kinds(chat_id)
-        return notification_kind not in disabled
+        if notification_kind in disabled:
+            return False
+        if (
+            notification_kind in ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS
+            and chat_id not in self.root_admin_ids
+        ):
+            root_disabled = await self.db.get_root_default_enduser_service_alert_disabled_kinds()
+            if notification_kind in root_disabled:
+                return False
+        return True
 
     async def _deliver_bot_notification(self, chat_id: int, text: str, *, notification_kind: str | None) -> str:
         if not await self.is_bot_notification_enabled(chat_id, notification_kind):
@@ -160,6 +170,34 @@ class UsageService:
         if int(panel.get("created_by") or 0) == user_id:
             return True
         return await self.db.has_admin_access_to_panel(telegram_user_id=user_id, panel_id=panel_id)
+
+    async def _delegated_admin_can_receive_inbound_activity(
+        self,
+        user_id: int,
+        panel_id: int | None,
+        inbound_id: int | None,
+    ) -> bool:
+        if panel_id is None or panel_id <= 0:
+            return False
+        if not await self._is_active_delegated_admin_user(user_id):
+            return False
+        if inbound_id is None or inbound_id <= 0:
+            return await self._delegated_admin_can_receive_panel_activity(user_id, panel_id)
+        delegated = await self.db.get_delegated_admin_by_user_id(user_id)
+        if delegated is None:
+            return False
+        scope = str(delegated.get("admin_scope") or "limited").strip().lower()
+        if scope == "full":
+            panel = await self.db.get_panel(panel_id)
+            if panel is not None and (
+                int(panel.get("is_default") or 0) == 1 or int(panel.get("created_by") or 0) == user_id
+            ):
+                return True
+        return await self.db.has_admin_access_to_inbound(
+            telegram_user_id=user_id,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+        )
 
     async def _admin_activity_recipient_ids(self, actor_user_id: int, panel_id: int | None = None) -> list[int]:
         recipients = set(self.root_admin_ids)
@@ -286,6 +324,10 @@ class UsageService:
         if not recipient_ids:
             return
         for deleted_client in deleted_clients:
+            panel_id_raw = deleted_client.get("panel_id")
+            inbound_id_raw = deleted_client.get("inbound_id")
+            panel_id = int(panel_id_raw) if panel_id_raw is not None else None
+            inbound_id = int(inbound_id_raw) if inbound_id_raw is not None else None
             text = t(
                 "admin_auto_cleanup_deleted_notification",
                 "fa",
@@ -295,6 +337,13 @@ class UsageService:
                 inbound=str(deleted_client.get("inbound_name") or deleted_client.get("inbound_id") or "-"),
             )
             for admin_id in recipient_ids:
+                if admin_id not in self.root_admin_ids:
+                    if not await self._delegated_admin_can_receive_inbound_activity(
+                        admin_id,
+                        panel_id=panel_id,
+                        inbound_id=inbound_id,
+                    ):
+                        continue
                 outcome = await self._deliver_bot_notification(
                     admin_id, text, notification_kind="bot_notify_auto_cleanup_deleted"
                 )

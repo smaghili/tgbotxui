@@ -880,11 +880,28 @@ async def delegated_admin_set_root_parent(callback: CallbackQuery, settings: Set
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
+    delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
+    if delegated is None:
+        await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
+        return
+    current_parent_user_id = int(delegated.get("parent_user_id") or 0) or None
+    new_parent_user_id: int | None = None
+    if current_parent_user_id is None:
+        last_event = await services.db.get_last_delegated_admin_parent_event(target_user_id)
+        candidate_parent = int((last_event or {}).get("old_parent_user_id") or 0) or None
+        if candidate_parent == target_user_id:
+            candidate_parent = None
+        if candidate_parent is not None and await services.db.get_delegated_admin_by_user_id(candidate_parent) is None:
+            candidate_parent = None
+        if candidate_parent is None:
+            await callback.answer(t("admin_delegated_parent_toggle_no_alt", lang), show_alert=True)
+            return
+        new_parent_user_id = candidate_parent
     try:
         await services.admin_provisioning_service.change_delegated_admin_parent(
             actor_user_id=callback.from_user.id,
             child_user_id=target_user_id,
-            new_parent_user_id=None,
+            new_parent_user_id=new_parent_user_id,
         )
     except Exception as exc:
         await callback.answer(str(exc)[:180], show_alert=True)
@@ -896,7 +913,12 @@ async def delegated_admin_set_root_parent(callback: CallbackQuery, settings: Set
         target_user_id=target_user_id,
         lang=lang,
     )
-    await callback.answer(t("admin_delegated_parent_root_set", lang), show_alert=True)
+    await callback.answer(
+        t("admin_delegated_parent_root_set", lang)
+        if new_parent_user_id is None
+        else t("admin_delegated_parent_root_unset", lang),
+        show_alert=True,
+    )
 
 
 @router.callback_query(F.data.startswith("dag:field:"))
