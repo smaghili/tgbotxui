@@ -210,10 +210,7 @@ class UsageService:
         seen_parents: set[int] = set()
         while parent_user_id > 0 and parent_user_id not in seen_parents:
             seen_parents.add(parent_user_id)
-            if await self._is_active_delegated_admin_user(parent_user_id) and (
-                panel_id is None
-                or await self._delegated_admin_can_receive_panel_activity(parent_user_id, panel_id)
-            ):
+            if await self._is_active_delegated_admin_user(parent_user_id):
                 recipients.add(parent_user_id)
             parent_row = await self.db.get_delegated_admin_by_user_id(parent_user_id)
             if parent_row is None:

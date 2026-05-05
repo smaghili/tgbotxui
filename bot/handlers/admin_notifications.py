@@ -25,30 +25,31 @@ def _trim_btn(text: str, max_len: int = 58) -> str:
 def _notification_prefs_keyboard(
     *,
     visible_kinds: tuple[str, ...],
-    disabled: set[str],
     lang: str | None,
+    is_root: bool,
+    personal_disabled: set[str],
+    root_defaults_disabled: set[str],
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for idx, kind in enumerate(visible_kinds):
         label_key = NOTIFICATION_KIND_LABEL_KEY.get(kind, kind)
         label = t(label_key, lang)
-        prefix = "⬜ " if kind in disabled else "✅ "
+        off = (
+            kind in root_defaults_disabled
+            if is_root and kind in ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS
+            else kind in personal_disabled
+        )
+        prefix = "⬜ " if off else "✅ "
         rows.append(
             [InlineKeyboardButton(text=_trim_btn(f"{prefix}{label}"), callback_data=f"nt:t:{idx}")]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _root_enduser_service_alerts_keyboard(*, disabled: set[str], lang: str | None) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for idx, kind in enumerate(ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS):
-        label_key = NOTIFICATION_KIND_LABEL_KEY.get(kind, kind)
-        label = t(label_key, lang)
-        prefix = "⬜ " if kind in disabled else "✅ "
-        rows.append(
-            [InlineKeyboardButton(text=_trim_btn(f"{prefix}{label}"), callback_data=f"nt:ru:{idx}")]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+def _merged_visible_notification_kinds(*, is_root: bool, base_visible: tuple[str, ...]) -> tuple[str, ...]:
+    if not is_root:
+        return base_visible
+    return (*base_visible, *ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS)
 
 
 async def _notification_actor_context(
@@ -73,24 +74,30 @@ async def open_bot_notification_settings(
         return
     lang = await services.db.get_user_language(message.from_user.id)
     disabled = await services.db.get_user_notification_disabled_kinds(message.from_user.id)
-    is_root, _, visible = await _notification_actor_context(
+    is_root, _, base_visible = await _notification_actor_context(
         telegram_user_id=message.from_user.id,
         settings=settings,
         services=services,
     )
-    body = t("notif_menu_title", lang)
-    if len(visible) < len(ORDERED_NOTIFICATION_KINDS):
+    visible = _merged_visible_notification_kinds(is_root=is_root, base_visible=base_visible)
+    root_defaults_disabled: set[str] = set()
+    if is_root:
+        root_defaults_disabled = await services.db.get_root_default_enduser_service_alert_disabled_kinds()
+        body = f"{t('notif_menu_title', lang)}\n\n{t('notif_root_enduser_service_defaults_hint', lang)}"
+    else:
+        body = t("notif_menu_title", lang)
+    if len(base_visible) < len(ORDERED_NOTIFICATION_KINDS):
         body = f"{body}\n\n{t('notif_menu_role_filtered', lang)}"
     await message.answer(
         body,
-        reply_markup=_notification_prefs_keyboard(visible_kinds=visible, disabled=disabled, lang=lang),
+        reply_markup=_notification_prefs_keyboard(
+            visible_kinds=visible,
+            lang=lang,
+            is_root=is_root,
+            personal_disabled=disabled,
+            root_defaults_disabled=root_defaults_disabled,
+        ),
     )
-    if is_root:
-        root_disabled = await services.db.get_root_default_enduser_service_alert_disabled_kinds()
-        await message.answer(
-            f"{t('notif_root_enduser_service_defaults_title', lang)}\n\n{t('notif_root_enduser_service_defaults_hint', lang)}",
-            reply_markup=_root_enduser_service_alerts_keyboard(disabled=root_disabled, lang=lang),
-        )
 
 
 @router.callback_query(F.data.startswith("nt:t:"))
@@ -106,57 +113,37 @@ async def toggle_bot_notification_kind(callback: CallbackQuery, settings: Settin
     except (IndexError, ValueError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
-    _, _, visible = await _notification_actor_context(
+    is_root, _, base_visible = await _notification_actor_context(
         telegram_user_id=callback.from_user.id,
         settings=settings,
         services=services,
     )
+    visible = _merged_visible_notification_kinds(is_root=is_root, base_visible=base_visible)
     if idx < 0 or idx >= len(visible):
         await callback.answer(t("notif_toggle_denied", lang), show_alert=True)
         return
     kind = visible[idx]
-    disabled = await services.db.get_user_notification_disabled_kinds(callback.from_user.id)
-    if kind in disabled:
-        disabled.discard(kind)
+    personal_disabled = await services.db.get_user_notification_disabled_kinds(callback.from_user.id)
+    root_defaults_disabled = await services.db.get_root_default_enduser_service_alert_disabled_kinds()
+    if is_root and kind in ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS:
+        if kind in root_defaults_disabled:
+            root_defaults_disabled.discard(kind)
+        else:
+            root_defaults_disabled.add(kind)
+        await services.db.set_root_default_enduser_service_alert_disabled_kinds(root_defaults_disabled)
     else:
-        disabled.add(kind)
-    await services.db.set_user_notification_disabled_kinds(callback.from_user.id, disabled)
+        if kind in personal_disabled:
+            personal_disabled.discard(kind)
+        else:
+            personal_disabled.add(kind)
+        await services.db.set_user_notification_disabled_kinds(callback.from_user.id, personal_disabled)
     await callback.message.edit_reply_markup(
-        reply_markup=_notification_prefs_keyboard(visible_kinds=visible, disabled=disabled, lang=lang),
-    )
-    await callback.answer(t("notif_saved", lang))
-
-
-@router.callback_query(F.data.startswith("nt:ru:"))
-async def toggle_root_enduser_service_alert_default(
-    callback: CallbackQuery, settings: Settings, services: ServiceContainer
-) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
-        return
-    lang = await services.db.get_user_language(callback.from_user.id)
-    ctx = await services.access_service.get_admin_context(callback.from_user.id, settings)
-    if not ctx.is_root_admin:
-        await callback.answer(t("notif_toggle_denied", lang), show_alert=True)
-        return
-    try:
-        idx = int(callback.data.split(":")[2])
-    except (IndexError, ValueError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if idx < 0 or idx >= len(ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS):
-        await callback.answer(t("notif_toggle_denied", lang), show_alert=True)
-        return
-    kind = ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS[idx]
-    disabled = await services.db.get_root_default_enduser_service_alert_disabled_kinds()
-    if kind in disabled:
-        disabled.discard(kind)
-    else:
-        disabled.add(kind)
-    await services.db.set_root_default_enduser_service_alert_disabled_kinds(disabled)
-    await callback.message.edit_reply_markup(
-        reply_markup=_root_enduser_service_alerts_keyboard(disabled=disabled, lang=lang),
+        reply_markup=_notification_prefs_keyboard(
+            visible_kinds=visible,
+            lang=lang,
+            is_root=is_root,
+            personal_disabled=personal_disabled,
+            root_defaults_disabled=root_defaults_disabled,
+        ),
     )
     await callback.answer(t("notif_saved", lang))
