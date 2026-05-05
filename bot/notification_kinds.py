@@ -29,10 +29,12 @@ NOTIFICATION_KIND_LABEL_KEY: dict[str, str] = {
 
 ORDERED_NOTIFICATION_KINDS: tuple[str, ...] = tuple(NOTIFICATION_KIND_LABEL_KEY.keys())
 
-ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS: tuple[str, ...] = (
+ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS: tuple[str, ...] = (
     "bot_notify_user_service_threshold",
     "bot_notify_user_service_depleted",
     "bot_notify_user_service_expired",
+    "bot_notify_user_traffic_increased",
+    "bot_notify_user_expiry_extended",
 )
 
 
@@ -43,7 +45,7 @@ def visible_notification_kinds(
 ) -> tuple[str, ...]:
     out: list[str] = []
     for kind in ORDERED_NOTIFICATION_KINDS:
-        if kind in ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS:
+        if kind in ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS:
             continue
         if kind.startswith("admin_activity_action_"):
             if not (is_root_admin or is_delegated_admin):

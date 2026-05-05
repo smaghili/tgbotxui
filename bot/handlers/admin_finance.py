@@ -476,8 +476,18 @@ async def _answer_today_sales(
     lang: str | None,
 ) -> None:
     if services.access_service.is_root_admin(actor_user_id, settings):
-        delegate_rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
-        owner_ids = sorted({actor_user_id, *[int(row["telegram_user_id"]) for row in delegate_rows]})
+        root_admin_ids = set(settings.admin_ids)
+        delegate_rows = await services.db.list_delegated_admins(manager_user_id=None)
+        owner_ids = sorted(
+            {
+                actor_user_id,
+                *[
+                    int(row["telegram_user_id"])
+                    for row in delegate_rows
+                    if int(row["telegram_user_id"]) not in root_admin_ids
+                ],
+            }
+        )
     else:
         owner_ids = await services.admin_provisioning_service.financial_scope_user_ids(
             actor_user_id=actor_user_id,
@@ -531,8 +541,18 @@ async def _answer_today_reports(
     lang: str | None,
 ) -> None:
     if services.access_service.is_root_admin(actor_user_id, settings):
-        delegate_rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
-        owner_ids = sorted({actor_user_id, *[int(row["telegram_user_id"]) for row in delegate_rows]})
+        root_admin_ids = set(settings.admin_ids)
+        delegate_rows = await services.db.list_delegated_admins(manager_user_id=None)
+        owner_ids = sorted(
+            {
+                actor_user_id,
+                *[
+                    int(row["telegram_user_id"])
+                    for row in delegate_rows
+                    if int(row["telegram_user_id"]) not in root_admin_ids
+                ],
+            }
+        )
     else:
         owner_ids = await services.admin_provisioning_service.financial_scope_user_ids(
             actor_user_id=actor_user_id,

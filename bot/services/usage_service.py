@@ -9,7 +9,7 @@ from aiogram import Bot
 from bot.db import Database
 from bot.i18n import t
 from bot.metrics import PANEL_COUNT, SYNC_RUNS, USER_SERVICE_COUNT, USER_STATUS_REQUESTS
-from bot.notification_kinds import ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS
+from bot.notification_kinds import ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS
 from bot.services.panel_service import PanelService
 from bot.services.xui_client import XUIError
 from bot.utils import format_bytes, format_gb, relative_remaining_time, status_emoji, to_local_date
@@ -46,7 +46,7 @@ class UsageService:
         if notification_kind in disabled:
             return False
         if (
-            notification_kind in ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS
+            notification_kind in ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS
             and chat_id not in self.root_admin_ids
         ):
             root_disabled = await self.db.get_root_default_enduser_service_alert_disabled_kinds()

@@ -57,17 +57,18 @@ def parse_price_per_gb_with_tiers(raw: str) -> tuple[int, str | None]:
     if not normalized:
         raise ValueError("empty_price")
     compact = normalized.replace(" ", "")
-    if "|" not in compact:
-        return int(compact.replace(",", "")), None
-    base_raw, tiers_raw = compact.split("|", 1)
-    price_per_gb = int(base_raw.replace(",", ""))
+    if "|" in compact:
+        compact = compact.replace("|", ",", 1)
+    parts = [item for item in compact.split(",") if item]
+    if not parts:
+        raise ValueError("empty_price")
+    price_per_gb = int(parts[0])
     if price_per_gb < 0:
         raise ValueError("negative_base_price")
+    if len(parts) == 1:
+        return price_per_gb, None
     tiers_map: dict[int, int] = {}
-    for part in tiers_raw.split(","):
-        item = part.strip()
-        if not item:
-            continue
+    for item in parts[1:]:
         if "=" in item:
             traffic_raw, amount_raw = item.split("=", 1)
         elif ":" in item:

@@ -8,7 +8,7 @@ from bot.i18n import button_variants, t
 from bot.notification_kinds import (
     NOTIFICATION_KIND_LABEL_KEY,
     ORDERED_NOTIFICATION_KINDS,
-    ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS,
+    ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS,
     visible_notification_kinds,
 )
 from bot.services.container import ServiceContainer
@@ -36,7 +36,7 @@ def _notification_prefs_keyboard(
         label = t(label_key, lang)
         off = (
             kind in root_defaults_disabled
-            if is_root and kind in ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS
+            if is_root and kind in ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS
             else kind in personal_disabled
         )
         prefix = "⬜ " if off else "✅ "
@@ -49,7 +49,7 @@ def _notification_prefs_keyboard(
 def _merged_visible_notification_kinds(*, is_root: bool, base_visible: tuple[str, ...]) -> tuple[str, ...]:
     if not is_root:
         return base_visible
-    return (*base_visible, *ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS)
+    return (*base_visible, *ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS)
 
 
 async def _notification_actor_context(
@@ -125,7 +125,7 @@ async def toggle_bot_notification_kind(callback: CallbackQuery, settings: Settin
     kind = visible[idx]
     personal_disabled = await services.db.get_user_notification_disabled_kinds(callback.from_user.id)
     root_defaults_disabled = await services.db.get_root_default_enduser_service_alert_disabled_kinds()
-    if is_root and kind in ROOT_DEFAULT_ENDUSER_SERVICE_ALERT_KINDS:
+    if is_root and kind in ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS:
         if kind in root_defaults_disabled:
             root_defaults_disabled.discard(kind)
         else:
