@@ -151,6 +151,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "فروش امروز",
         "en": "Today's Sales",
     },
+    "finance_today_sales_total_line": {
+        "fa": "مجموع فروش امروز: {total} {currency}",
+        "en": "Today's total sales: {total} {currency}",
+    },
     "finance_today_sales_empty": {
         "fa": "برای امروز فروش ثبت‌شده‌ای وجود ندارد.",
         "en": "There are no sales recorded for today.",
@@ -691,6 +695,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_report_text": {
         "fa": "گزارش نمایندگی\n\nنماینده: {title}\nموجودی: {balance} {currency}\nهر گیگ: {price_gb} {currency}\nهر روز: {price_day} {currency}\nکل فروش: {sales} {currency}\nتعداد تراکنش‌ها: {transactions}\nکاربران ساخته‌شده: {owned_clients}{extra_lines}\n\nآخرین تراکنش‌ها:\n{wallet_lines}\n\nآخرین فعالیت‌ها:\n{activity_lines}",
         "en": "Delegated report\n\nDelegate: {title}\nBalance: {balance} {currency}\nPer GB: {price_gb} {currency}\nPer day: {price_day} {currency}\nSales: {sales} {currency}\nTransactions: {transactions}\nOwned clients: {owned_clients}{extra_lines}\n\nRecent wallet transactions:\n{wallet_lines}\n\nRecent activities:\n{activity_lines}",
+    },
+    "admin_delegated_allocated_payable_lines": {
+        "fa": "\n\nمانده قابل پرداخت: {payable_amount} {currency}",
+        "en": "\n\nPayable balance: {payable_amount} {currency}",
     },
     "admin_delegated_details_text": {
         "fa": "📋 جزئیات نمایندگی\n\nنام کاربری: {title}\nپیشوند نام کاربری: {prefix}\n\nحداکثر کاربران قابل ساخت: {max_users}\nحداقل/حداکثر خرید حجم: {min_traffic}GB / {max_traffic}GB\nحداقل/حداکثر خرید زمان: {min_days} روز / {max_days} روز\n\nقیمت هر روز زمان: {price_day} {currency}\nقیمت هر گیگ حجم: {price_gb} {currency}\nنوع فروش: {charge_basis}\nفروش کل: {total_sales} {currency}{extra_lines}\n\nتاریخ انقضای نماینده: {expires_at}\nوضعیت نماینده: {status}\nکاربران ساخته‌شده: {owned_clients}{balance_line}",

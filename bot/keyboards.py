@@ -76,6 +76,7 @@ def finance_limited_delegated_keyboard(lang: str | None = None) -> ReplyKeyboard
     lang = lang or get_current_lang()
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text=btn("admin_delegated_details", lang))],
             [
                 KeyboardButton(text=btn("finance_today_sales", lang)),
                 KeyboardButton(text=btn("finance_today_reports", lang)),

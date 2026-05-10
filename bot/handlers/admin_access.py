@@ -14,6 +14,8 @@ from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
 from bot.states import DelegatedAdminStates
+from .admin_shared import reject_if_not_any_admin
+
 from bot.utils import (
     format_db_timestamp as shared_format_db_timestamp,
     format_gb_exact as shared_format_gb_exact,
@@ -342,6 +344,12 @@ def _pricing_history_choice_keyboard(lang: str | None = None) -> InlineKeyboardM
     )
 
 
+def _delegated_self_readonly_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=t("btn_back", lang), callback_data="fin:delegated:back")]]
+    )
+
+
 def _delegated_detail_keyboard(
     user_id: int,
     *,
@@ -528,6 +536,7 @@ async def _render_delegated_detail(
     settings: Settings,
     target_user_id: int,
     lang: str | None,
+    read_only: bool = False,
 ) -> None:
     overview = await services.admin_provisioning_service.get_delegated_admin_overview(
         telegram_user_id=target_user_id,
@@ -585,7 +594,14 @@ async def _render_delegated_detail(
         )
     else:
         total_sales_value = int(sales_report.get("total_sales") or 0)
-        extra_lines = ""
+        debt_amt = int(financial_summary.get("debt_amount") or 0)
+        payable_amount = debt_amt - int(wallet.get("balance") or 0)
+        extra_lines = t(
+            "admin_delegated_allocated_payable_lines",
+            lang,
+            payable_amount=_format_amount(payable_amount),
+            currency=str(wallet.get("currency") or "تومان"),
+        )
     text = t(
         "admin_delegated_details_text",
         lang,
@@ -607,15 +623,18 @@ async def _render_delegated_detail(
         status=status_text,
         owned_clients=int(overview["owned_clients_count"] or 0),
     )
-    reply_markup = _delegated_detail_keyboard(
-        target_user_id,
-        is_active=is_active,
-        charge_basis=charge_basis,
-        admin_scope=str(overview["delegated"].get("admin_scope") or "limited"),
-        allow_negative_wallet=allow_negative_wallet,
-        is_root_parent=int(overview["delegated"].get("parent_user_id") or 0) == 0,
-        lang=lang,
-    )
+    if read_only:
+        reply_markup = _delegated_self_readonly_keyboard(lang)
+    else:
+        reply_markup = _delegated_detail_keyboard(
+            target_user_id,
+            is_active=is_active,
+            charge_basis=charge_basis,
+            admin_scope=str(overview["delegated"].get("admin_scope") or "limited"),
+            allow_negative_wallet=allow_negative_wallet,
+            is_root_parent=int(overview["delegated"].get("parent_user_id") or 0) == 0,
+            lang=lang,
+        )
     message = target.message if isinstance(target, CallbackQuery) else target
     if message is not None:
         if isinstance(target, CallbackQuery):
@@ -659,6 +678,24 @@ async def _start_delegated_inbound_selection(
     return (
         t("admin_pick_inbound_for_delegated", lang),
         _delegated_inbound_select_keyboard(rows, selected, lang),
+    )
+
+
+@router.message(F.text.in_(button_variants("admin_delegated_details")))
+async def delegated_limited_self_detail_message(message: Message, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_if_not_any_admin(message, settings, services):
+        return
+    context = await services.access_service.get_admin_context(message.from_user.id, settings)
+    if not context.is_delegated_admin or str(context.delegated_scope or "limited") != "limited":
+        return
+    lang = await services.db.get_user_language(message.from_user.id)
+    await _render_delegated_detail(
+        message,
+        services=services,
+        settings=settings,
+        target_user_id=message.from_user.id,
+        lang=lang,
+        read_only=True,
     )
 
 
@@ -921,8 +958,6 @@ async def delegated_admin_list(callback: CallbackQuery, settings: Settings, serv
 
 @router.callback_query(F.data.startswith("dag:detail:"))
 async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await _reject_callback_if_not_full_admin(callback, settings, services):
-        return
     if callback.data is None:
         await callback.answer()
         return
@@ -932,12 +967,20 @@ async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, se
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
-    if not await _can_manage_delegated_target(
-        actor_user_id=callback.from_user.id,
+    actor_id = callback.from_user.id
+    read_only = False
+    if await services.access_service.can_manage_admins(user_id=actor_id, settings=settings):
+        read_only = False
+    elif target_user_id == actor_id and await services.access_service.is_delegated_admin(actor_id):
+        read_only = True
+    elif await _can_manage_delegated_target(
+        actor_user_id=actor_id,
         target_user_id=target_user_id,
         settings=settings,
         services=services,
     ):
+        read_only = False
+    else:
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
     await _render_delegated_detail(
@@ -946,6 +989,7 @@ async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, se
         settings=settings,
         target_user_id=target_user_id,
         lang=lang,
+        read_only=read_only,
     )
     await callback.answer()
 

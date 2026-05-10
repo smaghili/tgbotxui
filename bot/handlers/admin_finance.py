@@ -352,7 +352,7 @@ async def _format_today_sale_line(
         row_label = to_persian_digits(row_label)
         traffic_label = to_persian_digits(traffic_label)
         expiry_label = to_persian_digits(expiry_label)
-    if actor_user_id == report_user_id or services.access_service.is_root_admin(actor_user_id, settings):
+    if services.access_service.is_root_admin(actor_user_id, settings):
         amount_label = t("finance_amount_unknown", lang)
 
     if operation == "create_client":
@@ -519,6 +519,17 @@ async def _answer_today_sales(
         await message.answer(t("finance_today_sales_empty", lang))
         return
 
+    currency = str(rows[0].get("currency") or t("finance_currency_default", lang))
+    total_sales_raw = sum(abs(int(r.get("amount") or 0)) for r in rows)
+    total_line = t(
+        "finance_today_sales_total_line",
+        lang,
+        total=_format_amount(total_sales_raw),
+        currency=currency,
+    )
+    title_line = t("finance_today_sales_title", lang)
+    header_block = f"{title_line}\n\n{total_line}"
+
     lines = [
         await _format_today_sale_line(
             item,
@@ -530,13 +541,12 @@ async def _answer_today_sales(
         )
         for index, item in enumerate(rows, start=1)
     ]
-    header = t("finance_today_sales_title", lang)
-    buffer = header
+    buffer = header_block
     for line in lines:
-        candidate = f"{buffer}\n\n{line}" if buffer != header else f"{header}\n\n{line}"
-        if len(candidate) > 3500 and buffer != header:
+        candidate = f"{buffer}\n\n{line}" if buffer != header_block else f"{header_block}\n\n{line}"
+        if len(candidate) > 3500 and buffer != header_block:
             await message.answer(buffer)
-            buffer = f"{header}\n\n{line}"
+            buffer = f"{header_block}\n\n{line}"
         else:
             buffer = candidate
     await message.answer(buffer)
@@ -1056,6 +1066,22 @@ async def finance_delegated_list_close(callback: CallbackQuery, settings: Settin
     lang = await services.db.get_user_language(callback.from_user.id)
     if callback.message is not None:
         await callback.message.edit_text(t("finance_delegated_title", lang))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fin:delegated:back")
+async def finance_delegated_back(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    text, reply_markup = await _finance_menu_text_and_keyboard(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+    if callback.message is not None:
+        await callback.message.answer(text, reply_markup=reply_markup)
     await callback.answer()
 
 

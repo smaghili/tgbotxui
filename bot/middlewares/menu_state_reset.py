@@ -39,6 +39,7 @@ class MenuStateResetMiddleware(BaseMiddleware):
             *button_variants("finance_delegates_list"),
             *button_variants("finance_today_sales"),
             *button_variants("finance_today_reports"),
+            *button_variants("admin_delegated_details"),
             *button_variants("btn_cancel"),
             *button_variants("btn_cancel_operation"),
         }
