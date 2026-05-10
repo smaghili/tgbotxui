@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import time
 
+from typing import Any
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -47,6 +49,57 @@ async def _finex_owned_client_flat_rows(*, services: ServiceContainer, delegate_
             )
     rows.sort(key=lambda r: (int(r["panel_id"]), int(r["inbound_id"]), str(r["email"]).lower()))
     return rows
+
+
+def _parse_finex_name_tokens(raw: str) -> list[str]:
+    parts: list[str] = []
+    for chunk in raw.replace("\n", ",").split(","):
+        s = chunk.strip()
+        if s:
+            parts.append(s)
+    return parts
+
+
+def _match_email_token(email: str, token: str) -> bool:
+    t = token.strip().lower()
+    e = email.strip().lower()
+    if not t or not e:
+        return False
+    local, _, _ = e.partition("@")
+    if local == t:
+        return True
+    return t in e
+
+
+async def _search_clients_by_email_tokens(
+    services: ServiceContainer, tokens: list[str]
+) -> list[dict[str, Any]]:
+    if not tokens:
+        return []
+    seen: set[tuple[int, int, str]] = set()
+    out: list[dict[str, Any]] = []
+    for panel in await services.panel_service.list_panels():
+        pid = int(panel["id"])
+        try:
+            rows = await services.panel_service.list_clients(pid)
+        except Exception:
+            continue
+        for row in rows:
+            email = str(row.get("email") or "").strip()
+            if not email:
+                continue
+            if not any(_match_email_token(email, tok) for tok in tokens):
+                continue
+            uid = str(row.get("uuid") or "").strip()
+            ib = int(row.get("inbound_id") or 0)
+            if not uid or ib <= 0:
+                continue
+            key = (pid, ib, uid)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"panel_id": pid, "inbound_id": ib, "uuid": uid, "email": email})
+    return out
 
 
 def _format_gb_exact(value: float | int) -> str:
@@ -1611,7 +1664,15 @@ async def delegated_finex_remain_menu(
         await callback.message.edit_text(
             t("admin_delegated_finex_clients_empty", lang),
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")]]
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=t("admin_delegated_finex_bulk_btn", lang),
+                            callback_data=f"dag:fxrmb:{delegate_id}",
+                        ),
+                    ],
+                    [InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")],
+                ]
             ),
         )
         if answer_notify is not None:
@@ -1643,6 +1704,15 @@ async def delegated_finex_remain_menu(
         nav.append(InlineKeyboardButton(text="▶", callback_data=f"dag:fxcr:{delegate_id}:{page + 1}"))
     if nav:
         buttons.append(nav)
+    buttons.insert(
+        0,
+        [
+            InlineKeyboardButton(
+                text=t("admin_delegated_finex_bulk_btn", lang),
+                callback_data=f"dag:fxrmb:{delegate_id}",
+            ),
+        ],
+    )
     buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")])
     await callback.message.edit_text(
         t(
@@ -1657,6 +1727,150 @@ async def delegated_finex_remain_menu(
         await callback.answer(answer_notify)
     else:
         await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dag:fxrmb:"))
+async def delegated_finex_remain_bulk_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        delegate_id = int(callback.data.split(":", 2)[2])
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=delegate_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    delegated = await services.db.get_delegated_admin_by_user_id(delegate_id)
+    if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
+        await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
+        return
+    await state.set_state(DelegatedAdminStates.waiting_finex_remain_bulk_tokens)
+    await state.update_data(finex_remain_bulk_delegate_id=delegate_id)
+    await callback.message.answer(t("admin_delegated_finex_bulk_prompt", lang))
+    await callback.answer()
+
+
+@router.message(DelegatedAdminStates.waiting_finex_remain_bulk_tokens)
+async def delegated_finex_remain_bulk_receive(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await _reject_if_not_full_admin(message, settings, services):
+        return
+    lang = await services.db.get_user_language(message.from_user.id)
+    data = await state.get_data()
+    delegate_id = int(data.get("finex_remain_bulk_delegate_id") or 0)
+    if delegate_id <= 0:
+        await state.clear()
+        await message.answer(t("admin_invalid_data", lang))
+        return
+    tokens = _parse_finex_name_tokens(message.text or "")
+    if not tokens:
+        await message.answer(t("admin_delegated_finex_bulk_none", lang))
+        return
+    hits = await _search_clients_by_email_tokens(services, tokens)
+    if not hits:
+        await message.answer(t("admin_delegated_finex_bulk_none", lang))
+        return
+    sample_n = 40
+    lines = [f"{i + 1}. {h['email']}" for i, h in enumerate(hits[:sample_n])]
+    rest = len(hits) - sample_n
+    if rest > 0:
+        lines.append(f"... +{rest}")
+    body = "\n".join(lines)
+    preview = t(
+        "admin_delegated_finex_bulk_preview",
+        lang,
+        count=len(hits),
+        list=body,
+    )
+    await state.update_data(finex_remain_bulk_hits=hits)
+    await state.set_state(DelegatedAdminStates.waiting_finex_remain_bulk_confirm)
+    await message.answer(
+        preview,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"dag:fxrmy:{delegate_id}"),
+                    InlineKeyboardButton(text=t("btn_no", lang), callback_data=f"dag:fxrmn:{delegate_id}"),
+                ],
+            ]
+        ),
+    )
+
+
+@router.callback_query(DelegatedAdminStates.waiting_finex_remain_bulk_confirm, F.data.startswith("dag:fxrmy:"))
+async def delegated_finex_remain_bulk_yes(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        delegate_cb = int(callback.data.split(":", 2)[2])
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    data = await state.get_data()
+    delegate_id = int(data.get("finex_remain_bulk_delegate_id") or 0)
+    hits = data.get("finex_remain_bulk_hits")
+    if delegate_cb != delegate_id or not isinstance(hits, list):
+        await state.clear()
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    for item in hits:
+        await services.db.add_delegate_finance_exclude_client_remaining(
+            delegate_user_id=delegate_id,
+            panel_id=int(item["panel_id"]),
+            inbound_id=int(item["inbound_id"]),
+            client_uuid=str(item["uuid"]),
+        )
+    await state.clear()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(t("admin_delegated_finex_bulk_done", lang, count=len(hits)))
+    await callback.answer()
+
+
+@router.callback_query(DelegatedAdminStates.waiting_finex_remain_bulk_confirm, F.data.startswith("dag:fxrmn:"))
+async def delegated_finex_remain_bulk_no(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    await state.clear()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(t("admin_delegated_finex_bulk_cancelled", lang))
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dag:fxcrt:"))

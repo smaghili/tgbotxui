@@ -1487,10 +1487,6 @@ class AdminProvisioningService:
                 "scope_user_ids": [],
             }
         owner_id_set = {str(owner_id) for owner_id in owner_ids}
-        context = await self.access_service.get_admin_context(actor_user_id, settings)
-        traffic_owner_only = context.is_delegated_admin and context.delegated_scope == "full"
-        traffic_owner_id_set = {str(actor_user_id)} if traffic_owner_only else owner_id_set
-        subordinate_traffic_consumed_bytes = 0
         delegate_finance_excluded_used_bytes = 0
         seen: set[tuple[int, int, str]] = set()
         clients_count = 0
@@ -1580,7 +1576,7 @@ class AdminProvisioningService:
                     if (
                         fin_tag == "moaf"
                         and comment_owner_id is not None
-                        and str(comment_owner_id) in traffic_owner_id_set
+                        and str(comment_owner_id) in owner_id_set
                     ):
                         delegate_finance_excluded_used_bytes += client_used_bytes
                         continue
@@ -1605,7 +1601,7 @@ class AdminProvisioningService:
                         client_used_bytes = max(0, int(usage.get("used") or 0))
                         count, billable_total_bytes, billable_used_bytes, billable_remaining_bytes = _billable_segment_totals(
                             segments=segments,
-                            owner_id_set=traffic_owner_id_set,
+                            owner_id_set=owner_id_set,
                             current_total_bytes=client_total_bytes,
                             used_bytes=client_used_bytes,
                         )
@@ -1625,11 +1621,7 @@ class AdminProvisioningService:
                     if comment == "" or comment in root_admin_id_set:
                         continue
 
-                    if str(comment_owner_id or "") not in traffic_owner_id_set:
-                        if traffic_owner_only and comment_owner_id is not None:
-                            sub_id = str(comment_owner_id)
-                            if sub_id in owner_id_set and sub_id != str(actor_user_id):
-                                subordinate_traffic_consumed_bytes += client_used_bytes
+                    if str(comment_owner_id or "") not in owner_id_set:
                         continue
                     if key in seen:
                         continue
@@ -1684,7 +1676,6 @@ class AdminProvisioningService:
                 0,
                 panel_total_consumed_bytes
                 - root_created_consumed_bytes
-                - subordinate_traffic_consumed_bytes
                 - delegate_finance_excluded_used_bytes
                 + billable_segment_consumed_bytes,
             )

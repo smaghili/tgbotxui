@@ -635,6 +635,18 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Clients: unused traffic not counted for primary delegate\nPage {page} of {pages}\n✅ excluded from remaining | ⬜ normal",
     },
     "admin_delegated_finex_clients_empty": {"fa": "کاربری با مالکیت این نماینده پیدا نشد.", "en": "No clients owned by this delegate."},
+    "admin_delegated_finex_bulk_btn": {"fa": "📝 ورود نام‌ها با متن", "en": "📝 Paste names"},
+    "admin_delegated_finex_bulk_prompt": {
+        "fa": "نام کاربر (قبل از @ ایمیل) یا بخشی از ایمیل را با ویرگول جدا بفرستید.\nمثال: Ali,hosein2,Ms.f",
+        "en": "Send comma-separated local names (before @) or email fragments.\nExample: Ali,hosein2,Ms.f",
+    },
+    "admin_delegated_finex_bulk_none": {"fa": "هیچ کاربری با این عبارات پیدا نشد. دوباره بفرستید یا انصراف با /cancel", "en": "No clients matched. Send again or cancel."},
+    "admin_delegated_finex_bulk_preview": {
+        "fa": "{count} کاربر پیدا شد:\n{list}\n\nماندهٔ حجم مصرف‌نشدهٔ این‌ها از گزارش مالی این نماینده حذف شود؟",
+        "en": "{count} client(s) found:\n{list}\n\nExclude their unused remaining traffic from this delegate's finance summary?",
+    },
+    "admin_delegated_finex_bulk_done": {"fa": "برای {count} کاربر اعمال شد.", "en": "Applied for {count} client(s)."},
+    "admin_delegated_finex_bulk_cancelled": {"fa": "لغو شد.", "en": "Cancelled."},
     "admin_delegated_finex_toggled": {"fa": "ذخیره شد.", "en": "Saved."},
     "admin_delegated_report": {"fa": "گزارش 📊", "en": "Report 📊"},
     "admin_delegated_parent": {"fa": "نماینده اصلی 🔗", "en": "Parent Delegate 🔗"},
