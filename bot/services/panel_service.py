@@ -247,16 +247,9 @@ class PanelService:
         owner_raw = value.split(":", 1)[0].strip()
         return int(owner_raw) if owner_raw.isdigit() else None
 
-    @staticmethod
-    def _is_moaf_comment(comment: str) -> bool:
-        parts = [part.strip().lower() for part in comment.split(":")]
-        return len(parts) >= 2 and parts[1] == "moaf"
-
     @classmethod
     def _owner_id_for_client(cls, *, mapped_owner_id: int | None, comment: str) -> int | None:
         comment_owner_id = cls._owner_id_from_comment(comment)
-        if comment_owner_id is not None and cls._is_moaf_comment(comment):
-            return comment_owner_id
         return mapped_owner_id or comment_owner_id
 
 

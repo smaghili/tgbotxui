@@ -3,7 +3,6 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 
 from bot.config import (
-    _parse_moaf_min_traffic_gb,
     _parse_proxy_list,
     _parse_sub_url_base_overrides,
     _parse_sub_url_strip_port_rules,
@@ -37,10 +36,6 @@ class ConfigAndVlessTests(unittest.TestCase):
             _parse_sub_url_base_overrides("1=http://sub.goldoonam.shop/sub,\n3xui|https://cdn.example.com/sub"),
             {"1": "http://sub.goldoonam.shop/sub", "3xui": "https://cdn.example.com/sub"},
         )
-
-    def test_parse_moaf_min_traffic_gb(self) -> None:
-        self.assertEqual(_parse_moaf_min_traffic_gb("5"), 5 * 1024 ** 3)
-        self.assertEqual(_parse_moaf_min_traffic_gb("bad"), 0)
 
     def test_extract_uuid_from_vless_uri(self) -> None:
         uri = "vless://0b8ca9c6-9f47-42d5-971f-af595efd842b@example.com:443?encryption=none#test"
@@ -200,13 +195,13 @@ class PanelServiceVlessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(service.is_subscription_enabled_for_panel({"id": 1, "name": "panel-one"}))
         self.assertFalse(service.is_subscription_enabled_for_panel({"id": 2, "name": "panel-two"}))
 
-    def test_owner_id_from_comment_supports_moaf_marker(self) -> None:
+    def test_owner_id_from_comment_supports_colon_suffix(self) -> None:
         self.assertEqual(PanelService._owner_id_from_comment("55:Moaf"), 55)
 
-    def test_moaf_comment_owner_overrides_stale_owner_mapping(self) -> None:
+    def test_owner_mapping_takes_precedence_over_comment(self) -> None:
         self.assertEqual(
             PanelService._owner_id_for_client(mapped_owner_id=1, comment="55:Moaf"),
-            55,
+            1,
         )
 
 

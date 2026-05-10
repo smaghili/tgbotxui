@@ -794,3 +794,7 @@ class FinancialService:
             "total_transactions": int(tx["total_transactions"] or 0),
             "pricing_profiles": int(pricing["pricing_profiles"] or 0),
         }
+
+    async def clear_wallet_ledger_for_user(self, *, telegram_user_id: int) -> None:
+        await self.ensure_wallet(telegram_user_id)
+        await self.db.clear_wallet_ledger_for_user(telegram_user_id)

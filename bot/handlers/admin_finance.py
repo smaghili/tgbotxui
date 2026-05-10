@@ -74,19 +74,29 @@ def _finance_delegates_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _wallet_action_keyboard(target_user_id: int, lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def _wallet_action_keyboard(
+    target_user_id: int, lang: str | None = None, *, show_reset: bool = False
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text=t("btn_wallet_show", lang), callback_data=f"fin:wallet:show:{target_user_id}"),
+            InlineKeyboardButton(text=t("btn_wallet_set", lang), callback_data=f"fin:wallet:set:{target_user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_wallet_add", lang), callback_data=f"fin:wallet:add:{target_user_id}"),
+            InlineKeyboardButton(text=t("btn_wallet_subtract", lang), callback_data=f"fin:wallet:sub:{target_user_id}"),
+        ],
+    ]
+    if show_reset:
+        rows.append(
             [
-                InlineKeyboardButton(text=t("btn_wallet_show", lang), callback_data=f"fin:wallet:show:{target_user_id}"),
-                InlineKeyboardButton(text=t("btn_wallet_set", lang), callback_data=f"fin:wallet:set:{target_user_id}"),
-            ],
-            [
-                InlineKeyboardButton(text=t("btn_wallet_add", lang), callback_data=f"fin:wallet:add:{target_user_id}"),
-                InlineKeyboardButton(text=t("btn_wallet_subtract", lang), callback_data=f"fin:wallet:sub:{target_user_id}"),
-            ],
-        ]
-    )
+                InlineKeyboardButton(
+                    text=t("finance_wallet_reset_btn", lang),
+                    callback_data=f"fin:wallet:rst:{target_user_id}",
+                ),
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _pricing_history_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
@@ -1164,9 +1174,117 @@ async def finance_wallet_target_input(message: Message, state: FSMContext, setti
     summary = await _wallet_target_summary_text(target_user_id=target_user_id, services=services, lang=lang)
     await message.answer(
         f"{summary}\n\n{t('finance_choose_wallet_action', lang)}",
-        reply_markup=_wallet_action_keyboard(target_user_id, lang),
+        reply_markup=_wallet_action_keyboard(
+            target_user_id,
+            lang,
+            show_reset=services.access_service.is_root_admin(message.from_user.id, settings),
+        ),
     )
     await state.clear()
+
+
+@router.callback_query(F.data.startswith("fin:wallet:rsa:"))
+async def finance_wallet_reset_apply(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if not services.access_service.is_root_admin(callback.from_user.id, settings):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    try:
+        target_user_id = int(callback.data.rsplit(":", 1)[-1])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_finance_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    await services.financial_service.clear_wallet_ledger_for_user(telegram_user_id=target_user_id)
+    summary = await _wallet_target_summary_text(target_user_id=target_user_id, services=services, lang=lang)
+    await callback.message.answer(
+        f"{t('finance_wallet_reset_done', lang)}\n\n{summary}\n\n{t('finance_choose_wallet_action', lang)}",
+        reply_markup=_wallet_action_keyboard(target_user_id, lang, show_reset=True),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("fin:wallet:rno:"))
+async def finance_wallet_reset_cancel(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        target_user_id = int(callback.data.rsplit(":", 1)[-1])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_finance_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    summary = await _wallet_target_summary_text(target_user_id=target_user_id, services=services, lang=lang)
+    await callback.message.answer(
+        f"{summary}\n\n{t('finance_choose_wallet_action', lang)}",
+        reply_markup=_wallet_action_keyboard(
+            target_user_id,
+            lang,
+            show_reset=services.access_service.is_root_admin(callback.from_user.id, settings),
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("fin:wallet:rst:"))
+async def finance_wallet_reset_prompt(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if not services.access_service.is_root_admin(callback.from_user.id, settings):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    try:
+        target_user_id = int(callback.data.rsplit(":", 1)[-1])
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_finance_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    await callback.message.answer(
+        t("finance_wallet_reset_confirm", lang),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"fin:wallet:rsa:{target_user_id}"),
+                    InlineKeyboardButton(text=t("btn_no", lang), callback_data=f"fin:wallet:rno:{target_user_id}"),
+                ],
+            ]
+        ),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("fin:wallet:"))
@@ -1195,7 +1313,11 @@ async def finance_wallet_action(callback: CallbackQuery, state: FSMContext, sett
         summary = await _wallet_target_summary_text(target_user_id=target_user_id, services=services, lang=lang)
         await callback.message.answer(
             f"{summary}\n\n{t('finance_choose_wallet_action', lang)}",
-            reply_markup=_wallet_action_keyboard(target_user_id, lang),
+            reply_markup=_wallet_action_keyboard(
+                target_user_id,
+                lang,
+                show_reset=services.access_service.is_root_admin(callback.from_user.id, settings),
+            ),
         )
         await callback.answer()
         return

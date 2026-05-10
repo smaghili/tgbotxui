@@ -1214,6 +1214,183 @@ class Database:
             for row in rows
         }
 
+    async def list_moaf_resume_delegate_caps_for_panel(self, panel_id: int) -> dict[tuple[int, str, int], int]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT inbound_id, client_uuid, delegate_user_id, cap_total_bytes
+            FROM moaf_resume_delegate_caps
+            WHERE panel_id=?;
+            """,
+            (panel_id,),
+        )
+        rows = await cur.fetchall()
+        return {
+            (int(row["inbound_id"]), str(row["client_uuid"]), int(row["delegate_user_id"])): max(
+                0, int(row["cap_total_bytes"] or 0)
+            )
+            for row in rows
+        }
+
+    async def insert_moaf_resume_delegate_cap_if_missing(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        delegate_user_id: int,
+        cap_total_bytes: int,
+    ) -> None:
+        assert self.conn is not None
+        cap = max(0, int(cap_total_bytes))
+        await self.conn.execute(
+            """
+            INSERT INTO moaf_resume_delegate_caps (
+                panel_id, inbound_id, client_uuid, delegate_user_id, cap_total_bytes
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(panel_id, inbound_id, client_uuid, delegate_user_id) DO NOTHING;
+            """,
+            (panel_id, inbound_id, client_uuid, delegate_user_id, cap),
+        )
+        await self.conn.commit()
+
+    async def get_moaf_resume_delegate_cap(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        delegate_user_id: int,
+    ) -> int | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT cap_total_bytes
+            FROM moaf_resume_delegate_caps
+            WHERE panel_id=? AND inbound_id=? AND client_uuid=? AND delegate_user_id=?
+            LIMIT 1;
+            """,
+            (panel_id, inbound_id, client_uuid, delegate_user_id),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return max(0, int(row["cap_total_bytes"] or 0))
+
+    async def list_delegate_finance_excluded_inbounds(self, delegate_user_id: int) -> set[tuple[int, int]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT panel_id, inbound_id
+            FROM delegate_finance_excluded_inbounds
+            WHERE delegate_user_id=?;
+            """,
+            (delegate_user_id,),
+        )
+        rows = await cur.fetchall()
+        return {(int(row["panel_id"]), int(row["inbound_id"])) for row in rows}
+
+    async def add_delegate_finance_excluded_inbound(
+        self,
+        *,
+        delegate_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegate_finance_excluded_inbounds (delegate_user_id, panel_id, inbound_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(delegate_user_id, panel_id, inbound_id) DO NOTHING;
+            """,
+            (delegate_user_id, panel_id, inbound_id),
+        )
+        await self.conn.commit()
+
+    async def remove_delegate_finance_excluded_inbound(
+        self,
+        *,
+        delegate_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            DELETE FROM delegate_finance_excluded_inbounds
+            WHERE delegate_user_id=? AND panel_id=? AND inbound_id=?;
+            """,
+            (delegate_user_id, panel_id, inbound_id),
+        )
+        await self.conn.commit()
+
+    async def list_delegate_finance_exclude_client_remaining(
+        self, delegate_user_id: int
+    ) -> set[tuple[int, int, str]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT panel_id, inbound_id, client_uuid
+            FROM delegate_finance_exclude_client_remaining
+            WHERE delegate_user_id=?;
+            """,
+            (delegate_user_id,),
+        )
+        rows = await cur.fetchall()
+        return {(int(row["panel_id"]), int(row["inbound_id"]), str(row["client_uuid"])) for row in rows}
+
+    async def add_delegate_finance_exclude_client_remaining(
+        self,
+        *,
+        delegate_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegate_finance_exclude_client_remaining (
+                delegate_user_id, panel_id, inbound_id, client_uuid
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(delegate_user_id, panel_id, inbound_id, client_uuid) DO NOTHING;
+            """,
+            (delegate_user_id, panel_id, inbound_id, client_uuid),
+        )
+        await self.conn.commit()
+
+    async def remove_delegate_finance_exclude_client_remaining(
+        self,
+        *,
+        delegate_user_id: int,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            DELETE FROM delegate_finance_exclude_client_remaining
+            WHERE delegate_user_id=? AND panel_id=? AND inbound_id=? AND client_uuid=?;
+            """,
+            (delegate_user_id, panel_id, inbound_id, client_uuid),
+        )
+        await self.conn.commit()
+
+    async def clear_wallet_ledger_for_user(self, telegram_user_id: int) -> None:
+        assert self.conn is not None
+        await self.conn.execute("DELETE FROM wallet_transactions WHERE telegram_user_id=?;", (telegram_user_id,))
+        await self.conn.execute(
+            """
+            UPDATE user_wallets
+            SET balance=0, updated_at=CURRENT_TIMESTAMP
+            WHERE telegram_user_id=?;
+            """,
+            (telegram_user_id,),
+        )
+        await self.conn.commit()
+
     async def add_moaf_client_traffic_segment(
         self,
         *,

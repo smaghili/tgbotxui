@@ -109,6 +109,12 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "کیف پول بروزرسانی شد.\nموجودی جدید: {balance} {currency}",
         "en": "Wallet updated.\nNew balance: {balance} {currency}",
     },
+    "finance_wallet_reset_btn": {"fa": "صفر کردن فروش و حساب ⚠️", "en": "Reset sales & wallet ⚠️"},
+    "finance_wallet_reset_confirm": {
+        "fa": "همهٔ تراکنش‌های کیف پول این کاربر پاک و موجودی صفر می‌شود. مطمئنید؟",
+        "en": "All wallet transactions for this user will be deleted and balance set to zero. Continue?",
+    },
+    "finance_wallet_reset_done": {"fa": "کیف پول و تاریخچهٔ تراکنش‌ها صفر شد.", "en": "Wallet balance and transaction history were cleared."},
     "finance_enter_price_per_gb": {
         "fa": "قیمت هر گیگ را وارد کنید.\nبرای پلکانی: base,5=amount,10=amount\nنمونه: 200000,5=800000,10=1500000",
         "en": "Enter per-GB price.\nFor tiered pricing: base,5=amount,10=amount\nExample: 200000,5=800000,10=1500000",
@@ -613,6 +619,23 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_min_days": {"fa": "حداقل خرید زمان 🕘", "en": "Min Days 🕘"},
     "admin_delegated_max_days": {"fa": "حداکثر خرید زمان ⏱", "en": "Max Days ⏱"},
     "admin_delegated_wallet": {"fa": "کیف پول 👛", "en": "Wallet 👛"},
+    "admin_delegated_finex_inbounds_btn": {"fa": "اینباند معاف از مالی 📡", "en": "Exclude inbound 📡"},
+    "admin_delegated_finex_remain_btn": {"fa": "مانده غیرمحاسبه 👤", "en": "Exclude unused 👤"},
+    "admin_delegated_finex_primary_only": {
+        "fa": "این بخش فقط برای نماینده اصلی (بدون والد) است.",
+        "en": "This section is only for the primary delegate (no parent).",
+    },
+    "admin_delegated_finex_inbounds_title": {
+        "fa": "اینباندهای خارج از حساب مالی نماینده اصلی\nصفحه {page} از {pages}\n✅ معاف | ⬜ حساب می‌شود — روی ردیف بزنید.",
+        "en": "Inbounds excluded from primary delegate finance\nPage {page} of {pages}\n✅ excluded | ⬜ counted — tap row to toggle.",
+    },
+    "admin_delegated_finex_inbounds_empty": {"fa": "هیچ اینباندی روی پنل نیست.", "en": "No inbounds found on panels."},
+    "admin_delegated_finex_clients_title": {
+        "fa": "کاربران: ماندهٔ حجم مصرف‌نشده در حساب نماینده اصلی حساب نشود\nصفحه {page} از {pages}\n✅ مانده حذف از گزارش | ⬜ عادی",
+        "en": "Clients: unused traffic not counted for primary delegate\nPage {page} of {pages}\n✅ excluded from remaining | ⬜ normal",
+    },
+    "admin_delegated_finex_clients_empty": {"fa": "کاربری با مالکیت این نماینده پیدا نشد.", "en": "No clients owned by this delegate."},
+    "admin_delegated_finex_toggled": {"fa": "ذخیره شد.", "en": "Saved."},
     "admin_delegated_report": {"fa": "گزارش 📊", "en": "Report 📊"},
     "admin_delegated_parent": {"fa": "نماینده اصلی 🔗", "en": "Parent Delegate 🔗"},
     "admin_delegated_parent_root": {"fa": "اتصال به روت 👑", "en": "Attach To Root 👑"},

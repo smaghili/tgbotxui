@@ -20,12 +20,6 @@ if TYPE_CHECKING:
     from bot.services.usage_service import UsageService
 
 logger = logging.getLogger(__name__)
-MOAF_COMMENT_MARKER = "Moaf"
-
-
-def _is_moaf_comment(comment: str) -> bool:
-    parts = [part.strip().lower() for part in comment.split(":")]
-    return len(parts) >= 2 and parts[1] == MOAF_COMMENT_MARKER.lower()
 
 
 def _owner_id_from_comment(comment: str) -> int | None:
@@ -33,13 +27,16 @@ def _owner_id_from_comment(comment: str) -> int | None:
     return int(owner_raw) if owner_raw.isdigit() else None
 
 
-def _is_moaf_traffic_operation(*, actor_user_id: int, settings: Settings, add_gb: float) -> bool:
-    min_traffic_bytes = int(getattr(settings, "moaf_min_traffic_bytes", 0) or 0)
-    return (
-        actor_user_id in getattr(settings, "moaf_admin_ids", set())
-        and min_traffic_bytes > 0
-        and gb_to_bytes(add_gb) >= min_traffic_bytes
-    )
+def _delegate_finance_comment_tag(comment: str) -> str | None:
+    raw = comment.strip()
+    if ":" not in raw:
+        return None
+    tail = raw.split(":", 1)[1].strip()
+    if tail.lower() == "moafresume":
+        return "moafresume"
+    if tail.lower() == "moaf":
+        return "moaf"
+    return None
 
 
 def _billable_segment_totals(
@@ -78,7 +75,6 @@ def _valid_report_segments(
     *,
     segments: list[dict[str, Any]],
     comment: str,
-    exemption: dict[str, Any] | None,
     root_admin_id_set: set[str],
 ) -> list[dict[str, Any]]:
     if not segments:
@@ -89,16 +85,7 @@ def _valid_report_segments(
         if str(segment.get("source") or "") != "parent_detach_snapshot":
             valid_segments.append(segment)
             continue
-        owner_user_id = int(segment.get("owner_user_id") or 0)
-        if exemption is not None and int(exemption.get("owner_user_id") or 0) == owner_user_id:
-            capped = dict(segment)
-            capped["end_bytes"] = min(
-                max(0, int(segment.get("end_bytes") or 0)),
-                max(0, int(exemption.get("exempt_after_bytes") or 0)),
-            )
-            valid_segments.append(capped)
-            continue
-        if comment_owner_id is None or str(comment_owner_id) in root_admin_id_set or _is_moaf_comment(comment):
+        if comment_owner_id is None or str(comment_owner_id) in root_admin_id_set:
             consumed_only = dict(segment)
             consumed_only["_consumed_only"] = True
             valid_segments.append(consumed_only)
@@ -242,78 +229,6 @@ class AdminProvisioningService:
             notification_kind=action_key,
         )
 
-    async def _notify_root_special_purchase(
-        self,
-        *,
-        actor_user_id: int,
-        settings: Settings,
-        client_email: str,
-        panel_id: int,
-        inbound_id: int,
-        total_gb: float,
-        expiry_days: int,
-    ) -> None:
-        if self.usage_service is None:
-            return
-        lang = await self.db.get_user_language(actor_user_id)
-        actor = await self._actor_display_name(actor_user_id)
-        panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
-        text = (
-            "**خرید ویژه**\n"
-            + build_admin_activity_notice(
-                lang=lang,
-                actor=actor,
-                action_text=t("admin_activity_action_create_client", lang),
-                user=client_email,
-                panel=panel_name,
-                inbound=inbound_name,
-                details=[
-                    t("admin_activity_detail_amount_gb", lang, value=total_gb),
-                    t("admin_activity_detail_amount_days", lang, value=expiry_days),
-                ],
-            )
-            + f"\nزمان: {now_jalali_datetime(settings.timezone)}"
-        )
-        await self.usage_service.notify_root_admin_activity(
-            actor_user_id=actor_user_id,
-            text=text,
-            notification_kind="admin_activity_action_create_client",
-        )
-
-    async def _notify_root_special_add_traffic(
-        self,
-        *,
-        actor_user_id: int,
-        settings: Settings,
-        client_email: str,
-        panel_id: int,
-        inbound_id: int,
-        add_gb: float,
-    ) -> None:
-        if self.usage_service is None:
-            return
-        lang = await self.db.get_user_language(actor_user_id)
-        actor = await self._actor_display_name(actor_user_id)
-        panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
-        text = (
-            "**خرید ویژه**\n"
-            + build_admin_activity_notice(
-                lang=lang,
-                actor=actor,
-                action_text=t("admin_activity_action_add_traffic", lang),
-                user=client_email,
-                panel=panel_name,
-                inbound=inbound_name,
-                details=[t("admin_activity_detail_amount_gb", lang, value=add_gb)],
-            )
-            + f"\nزمان: {now_jalali_datetime(settings.timezone)}"
-        )
-        await self.usage_service.notify_root_admin_activity(
-            actor_user_id=actor_user_id,
-            text=text,
-            notification_kind="admin_activity_action_add_traffic",
-        )
-
     async def _managed_ref_from_panel_client(
         self,
         *,
@@ -391,8 +306,6 @@ class AdminProvisioningService:
         segment_loader = getattr(self.db, "get_moaf_client_traffic_segments", None)
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
-            exemption_loader = getattr(self.db, "list_moaf_client_exemptions_for_panel", None)
-            exemptions_by_key = await exemption_loader(panel_id) if exemption_loader is not None else {}
             try:
                 clients = await self.panel_service.list_clients(panel_id, owner_admin_user_id=child_user_id)
             except Exception:
@@ -416,10 +329,7 @@ class AdminProvisioningService:
                     continue
                 total_bytes = max(0, int(detail.get("total") or 0))
                 comment = str(detail.get("comment") or "").strip()
-                exemption = exemptions_by_key.get((inbound_id, client_uuid))
-                if exemption is not None and int(exemption.get("owner_user_id") or 0) == parent_user_id:
-                    total_bytes = min(total_bytes, max(0, int(exemption.get("exempt_after_bytes") or 0)))
-                elif _is_moaf_comment(comment) or _owner_id_from_comment(comment) != child_user_id:
+                if _owner_id_from_comment(comment) != child_user_id:
                     continue
                 if total_bytes <= 0:
                     continue
@@ -466,15 +376,7 @@ class AdminProvisioningService:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         before = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
         charge_tx = None
-        is_moaf_add_traffic = False
-        if _is_moaf_traffic_operation(
-            actor_user_id=actor_user_id,
-            settings=settings,
-            add_gb=add_gb,
-        ):
-            context = await self.access_service.get_admin_context(actor_user_id, settings)
-            is_moaf_add_traffic = context.is_delegated_admin
-        if self.financial_service is not None and not is_moaf_add_traffic:
+        if self.financial_service is not None:
             await self.financial_service.validate_operation_limits(
                 actor_user_id=actor_user_id,
                 settings=settings,
@@ -488,8 +390,6 @@ class AdminProvisioningService:
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
             )
         try:
-            moaf_comment = f"{actor_user_id}:{MOAF_COMMENT_MARKER}" if is_moaf_add_traffic else None
-            moaf_owner_user_id = None
             existing_segments: list[dict[str, Any]] = []
             segment_loader = getattr(self.db, "get_moaf_client_traffic_segments", None)
             if segment_loader is not None:
@@ -498,67 +398,36 @@ class AdminProvisioningService:
                     inbound_id=ref.inbound_id,
                     client_uuid=ref.client_uuid,
                 )
-            legacy_exemption = None
-            legacy_loader = getattr(self.db, "list_moaf_client_exemptions_for_panel", None)
-            if legacy_loader is not None:
-                legacy_exemption = (await legacy_loader(ref.panel_id)).get((ref.inbound_id, ref.client_uuid))
             current_parent_user_id = await self._current_parent_user_id(actor_user_id)
             last_parent_user_id = await self._last_parent_user_id(actor_user_id)
             should_record_segment = (
-                is_moaf_add_traffic
-                or bool(existing_segments)
-                or legacy_exemption is not None
-                or _is_moaf_comment(str(before.get("comment") or ""))
+                bool(existing_segments)
                 or current_parent_user_id is not None
                 or last_parent_user_id is not None
             )
+            owner_user_id_for_segments: int | None = None
             if should_record_segment:
-                moaf_owner_user_id = (
+                owner_user_id_for_segments = (
                     int(existing_segments[0].get("owner_user_id") or 0)
                     if existing_segments
                     else None
                 )
-                if moaf_owner_user_id is None and legacy_exemption is not None:
-                    moaf_owner_user_id = int(legacy_exemption.get("owner_user_id") or 0) or None
-                moaf_owner_user_id = moaf_owner_user_id or await self.db.get_client_owner(
+                owner_user_id_for_segments = owner_user_id_for_segments or await self.db.get_client_owner(
                     panel_id=ref.panel_id,
                     inbound_id=ref.inbound_id,
                     client_uuid=ref.client_uuid,
                 )
-                moaf_owner_user_id = moaf_owner_user_id or _owner_id_from_comment(str(before.get("comment") or ""))
-            if moaf_comment is not None:
-                await self.panel_service.add_client_total_gb(
-                    ref.panel_id,
-                    ref.inbound_id,
-                    ref.client_uuid,
-                    add_gb,
-                    comment=moaf_comment,
+                owner_user_id_for_segments = owner_user_id_for_segments or _owner_id_from_comment(
+                    str(before.get("comment") or "")
                 )
-            else:
-                await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
+            await self.panel_service.add_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, add_gb)
             after = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
             before_total_bytes = max(0, int(before.get("total") or 0))
             after_total_bytes = max(0, int(after.get("total") or 0))
-            if is_moaf_add_traffic and moaf_owner_user_id is not None:
-                await self.db.upsert_moaf_client_exemption(
-                    panel_id=ref.panel_id,
-                    inbound_id=ref.inbound_id,
-                    client_uuid=ref.client_uuid,
-                    owner_user_id=moaf_owner_user_id,
-                    moaf_user_id=actor_user_id,
-                    exempt_after_bytes=before_total_bytes,
-                    client_email=str(after.get("email") or ref.client_email or ""),
-                )
             segment_writer = getattr(self.db, "add_moaf_client_traffic_segment", None)
-            if segment_writer is not None and should_record_segment and moaf_owner_user_id is not None:
+            if segment_writer is not None and should_record_segment and owner_user_id_for_segments is not None:
                 if not existing_segments and before_total_bytes > 0:
-                    was_created_as_moaf = legacy_exemption is None and _is_moaf_comment(str(before.get("comment") or ""))
-                    initial_owner_user_id = current_parent_user_id or moaf_owner_user_id
-                    base_end = (
-                        max(0, int(legacy_exemption.get("exempt_after_bytes") or 0))
-                        if legacy_exemption is not None
-                        else before_total_bytes
-                    )
+                    initial_owner_user_id = current_parent_user_id or owner_user_id_for_segments
                     await segment_writer(
                         panel_id=ref.panel_id,
                         inbound_id=ref.inbound_id,
@@ -566,9 +435,9 @@ class AdminProvisioningService:
                         owner_user_id=initial_owner_user_id,
                         actor_user_id=initial_owner_user_id,
                         start_bytes=0,
-                        end_bytes=min(base_end, before_total_bytes),
-                        is_billable=not was_created_as_moaf,
-                        source="initial_moaf" if was_created_as_moaf else "initial",
+                        end_bytes=before_total_bytes,
+                        is_billable=True,
+                        source="initial",
                         client_email=str(after.get("email") or ref.client_email or ""),
                     )
                 if current_parent_user_id is not None:
@@ -580,20 +449,7 @@ class AdminProvisioningService:
                         actor_user_id=actor_user_id,
                         start_bytes=before_total_bytes,
                         end_bytes=after_total_bytes,
-                        is_billable=not is_moaf_add_traffic,
-                        source="add_traffic",
-                        client_email=str(after.get("email") or ref.client_email or ""),
-                    )
-                elif is_moaf_add_traffic:
-                    await segment_writer(
-                        panel_id=ref.panel_id,
-                        inbound_id=ref.inbound_id,
-                        client_uuid=ref.client_uuid,
-                        owner_user_id=moaf_owner_user_id,
-                        actor_user_id=actor_user_id,
-                        start_bytes=before_total_bytes,
-                        end_bytes=after_total_bytes,
-                        is_billable=False,
+                        is_billable=True,
                         source="add_traffic",
                         client_email=str(after.get("email") or ref.client_email or ""),
                     )
@@ -613,25 +469,15 @@ class AdminProvisioningService:
             details=f"gb={add_gb}",
         )
         lang = await self.db.get_user_language(actor_user_id)
-        if is_moaf_add_traffic:
-            await self._notify_root_special_add_traffic(
-                actor_user_id=actor_user_id,
-                settings=settings,
-                client_email=str(after.get("email") or ref.client_email or "-"),
-                panel_id=ref.panel_id,
-                inbound_id=ref.inbound_id,
-                add_gb=add_gb,
-            )
-        else:
-            await self._record_templated_admin_activity(
-                actor_user_id=actor_user_id,
-                settings=settings,
-                action_key="admin_activity_action_add_traffic",
-                user=str(after.get("email") or ref.client_email or "-"),
-                panel_id=ref.panel_id,
-                inbound_id=ref.inbound_id,
-                details=[t("admin_activity_detail_amount_gb", lang, value=add_gb)],
-            )
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_add_traffic",
+            user=str(after.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[t("admin_activity_detail_amount_gb", lang, value=add_gb)],
+        )
         if self.usage_service is not None:
             added_bytes = max(0, int(after.get("total") or 0) - int(before.get("total") or 0))
             if added_bytes > 0:
@@ -1641,6 +1487,11 @@ class AdminProvisioningService:
                 "scope_user_ids": [],
             }
         owner_id_set = {str(owner_id) for owner_id in owner_ids}
+        context = await self.access_service.get_admin_context(actor_user_id, settings)
+        traffic_owner_only = context.is_delegated_admin and context.delegated_scope == "full"
+        traffic_owner_id_set = {str(actor_user_id)} if traffic_owner_only else owner_id_set
+        subordinate_traffic_consumed_bytes = 0
+        delegate_finance_excluded_used_bytes = 0
         seen: set[tuple[int, int, str]] = set()
         clients_count = 0
         allocated_bytes = 0
@@ -1648,14 +1499,33 @@ class AdminProvisioningService:
         remaining_bytes = 0
         panel_total_consumed_bytes = 0
         root_created_consumed_bytes = 0
-        billable_moaf_consumed_bytes = 0
+        billable_segment_consumed_bytes = 0
         root_admin_id_set = {str(admin_id) for admin_id in settings.admin_ids}
+        excluded_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
+        excluded_inbounds: set[tuple[int, int]] = set()
+        if excluded_loader is not None:
+            try:
+                excluded_inbounds = await excluded_loader(actor_user_id)
+            except Exception:
+                excluded_inbounds = set()
+        exclude_remaining_fn = getattr(self.db, "list_delegate_finance_exclude_client_remaining", None)
+        exclude_remaining_keys: set[tuple[int, int, str]] = set()
+        if exclude_remaining_fn is not None:
+            try:
+                exclude_remaining_keys = await exclude_remaining_fn(actor_user_id)
+            except Exception:
+                exclude_remaining_keys = set()
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
-            exemption_loader = getattr(self.db, "list_moaf_client_exemptions_for_panel", None)
-            exemptions_by_key = await exemption_loader(panel_id) if exemption_loader is not None else {}
             segment_loader = getattr(self.db, "list_moaf_client_traffic_segments_for_panel", None)
             segments_by_key = await segment_loader(panel_id) if segment_loader is not None else {}
+            resume_loader = getattr(self.db, "list_moaf_resume_delegate_caps_for_panel", None)
+            resume_caps: dict[tuple[int, str, int], int] = {}
+            if resume_loader is not None:
+                try:
+                    resume_caps = dict(await resume_loader(panel_id))
+                except Exception:
+                    resume_caps = {}
             try:
                 inbounds = await self.panel_service.list_inbounds(panel_id)
             except Exception:
@@ -1699,19 +1569,32 @@ class AdminProvisioningService:
                         continue
                     comment = str(client.get("comment") or "").strip()
                     usage = stats_by_uuid.get(client_uuid, {"used": 0, "total": 0})
+                    client_used_bytes = max(0, int(usage.get("used") or 0))
+                    fin_tag = _delegate_finance_comment_tag(comment)
+                    comment_owner_id = _owner_id_from_comment(comment)
+
+                    if (panel_id, inbound_id) in excluded_inbounds:
+                        delegate_finance_excluded_used_bytes += client_used_bytes
+                        continue
+
+                    if (
+                        fin_tag == "moaf"
+                        and comment_owner_id is not None
+                        and str(comment_owner_id) in traffic_owner_id_set
+                    ):
+                        delegate_finance_excluded_used_bytes += client_used_bytes
+                        continue
+
                     key = (panel_id, inbound_id, client_uuid)
-                    exemption = exemptions_by_key.get((inbound_id, client_uuid))
                     segments = segments_by_key.get((inbound_id, client_uuid), [])
                     segments = _valid_report_segments(
                         segments=segments,
                         comment=comment,
-                        exemption=exemption,
                         root_admin_id_set=root_admin_id_set,
                     )
 
-                    comment_owner_id = _owner_id_from_comment(comment)
                     counted_as_root_created = False
-                    if comment == "" or comment in root_admin_id_set or _is_moaf_comment(comment):
+                    if comment == "" or comment in root_admin_id_set:
                         root_created_consumed_bytes += int(usage.get("used") or 0)
                         counted_as_root_created = True
 
@@ -1722,7 +1605,7 @@ class AdminProvisioningService:
                         client_used_bytes = max(0, int(usage.get("used") or 0))
                         count, billable_total_bytes, billable_used_bytes, billable_remaining_bytes = _billable_segment_totals(
                             segments=segments,
-                            owner_id_set=owner_id_set,
+                            owner_id_set=traffic_owner_id_set,
                             current_total_bytes=client_total_bytes,
                             used_bytes=client_used_bytes,
                         )
@@ -1734,47 +1617,61 @@ class AdminProvisioningService:
                         clients_count += count
                         allocated_bytes += billable_total_bytes
                         consumed_bytes += billable_used_bytes
-                        billable_moaf_consumed_bytes += billable_used_bytes
-                        remaining_bytes += billable_remaining_bytes
-                        continue
-
-                    if exemption is not None:
-                        exemption_owner_id = int(exemption.get("owner_user_id") or 0)
-                        if str(exemption_owner_id) not in owner_id_set:
-                            continue
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        clients_count += 1
-                        client_total_bytes = max(0, int(client.get("totalGB") or 0))
-                        client_used_bytes = max(0, int(usage.get("used") or 0))
-                        billable_limit_bytes = max(0, int(exemption.get("exempt_after_bytes") or 0))
-                        billable_total_bytes = min(client_total_bytes, billable_limit_bytes)
-                        billable_used_bytes = min(client_used_bytes, billable_limit_bytes)
-                        allocated_bytes += billable_total_bytes
-                        consumed_bytes += billable_used_bytes
-                        billable_moaf_consumed_bytes += billable_used_bytes
-                        if billable_total_bytes > 0:
-                            remaining_bytes += max(billable_total_bytes - billable_used_bytes, 0)
+                        billable_segment_consumed_bytes += billable_used_bytes
+                        if key not in exclude_remaining_keys:
+                            remaining_bytes += billable_remaining_bytes
                         continue
 
                     if comment == "" or comment in root_admin_id_set:
                         continue
 
-                    if _is_moaf_comment(comment):
-                        continue
-
-                    if str(comment_owner_id or "") not in owner_id_set:
+                    if str(comment_owner_id or "") not in traffic_owner_id_set:
+                        if traffic_owner_only and comment_owner_id is not None:
+                            sub_id = str(comment_owner_id)
+                            if sub_id in owner_id_set and sub_id != str(actor_user_id):
+                                subordinate_traffic_consumed_bytes += client_used_bytes
                         continue
                     if key in seen:
                         continue
                     seen.add(key)
-                    clients_count += 1
                     client_total_bytes = max(0, int(client.get("totalGB") or 0))
-                    client_used_bytes = max(0, int(usage.get("used") or 0))
+                    if fin_tag == "moafresume" and comment_owner_id is not None:
+                        delegate_uid = int(comment_owner_id)
+                        cap_key = (inbound_id, client_uuid, delegate_uid)
+                        cap = resume_caps.get(cap_key)
+                        if cap is None:
+                            insert_fn = getattr(self.db, "insert_moaf_resume_delegate_cap_if_missing", None)
+                            get_fn = getattr(self.db, "get_moaf_resume_delegate_cap", None)
+                            if insert_fn is not None:
+                                await insert_fn(
+                                    panel_id=panel_id,
+                                    inbound_id=inbound_id,
+                                    client_uuid=client_uuid,
+                                    delegate_user_id=delegate_uid,
+                                    cap_total_bytes=client_total_bytes,
+                                )
+                            if get_fn is not None:
+                                cap = await get_fn(
+                                    panel_id=panel_id,
+                                    inbound_id=inbound_id,
+                                    client_uuid=client_uuid,
+                                    delegate_user_id=delegate_uid,
+                                )
+                            cap = cap if cap is not None else client_total_bytes
+                            resume_caps[cap_key] = cap
+                        effective_total = min(int(cap), client_total_bytes)
+                        delegate_remaining = max(0, effective_total - client_used_bytes)
+                        clients_count += 1
+                        allocated_bytes += effective_total
+                        if key not in exclude_remaining_keys:
+                            remaining_bytes += delegate_remaining
+                        consumed_bytes += client_used_bytes
+                        continue
+
+                    clients_count += 1
                     allocated_bytes += client_total_bytes
                     consumed_bytes += client_used_bytes
-                    if client_total_bytes > 0:
+                    if client_total_bytes > 0 and key not in exclude_remaining_keys:
                         remaining_bytes += max(client_total_bytes - client_used_bytes, 0)
         price_per_gb = int(pricing.get("price_per_gb") or 0)
         allocated_gb = allocated_bytes // (1024 ** 3)
@@ -1785,7 +1682,11 @@ class AdminProvisioningService:
         if charge_basis == "consumed":
             consumed_bytes = max(
                 0,
-                panel_total_consumed_bytes - root_created_consumed_bytes + billable_moaf_consumed_bytes,
+                panel_total_consumed_bytes
+                - root_created_consumed_bytes
+                - subordinate_traffic_consumed_bytes
+                - delegate_finance_excluded_used_bytes
+                + billable_segment_consumed_bytes,
             )
         consumed_gb = float(consumed_bytes) / float(gb_unit) if consumed_bytes > 0 else 0.0
         remaining_gb = float(remaining_bytes) / float(gb_unit) if remaining_bytes > 0 else 0.0
@@ -1863,14 +1764,8 @@ class AdminProvisioningService:
                 if current_count >= max_clients:
                     raise ValueError("delegated admin max clients reached.")
 
-        is_moaf_create = (
-            context.is_delegated_admin
-            and actor_user_id in getattr(settings, "moaf_admin_ids", set())
-            and getattr(settings, "moaf_min_traffic_bytes", 0) > 0
-            and gb_to_bytes(total_gb) >= int(getattr(settings, "moaf_min_traffic_bytes", 0))
-        )
         charge_tx = None
-        if self.financial_service is not None and not is_moaf_create:
+        if self.financial_service is not None:
             charge_tx = await self.financial_service.charge_operation(
                 actor_user_id=actor_user_id,
                 settings=settings,
@@ -1887,7 +1782,7 @@ class AdminProvisioningService:
                 total_gb=total_gb,
                 expiry_days=expiry_days,
                 tg_id=tg_id,
-                comment=f"{actor_user_id}:{MOAF_COMMENT_MARKER}" if is_moaf_create else str(actor_user_id),
+                comment=str(actor_user_id),
             )
         except Exception:
             await self._refund_charge_bundle(
@@ -1924,7 +1819,7 @@ class AdminProvisioningService:
                     actor_user_id=actor_user_id,
                     start_bytes=0,
                     end_bytes=total_bytes,
-                    is_billable=not is_moaf_create,
+                    is_billable=True,
                     source="create_client",
                     client_email=created_email,
                 )
@@ -1994,43 +1889,32 @@ class AdminProvisioningService:
             success=True,
             details=f"panel={panel_id};inbound={inbound_id};email={client_email}",
         )
-        if is_moaf_create:
-            await self._notify_root_special_purchase(
-                actor_user_id=actor_user_id,
-                settings=settings,
-                client_email=client_email,
-                panel_id=panel_id,
-                inbound_id=inbound_id,
-                total_gb=total_gb,
-                expiry_days=expiry_days,
-            )
-        else:
-            lang = await self.db.get_user_language(actor_user_id)
-            actor = await self._actor_display_name(actor_user_id)
-            panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
-            activity_text = t(
-                "admin_activity_notify_template",
-                lang,
-                actor=actor,
-                action=t("admin_activity_action_create_client", lang),
-                user=client_email,
-                panel=panel_name,
-                inbound=inbound_name,
-                details="\n"
-                + "\n".join(
-                    [
-                        t("admin_activity_detail_amount_gb", lang, value=total_gb),
-                        t("admin_activity_detail_amount_days", lang, value=expiry_days),
-                    ]
-                ),
-            )
-            await self._record_admin_activity(
-                actor_user_id=actor_user_id,
-                settings=settings,
-                text=activity_text,
-                panel_id=panel_id,
-                notification_kind="admin_activity_action_create_client",
-            )
+        lang = await self.db.get_user_language(actor_user_id)
+        actor = await self._actor_display_name(actor_user_id)
+        panel_name, inbound_name = await self._panel_inbound_names(panel_id=panel_id, inbound_id=inbound_id)
+        activity_text = t(
+            "admin_activity_notify_template",
+            lang,
+            actor=actor,
+            action=t("admin_activity_action_create_client", lang),
+            user=client_email,
+            panel=panel_name,
+            inbound=inbound_name,
+            details="\n"
+            + "\n".join(
+                [
+                    t("admin_activity_detail_amount_gb", lang, value=total_gb),
+                    t("admin_activity_detail_amount_days", lang, value=expiry_days),
+                ]
+            ),
+        )
+        await self._record_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            text=activity_text,
+            panel_id=panel_id,
+            notification_kind="admin_activity_action_create_client",
+        )
         return {
             **created,
             "vless_uri": vless_uri,
