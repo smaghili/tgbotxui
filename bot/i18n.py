@@ -631,10 +631,9 @@ TEXTS: dict[str, dict[Lang, str]] = {
     },
     "admin_delegated_finex_inbounds_empty": {"fa": "هیچ اینباندی روی پنل نیست.", "en": "No inbounds found on panels."},
     "admin_delegated_finex_clients_title": {
-        "fa": "کاربران: ماندهٔ حجم مصرف‌نشده در حساب نماینده اصلی حساب نشود\nصفحه {page} از {pages}\n✅ مانده حذف از گزارش | ⬜ عادی",
-        "en": "Clients: unused traffic not counted for primary delegate\nPage {page} of {pages}\n✅ excluded from remaining | ⬜ normal",
+        "fa": "کاربرانی که با ورود نام اضافه می‌کنید: ماندهٔ حجم مصرف‌نشده در گزارش مالی نماینده اصلی لحاظ نمی‌شود.\nفقط دکمهٔ زیر — نام‌ها را با ویرگول بفرستید.",
+        "en": "Clients you add by name: their unused remaining traffic is not included in the primary delegate finance summary.\nUse the button below — send comma-separated names.",
     },
-    "admin_delegated_finex_clients_empty": {"fa": "کاربری با مالکیت این نماینده پیدا نشد.", "en": "No clients owned by this delegate."},
     "admin_delegated_finex_bulk_btn": {"fa": "📝 ورود نام‌ها با متن", "en": "📝 Paste names"},
     "admin_delegated_finex_bulk_prompt": {
         "fa": "نام کاربر (قبل از @ ایمیل) یا بخشی از ایمیل را با ویرگول جدا بفرستید.\nمثال: Ali,hosein2,Ms.f",
@@ -648,6 +647,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_finex_bulk_done": {"fa": "برای {count} کاربر اعمال شد.", "en": "Applied for {count} client(s)."},
     "admin_delegated_finex_bulk_cancelled": {"fa": "لغو شد.", "en": "Cancelled."},
     "admin_delegated_finex_toggled": {"fa": "ذخیره شد.", "en": "Saved."},
+    "admin_delegated_finex_db_error": {
+        "fa": "خطای ذخیره در پایگاه داده. مایگریشن‌ها را بررسی کنید.",
+        "en": "Database error while saving. Check migrations.",
+    },
     "admin_delegated_report": {"fa": "گزارش 📊", "en": "Report 📊"},
     "admin_delegated_parent": {"fa": "نماینده اصلی 🔗", "en": "Parent Delegate 🔗"},
     "admin_delegated_parent_root": {"fa": "اتصال به روت 👑", "en": "Attach To Root 👑"},

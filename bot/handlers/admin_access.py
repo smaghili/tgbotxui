@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -27,28 +28,6 @@ from bot.utils import (
 router = Router(name="admin_access")
 
 _FINEX_IB_PAGE = 8
-_FINEX_CR_PAGE = 8
-
-
-async def _finex_owned_client_flat_rows(*, services: ServiceContainer, delegate_id: int) -> list[dict[str, int | str]]:
-    rows: list[dict[str, int | str]] = []
-    for panel in await services.panel_service.list_panels():
-        pid = int(panel["id"])
-        try:
-            chunk = await services.panel_service.list_clients(pid, owner_admin_user_id=delegate_id)
-        except Exception:
-            continue
-        for c in chunk:
-            rows.append(
-                {
-                    "panel_id": pid,
-                    "inbound_id": int(c["inbound_id"]),
-                    "uuid": str(c["uuid"]),
-                    "email": str(c.get("email") or ""),
-                }
-            )
-    rows.sort(key=lambda r: (int(r["panel_id"]), int(r["inbound_id"]), str(r["email"]).lower()))
-    return rows
 
 
 def _parse_finex_name_tokens(raw: str) -> list[str]:
@@ -100,6 +79,122 @@ async def _search_clients_by_email_tokens(
             seen.add(key)
             out.append({"panel_id": pid, "inbound_id": ib, "uuid": uid, "email": email})
     return out
+
+
+async def _safe_edit_menu_message(
+    message: Message,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        err = str(exc).lower()
+        if "message is not modified" in err or "message_not_modified" in err:
+            return
+        raise
+
+
+async def _delegated_finex_inbounds_render(
+    callback: CallbackQuery,
+    settings: Settings,
+    services: ServiceContainer,
+    *,
+    delegate_id: int,
+    page: int,
+    answer_notify: str | None = None,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    excluded = await services.db.list_delegate_finance_excluded_inbounds(delegate_id)
+    all_rows = await services.admin_provisioning_service.list_all_inbounds()
+    total = len(all_rows)
+    if total <= 0:
+        await _safe_edit_menu_message(
+            callback.message,
+            text=t("admin_delegated_finex_inbounds_empty", lang),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")]]
+            ),
+        )
+        if answer_notify is not None:
+            await callback.answer(answer_notify)
+        else:
+            await callback.answer()
+        return
+    start = max(0, page) * _FINEX_IB_PAGE
+    chunk = all_rows[start : start + _FINEX_IB_PAGE]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for row in chunk:
+        key = (row.panel_id, row.inbound_id)
+        mark = "✅ " if key in excluded else "⬜ "
+        label = f"{mark}{row.panel_name[:14]}|{row.inbound_name[:18]}"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=label[:48],
+                    callback_data=f"dag:fxibt:{delegate_id}:{row.panel_id}:{row.inbound_id}",
+                )
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if start > 0:
+        nav.append(InlineKeyboardButton(text="◀", callback_data=f"dag:fxib:{delegate_id}:{page - 1}"))
+    if start + _FINEX_IB_PAGE < total:
+        nav.append(InlineKeyboardButton(text="▶", callback_data=f"dag:fxib:{delegate_id}:{page + 1}"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")])
+    await _safe_edit_menu_message(
+        callback.message,
+        text=t(
+            "admin_delegated_finex_inbounds_title",
+            lang,
+            page=page + 1,
+            pages=max(1, (total + _FINEX_IB_PAGE - 1) // _FINEX_IB_PAGE),
+        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    if answer_notify is not None:
+        await callback.answer(answer_notify)
+    else:
+        await callback.answer()
+
+
+async def _delegated_finex_remain_render(
+    callback: CallbackQuery,
+    settings: Settings,
+    services: ServiceContainer,
+    *,
+    delegate_id: int,
+    answer_notify: str | None = None,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    await _safe_edit_menu_message(
+        callback.message,
+        text=t("admin_delegated_finex_clients_title", lang),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=t("admin_delegated_finex_bulk_btn", lang),
+                        callback_data=f"dag:fxrmb:{delegate_id}",
+                    ),
+                ],
+                [InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")],
+            ]
+        ),
+    )
+    if answer_notify is not None:
+        await callback.answer(answer_notify)
+    else:
+        await callback.answer()
 
 
 def _format_gb_exact(value: float | int) -> str:
@@ -349,7 +444,7 @@ def _delegated_detail_keyboard(
                 ),
                 InlineKeyboardButton(
                     text=t("admin_delegated_finex_remain_btn", lang),
-                    callback_data=f"dag:fxcr:{user_id}:0",
+                    callback_data=f"dag:fxcr:{user_id}",
                 ),
             ]
         )
@@ -1526,52 +1621,14 @@ async def delegated_finex_inbounds_menu(
     if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
         await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
         return
-    excluded = await services.db.list_delegate_finance_excluded_inbounds(delegate_id)
-    all_rows = await services.admin_provisioning_service.list_all_inbounds()
-    total = len(all_rows)
-    if total <= 0:
-        await callback.message.edit_text(
-            t("admin_delegated_finex_inbounds_empty", lang),
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")]]
-            ),
-        )
-        if answer_notify is not None:
-            await callback.answer(answer_notify)
-        else:
-            await callback.answer()
-        return
-    start = max(0, page) * _FINEX_IB_PAGE
-    chunk = all_rows[start : start + _FINEX_IB_PAGE]
-    buttons: list[list[InlineKeyboardButton]] = []
-    for row in chunk:
-        key = (row.panel_id, row.inbound_id)
-        mark = "✅ " if key in excluded else "⬜ "
-        label = f"{mark}{row.panel_name[:14]}|{row.inbound_name[:18]}"
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=label[:48],
-                    callback_data=f"dag:fxibt:{delegate_id}:{row.panel_id}:{row.inbound_id}",
-                )
-            ]
-        )
-    nav: list[InlineKeyboardButton] = []
-    if start > 0:
-        nav.append(InlineKeyboardButton(text="◀", callback_data=f"dag:fxib:{delegate_id}:{page - 1}"))
-    if start + _FINEX_IB_PAGE < total:
-        nav.append(InlineKeyboardButton(text="▶", callback_data=f"dag:fxib:{delegate_id}:{page + 1}"))
-    if nav:
-        buttons.append(nav)
-    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")])
-    await callback.message.edit_text(
-        t("admin_delegated_finex_inbounds_title", lang, page=page + 1, pages=max(1, (total + _FINEX_IB_PAGE - 1) // _FINEX_IB_PAGE)),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    await _delegated_finex_inbounds_render(
+        callback,
+        settings,
+        services,
+        delegate_id=delegate_id,
+        page=page,
+        answer_notify=answer_notify,
     )
-    if answer_notify is not None:
-        await callback.answer(answer_notify)
-    else:
-        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dag:fxibt:"))
@@ -1603,20 +1660,25 @@ async def delegated_finex_inbound_toggle(callback: CallbackQuery, settings: Sett
         await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
         return
     key = (panel_id, inbound_id)
-    excluded = await services.db.list_delegate_finance_excluded_inbounds(delegate_id)
-    if key in excluded:
-        await services.db.remove_delegate_finance_excluded_inbound(
-            delegate_user_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
-        )
-    else:
-        await services.db.add_delegate_finance_excluded_inbound(
-            delegate_user_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
-        )
-    callback.data = f"dag:fxib:{delegate_id}:0"
-    await delegated_finex_inbounds_menu(
+    try:
+        excluded = await services.db.list_delegate_finance_excluded_inbounds(delegate_id)
+        if key in excluded:
+            await services.db.remove_delegate_finance_excluded_inbound(
+                delegate_user_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
+            )
+        else:
+            await services.db.add_delegate_finance_excluded_inbound(
+                delegate_user_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
+            )
+    except Exception:
+        await callback.answer(t("admin_delegated_finex_db_error", lang), show_alert=True)
+        return
+    await _delegated_finex_inbounds_render(
         callback,
         settings,
         services,
+        delegate_id=delegate_id,
+        page=0,
         answer_notify=t("admin_delegated_finex_toggled", lang),
     )
 
@@ -1636,12 +1698,11 @@ async def delegated_finex_remain_menu(
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     parts = callback.data.split(":")
-    if len(parts) < 4:
+    if len(parts) < 3:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
     try:
         delegate_id = int(parts[2])
-        page = int(parts[3])
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
@@ -1657,76 +1718,13 @@ async def delegated_finex_remain_menu(
     if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
         await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
         return
-    flat = await _finex_owned_client_flat_rows(services=services, delegate_id=delegate_id)
-    excl = await services.db.list_delegate_finance_exclude_client_remaining(delegate_id)
-    total = len(flat)
-    if total <= 0:
-        await callback.message.edit_text(
-            t("admin_delegated_finex_clients_empty", lang),
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=t("admin_delegated_finex_bulk_btn", lang),
-                            callback_data=f"dag:fxrmb:{delegate_id}",
-                        ),
-                    ],
-                    [InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")],
-                ]
-            ),
-        )
-        if answer_notify is not None:
-            await callback.answer(answer_notify)
-        else:
-            await callback.answer()
-        return
-    start = max(0, page) * _FINEX_CR_PAGE
-    chunk = flat[start : start + _FINEX_CR_PAGE]
-    buttons: list[list[InlineKeyboardButton]] = []
-    for i, row in enumerate(chunk):
-        gidx = start + i
-        key = (int(row["panel_id"]), int(row["inbound_id"]), str(row["uuid"]))
-        mark = "✅ " if key in excl else "⬜ "
-        em = str(row["email"])[:22]
-        label = f"{mark}{em}"
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=label[:48],
-                    callback_data=f"dag:fxcrt:{delegate_id}:{row['panel_id']}:{row['inbound_id']}:{gidx}",
-                )
-            ]
-        )
-    nav: list[InlineKeyboardButton] = []
-    if start > 0:
-        nav.append(InlineKeyboardButton(text="◀", callback_data=f"dag:fxcr:{delegate_id}:{page - 1}"))
-    if start + _FINEX_CR_PAGE < total:
-        nav.append(InlineKeyboardButton(text="▶", callback_data=f"dag:fxcr:{delegate_id}:{page + 1}"))
-    if nav:
-        buttons.append(nav)
-    buttons.insert(
-        0,
-        [
-            InlineKeyboardButton(
-                text=t("admin_delegated_finex_bulk_btn", lang),
-                callback_data=f"dag:fxrmb:{delegate_id}",
-            ),
-        ],
+    await _delegated_finex_remain_render(
+        callback,
+        settings,
+        services,
+        delegate_id=delegate_id,
+        answer_notify=answer_notify,
     )
-    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")])
-    await callback.message.edit_text(
-        t(
-            "admin_delegated_finex_clients_title",
-            lang,
-            page=page + 1,
-            pages=max(1, (total + _FINEX_CR_PAGE - 1) // _FINEX_CR_PAGE),
-        ),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-    )
-    if answer_notify is not None:
-        await callback.answer(answer_notify)
-    else:
-        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("dag:fxrmb:"))
@@ -1871,70 +1869,6 @@ async def delegated_finex_remain_bulk_no(
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(t("admin_delegated_finex_bulk_cancelled", lang))
     await callback.answer()
-
-
-@router.callback_query(F.data.startswith("dag:fxcrt:"))
-async def delegated_finex_remain_toggle(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await _reject_callback_if_not_full_admin(callback, settings, services):
-        return
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    lang = await services.db.get_user_language(callback.from_user.id)
-    try:
-        _, _, delegate_s, panel_s, inbound_s, idx_s = callback.data.split(":", 5)
-        delegate_id = int(delegate_s)
-        panel_id = int(panel_s)
-        inbound_id = int(inbound_s)
-        gidx = int(idx_s)
-    except ValueError:
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _can_manage_delegated_target(
-        actor_user_id=callback.from_user.id,
-        target_user_id=delegate_id,
-        settings=settings,
-        services=services,
-    ):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
-        return
-    delegated = await services.db.get_delegated_admin_by_user_id(delegate_id)
-    if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
-        await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
-        return
-    flat = await _finex_owned_client_flat_rows(services=services, delegate_id=delegate_id)
-    if gidx < 0 or gidx >= len(flat):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    row = flat[gidx]
-    if int(row["panel_id"]) != panel_id or int(row["inbound_id"]) != inbound_id:
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    uuid = str(row["uuid"])
-    key = (panel_id, inbound_id, uuid)
-    excl = await services.db.list_delegate_finance_exclude_client_remaining(delegate_id)
-    if key in excl:
-        await services.db.remove_delegate_finance_exclude_client_remaining(
-            delegate_user_id=delegate_id,
-            panel_id=panel_id,
-            inbound_id=inbound_id,
-            client_uuid=uuid,
-        )
-    else:
-        await services.db.add_delegate_finance_exclude_client_remaining(
-            delegate_user_id=delegate_id,
-            panel_id=panel_id,
-            inbound_id=inbound_id,
-            client_uuid=uuid,
-        )
-    page = gidx // _FINEX_CR_PAGE
-    callback.data = f"dag:fxcr:{delegate_id}:{page}"
-    await delegated_finex_remain_menu(
-        callback,
-        settings,
-        services,
-        answer_notify=t("admin_delegated_finex_toggled", lang),
-    )
 
 
 @router.callback_query(F.data.startswith("dag:remove_user:"))
