@@ -435,6 +435,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_inbound_name": {"fa": "📍 نام‌ورودی", "en": "📍 Inbound"},
     "admin_port": {"fa": "🔌 پورت", "en": "🔌 Port"},
     "admin_traffic": {"fa": "🚦 ترافیک", "en": "🚦 Traffic"},
+    "admin_inbound_remaining_traffic": {
+        "fa": "📊 مجموع حجم باقی‌ماندهٔ کاربران (با سقف)",
+        "en": "📊 Sum of clients' remaining traffic (capped)",
+    },
     "admin_download": {"fa": "دانلود", "en": "Download"},
     "admin_upload": {"fa": "آپلود", "en": "Upload"},
     "admin_expiry": {"fa": "📅 تاریخ‌انقضا", "en": "📅 Expiry"},

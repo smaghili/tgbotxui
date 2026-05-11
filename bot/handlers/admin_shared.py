@@ -488,10 +488,10 @@ def edit_config_actions_keyboard(
         ],
         [
             inline_button(t("admin_edit_add_traffic", lang), f"pec:traffic_input:{panel_id}:{inbound_id}:{client_uuid}"),
-            inline_button(t("admin_edit_reset_traffic", lang), f"pec:traffic_reset_ask:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_edit_add_days", lang), f"pec:days_input:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
         [
-            inline_button(t("admin_edit_add_days", lang), f"pec:days_input:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_edit_reset_traffic", lang), f"pec:traffic_reset_ask:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
         [inline_button(t("admin_set_tg", lang), f"pec:tg_input:{panel_id}:{inbound_id}:{client_uuid}")],
         [inline_button(toggle_text, f"pec:toggle:{panel_id}:{inbound_id}:{client_uuid}")],
@@ -622,6 +622,27 @@ def _inbound_client_state_counts(inbound: dict) -> tuple[int, int, int]:
     return total_count, active_count, inactive_count
 
 
+def _inbound_clients_remaining_traffic_sum_bytes(inbound: dict) -> int | None:
+    """Sum of max(0, cap-used) for clients in clientStats that have a traffic cap (total>0)."""
+    raw = inbound.get("clientStats")
+    if not isinstance(raw, list):
+        return None
+    any_capped = False
+    total_remaining = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cap = int(item.get("total") or 0)
+        if cap <= 0:
+            continue
+        any_capped = True
+        used = max(0, int(item.get("up") or 0)) + max(0, int(item.get("down") or 0))
+        total_remaining += max(0, cap - used)
+    if not any_capped:
+        return None
+    return total_remaining
+
+
 def format_inbounds_list(panel_name: str, rows: list[dict], lang: str | None = None) -> str:
     if not rows:
         return f"{t('admin_inbounds_title', lang)}\n{t('admin_panel_label', lang)}: {panel_name}\n\n{t('admin_no_inbounds', lang)}"
@@ -635,6 +656,10 @@ def format_inbounds_list(panel_name: str, rows: list[dict], lang: str | None = N
         up = human_bytes(up_value, lang)
         down = human_bytes(down_value, lang)
         total = human_bytes(up_value + down_value, lang)
+        remaining_sum = _inbound_clients_remaining_traffic_sum_bytes(inbound)
+        remaining_line = ""
+        if remaining_sum is not None:
+            remaining_line = f"{t('admin_inbound_remaining_traffic', lang)}: {human_bytes(remaining_sum, lang)}\n"
         expiry = inbound.get("expiryTime")
         expiry_epoch = parse_epoch(expiry)
         expiry_text = t("admin_unlimited", lang) if not expiry_epoch else to_jalali_datetime(expiry_epoch, "Asia/Tehran")
@@ -643,6 +668,7 @@ def format_inbounds_list(panel_name: str, rows: list[dict], lang: str | None = N
             f"{t('admin_port', lang)}: {inbound.get('port', '-')}\n"
             f"{t('admin_traffic', lang)}: {total}\n"
             f"({t('admin_download', lang)}: {down} , {t('admin_upload', lang)}: {up})\n"
+            f"{remaining_line}"
             f"{t('admin_expiry', lang)}: {expiry_text}\n"
             f"{t('admin_clients_count', lang)}: {client_count}\n"
             f"{t('admin_inactive_clients_count', lang)}: {inactive_count}\n"
@@ -715,11 +741,16 @@ def format_inbounds_overview(
         expiry_epoch = parse_epoch(expiry)
         expiry_text = t("admin_unlimited_reset_value", lang) if not expiry_epoch else to_jalali_datetime(expiry_epoch, "Asia/Tehran")
         status = t("admin_enabled", lang) if inbound.get("enable") else t("admin_disabled", lang)
+        remaining_sum = _inbound_clients_remaining_traffic_sum_bytes(inbound)
+        remaining_line = ""
+        if remaining_sum is not None:
+            remaining_line = f"{t('admin_inbound_remaining_traffic', lang)}: {human_bytes(remaining_sum, lang)}\n"
         lines.append(
             f"{t('admin_inbound_name', lang)}: {remark}\n"
             f"{t('admin_port', lang)}: {to_persian_digits(inbound.get('port', '-')) if (lang or 'fa') == 'fa' else inbound.get('port', '-')}\n"
             f"{t('admin_traffic', lang)}: {total}\n"
             f"({t('admin_download', lang)}: {down} , {t('admin_upload', lang)}: {up})\n"
+            f"{remaining_line}"
             f"{t('admin_expiry', lang)}: {expiry_text}\n"
             f"{t('admin_clients_count', lang)}: {to_persian_digits(client_count) if (lang or 'fa') == 'fa' else client_count}\n"
             f"{t('admin_inactive_clients_count', lang)}: {to_persian_digits(inactive_count) if (lang or 'fa') == 'fa' else inactive_count}\n"
