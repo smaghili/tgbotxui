@@ -11,7 +11,7 @@ from bot.handlers.admin_shared import (
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
 )
-from bot.i18n import t
+from bot.i18n import button_variants, t
 from bot.pagination import chunk_buttons
 from bot.services.admin_provisioning_service import InboundAccess
 from bot.services.container import ServiceContainer
