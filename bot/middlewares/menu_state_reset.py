@@ -27,6 +27,7 @@ class MenuStateResetMiddleware(BaseMiddleware):
             *button_variants("btn_disabled_users"),
             *button_variants("btn_create_user"),
             *button_variants("btn_change_inbound_location"),
+            *button_variants("btn_manage_inbound"),
             *button_variants("btn_edit_config"),
             *button_variants("btn_inbounds_overview"),
             *button_variants("btn_low_traffic_users"),

@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.config import Settings
+from bot.handlers.admin_outbound_panel import send_panel_outbounds_overview
 from bot.handlers.admin_shared import (
     admin_keyboard_for_user,
     inline_button,
@@ -57,6 +58,15 @@ def _inbound_multi_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _ib_manage_panel_keyboard(panels: list[dict], lang: str | None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for p in panels:
+        pid = int(p["id"])
+        name = str(p.get("name") or f"#{pid}")
+        rows.append([inline_button(name[:55], f"ibob:{pid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _panel_choice_keyboard(panels: list[tuple[int, str]], lang: str | None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for panel_id, name in panels:
@@ -105,6 +115,74 @@ async def _show_inbound_pick_ui(
     else:
         assert isinstance(target, Message)
         await target.answer(text, reply_markup=markup)
+
+
+@router.message(F.text.in_(button_variants("btn_manage_inbound")))
+async def inbound_manage_outbounds_entry(
+    message: Message,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await reject_if_not_any_admin(message, settings, services):
+        return
+    lang = await services.db.get_user_language(message.from_user.id)
+    panels = await services.access_service.list_accessible_panels(
+        user_id=message.from_user.id,
+        settings=settings,
+    )
+    if not panels:
+        await message.answer(t("bind_no_panel", lang))
+        return
+    if len(panels) == 1:
+        pid = int(panels[0]["id"])
+        await send_panel_outbounds_overview(
+            message,
+            services=services,
+            settings=settings,
+            panel_id=pid,
+            actor_user_id=message.from_user.id,
+            lang=lang,
+        )
+        return
+    await message.answer(
+        t("admin_ibloc_pick_panel", lang),
+        reply_markup=_ib_manage_panel_keyboard(panels, lang),
+    )
+
+
+@router.callback_query(F.data.startswith("ibob:"))
+async def inbound_manage_outbounds_panel_pick(
+    callback: CallbackQuery,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        panel_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    await send_panel_outbounds_overview(
+        callback.message,
+        services=services,
+        settings=settings,
+        panel_id=panel_id,
+        actor_user_id=callback.from_user.id,
+        lang=lang,
+    )
+    await callback.answer()
 
 
 @router.message(F.text.in_(button_variants("btn_change_inbound_location")))

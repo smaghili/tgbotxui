@@ -1842,6 +1842,22 @@ class PanelService:
         )
         return outbound_tag.strip() in allowed
 
+    async def actor_may_set_outbound_display_label(
+        self,
+        panel_id: int,
+        actor_user_id: int,
+        outbound_tag: str,
+        settings: Settings,
+        access: AccessService,
+    ) -> bool:
+        if not await access.can_access_panel(user_id=actor_user_id, settings=settings, panel_id=panel_id):
+            return False
+        if await self.actor_may_grant_or_add_outbound(panel_id, actor_user_id, settings, access):
+            return True
+        return await self.actor_may_use_outbound_tag(
+            panel_id, actor_user_id, outbound_tag.strip(), settings, access
+        )
+
     async def append_outbound_from_share_link(
         self, panel_id: int, uri: str, owner_telegram_user_id: int
     ) -> str:

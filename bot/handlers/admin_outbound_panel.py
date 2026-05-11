@@ -50,12 +50,13 @@ def _chunk_text_by_lines(text: str, max_len: int = 4000) -> list[str]:
 def _outbound_list_keyboard(
     *,
     panel_id: int,
-    can_manage: bool,
+    show_grant_add: bool,
+    show_alias: bool,
     tag_rows: list[tuple[str, str]],
     lang: str | None,
 ) -> InlineKeyboardMarkup | None:
     rows: list[list[InlineKeyboardButton]] = []
-    if can_manage:
+    if show_grant_add:
         rows.append(
             [
                 inline_button(t("panel_ob_add_link", lang), f"panel_ob_add:{panel_id}"),
@@ -63,9 +64,8 @@ def _outbound_list_keyboard(
             ]
         )
     alias_buttons: list[InlineKeyboardButton] = []
-    if can_manage and tag_rows:
+    if show_alias and tag_rows:
         for idx, (_tag, label) in enumerate(tag_rows):
-            lab = label if len(label) <= 20 else label[:17] + "..."
             alias_buttons.append(
                 InlineKeyboardButton(text=f"✏️{idx + 1}", callback_data=f"panel_ob_a:{panel_id}:{idx}")
             )
@@ -123,21 +123,34 @@ async def send_panel_outbounds_overview(
     except Exception as exc:
         await message.answer(t("panel_outbounds_fetch_error", lang, error=exc))
         return
-    can_manage = await services.panel_service.actor_may_grant_or_add_outbound(
+    can_grant_add = await services.panel_service.actor_may_grant_or_add_outbound(
         panel_id, actor_user_id, settings, services.access_service
     )
+    show_alias = bool(rows)
     if not rows:
         text = (
             t("panel_outbounds_header", lang, name=panel["name"], count=0)
             + "\n"
             + t("panel_outbounds_empty", lang)
         )
-        kb = _outbound_list_keyboard(panel_id=panel_id, can_manage=can_manage, tag_rows=[], lang=lang)
+        kb = _outbound_list_keyboard(
+            panel_id=panel_id,
+            show_grant_add=can_grant_add,
+            show_alias=False,
+            tag_rows=[],
+            lang=lang,
+        )
         await message.answer(text, reply_markup=kb)
         return
     body_lines = [f"{i}. {label} — {tag}" for i, (tag, label) in enumerate(rows, start=1)]
     text = t("panel_outbounds_header", lang, name=panel["name"], count=len(rows)) + "\n".join(body_lines)
-    kb = _outbound_list_keyboard(panel_id=panel_id, can_manage=can_manage, tag_rows=rows, lang=lang)
+    kb = _outbound_list_keyboard(
+        panel_id=panel_id,
+        show_grant_add=can_grant_add,
+        show_alias=show_alias,
+        tag_rows=rows,
+        lang=lang,
+    )
     parts = _chunk_text_by_lines(text)
     for i, part in enumerate(parts):
         await message.answer(part, reply_markup=kb if i == 0 else None)
@@ -287,8 +300,8 @@ async def panel_ob_gadm(callback: CallbackQuery, settings: Settings, services: S
     lang = await services.db.get_user_language(callback.from_user.id)
     parts = callback.data.split(":")
     try:
-        panel_id = int(parts[2])
-        delegate_tid = int(parts[3])
+        panel_id = int(parts[1])
+        delegate_tid = int(parts[2])
     except (ValueError, IndexError):
         await callback.answer(t("bind_invalid_id", lang), show_alert=True)
         return
@@ -332,9 +345,9 @@ async def panel_ob_gob(callback: CallbackQuery, settings: Settings, services: Se
     lang = await services.db.get_user_language(callback.from_user.id)
     parts = callback.data.split(":")
     try:
-        panel_id = int(parts[2])
-        delegate_tid = int(parts[3])
-        idx = int(parts[4])
+        panel_id = int(parts[1])
+        delegate_tid = int(parts[2])
+        idx = int(parts[3])
     except (ValueError, IndexError):
         await callback.answer(t("bind_invalid_id", lang), show_alert=True)
         return
@@ -371,18 +384,13 @@ async def panel_ob_alias_start(callback: CallbackQuery, state: FSMContext, setti
     lang = await services.db.get_user_language(callback.from_user.id)
     parts = callback.data.split(":")
     try:
-        panel_id = int(parts[2])
-        idx = int(parts[3])
+        panel_id = int(parts[1])
+        idx = int(parts[2])
     except (ValueError, IndexError):
         await callback.answer(t("bind_invalid_id", lang), show_alert=True)
         return
     if not await services.access_service.can_access_panel(
         user_id=callback.from_user.id, settings=settings, panel_id=panel_id
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
-        return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
-        panel_id, callback.from_user.id, settings, services.access_service
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
@@ -393,6 +401,11 @@ async def panel_ob_alias_start(callback: CallbackQuery, state: FSMContext, setti
         await callback.answer(t("admin_edit_location_bad", lang), show_alert=True)
         return
     tag = rows[idx][0]
+    if not await services.panel_service.actor_may_set_outbound_display_label(
+        panel_id, callback.from_user.id, tag, settings, services.access_service
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
     await state.set_state(OutboundPanelStates.waiting_display_label)
     await state.update_data(panel_ob_panel_id=panel_id, panel_ob_tag=tag)
     await callback.message.answer(t("panel_ob_send_display_name", lang, tag=tag))
@@ -418,8 +431,8 @@ async def panel_ob_display_label(message: Message, state: FSMContext, settings: 
         await state.clear()
         await message.answer(t("no_admin_access", lang))
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
-        panel_id, message.from_user.id, settings, services.access_service
+    if not await services.panel_service.actor_may_set_outbound_display_label(
+        panel_id, message.from_user.id, tag, settings, services.access_service
     ):
         await state.clear()
         await message.answer(t("no_admin_access", lang))

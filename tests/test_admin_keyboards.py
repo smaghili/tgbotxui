@@ -142,7 +142,7 @@ def test_panels_glass_keyboard_includes_panel_access_button() -> None:
 
     assert "panel_access_ask:7" in callbacks
     assert "panel_delete_ask:7" in callbacks
-    assert "panel_outbounds_list:7" in callbacks
+    assert "panel_outbounds_list:7" not in callbacks
 
 
 def test_yes_no_inline_keyboard_builds_two_buttons() -> None:

@@ -300,7 +300,6 @@ def panels_glass_keyboard(panels: list[dict], lang: str | None = None) -> Inline
                 inline_button("🗑️", f"panel_delete_ask:{p['id']}"),
             ]
         )
-        rows.append([inline_button(t("panel_list_outbounds_button", lang), f"panel_outbounds_list:{p['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

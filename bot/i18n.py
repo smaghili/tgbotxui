@@ -27,6 +27,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "btn_inbounds_overview": {"fa": "📋 اطلاعات کلی ورودی‌ها", "en": "📋 Inbound Overview"},
     "btn_create_user": {"fa": "➕ ساخت کاربر", "en": "➕ Create User"},
     "btn_change_inbound_location": {"fa": "🌍 تغییر لوکیشن اینباند", "en": "🌍 Inbound location"},
+    "btn_manage_inbound": {"fa": "📡 مدیریت اینباند", "en": "📡 Inbound manage"},
     "btn_edit_config": {"fa": "🛠 ویرایش کانفیگ", "en": "🛠 Edit Config"},
     "btn_manage_admins": {"fa": "👥 مدیریت ادمین‌ها", "en": "👥 Manage Admins"},
     "btn_cleanup_settings": {"fa": "⏱ تنظیم حذف خودکار", "en": "⏱ Auto cleanup"},
