@@ -623,6 +623,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Pick a panel outbound this delegate may use:",
     },
     "panel_ob_grant_ok": {"fa": "اعطا شد: «{tag}»", "en": "Granted: «{tag}»"},
+    "panel_ob_grants_saved": {
+        "fa": "✅ دسترسی اوت‌باند نماینده ذخیره شد.",
+        "en": "✅ Delegate outbound access saved.",
+    },
     "panel_ob_send_display_name": {
         "fa": "نام نمایشی جدید برای «{tag}» را بفرستید (فقط در ربات دیده می‌شود).",
         "en": "Send a new display label for «{tag}» (bot only; panel tag unchanged).",

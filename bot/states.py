@@ -57,6 +57,10 @@ class OutboundPanelStates(StatesGroup):
     waiting_display_label = State()
 
 
+class OutboundGrantStates(StatesGroup):
+    picking = State()
+
+
 class ProvisioningStates(StatesGroup):
     waiting_create_email = State()
     waiting_create_traffic_gb = State()

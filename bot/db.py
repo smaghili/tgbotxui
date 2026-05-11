@@ -1867,6 +1867,43 @@ class Database:
         )
         await self.conn.commit()
 
+    async def list_panel_outbound_grants_for_delegate(
+        self, panel_id: int, delegate_telegram_user_id: int
+    ) -> list[str]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT outbound_tag FROM panel_outbound_delegate_grant
+            WHERE panel_id=? AND delegate_telegram_user_id=?
+            ORDER BY outbound_tag ASC;
+            """,
+            (int(panel_id), int(delegate_telegram_user_id)),
+        )
+        rows = await cur.fetchall()
+        return [str(r["outbound_tag"]).strip() for r in rows if str(r["outbound_tag"]).strip()]
+
+    async def replace_panel_outbound_delegate_grants(
+        self, panel_id: int, delegate_telegram_user_id: int, outbound_tags: list[str]
+    ) -> None:
+        assert self.conn is not None
+        pid = int(panel_id)
+        tid = int(delegate_telegram_user_id)
+        clean = sorted({str(x).strip() for x in outbound_tags if str(x).strip()})
+        await self.conn.execute(
+            "DELETE FROM panel_outbound_delegate_grant WHERE panel_id=? AND delegate_telegram_user_id=?;",
+            (pid, tid),
+        )
+        for tag in clean:
+            await self.conn.execute(
+                """
+                INSERT INTO panel_outbound_delegate_grant(
+                    panel_id, outbound_tag, delegate_telegram_user_id, created_at
+                ) VALUES(?, ?, ?, CURRENT_TIMESTAMP);
+                """,
+                (pid, tag, tid),
+            )
+        await self.conn.commit()
+
     async def count_panels(self) -> int:
         assert self.conn is not None
         cur = await self.conn.execute("SELECT COUNT(*) AS cnt FROM panels;")

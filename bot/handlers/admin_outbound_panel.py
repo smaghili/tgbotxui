@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -13,7 +15,7 @@ from bot.handlers.admin_shared import (
 from bot.i18n import t
 from bot.pagination import chunk_buttons
 from bot.services.container import ServiceContainer
-from bot.states import OutboundPanelStates
+from bot.states import OutboundGrantStates, OutboundPanelStates
 
 router = Router(name="admin_outbound_panel")
 
@@ -89,17 +91,40 @@ def _grant_delegates_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=out_rows)
 
 
-def _grant_tags_keyboard(
-    panel_id: int, delegate_tid: int, tags: list[str], lang: str | None
+def _grant_outbound_row_label(tag: str, display_label: str) -> str:
+    lab = display_label.strip() or tag
+    return lab if len(lab) <= 40 else lab[:37] + "..."
+
+
+def _grant_outbounds_pick_keyboard(
+    *,
+    panel_id: int,
+    delegate_tid: int,
+    tags: list[str],
+    labels: list[str],
+    selected: set[str],
+    lang: str | None,
 ) -> InlineKeyboardMarkup:
-    buttons: list[InlineKeyboardButton] = []
-    for idx, tag in enumerate(tags):
-        lab = tag if len(tag) <= 26 else tag[:23] + "..."
-        buttons.append(
-            InlineKeyboardButton(text=lab, callback_data=f"panel_ob_gob:{panel_id}:{delegate_tid}:{idx}")
+    rows: list[list[InlineKeyboardButton]] = []
+    for idx, (tag, lab) in enumerate(zip(tags, labels)):
+        mark = "✅ " if tag in selected else ""
+        text = mark + _grant_outbound_row_label(tag, lab)
+        if len(text) > 64:
+            text = text[:61] + "..."
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=text,
+                    callback_data=f"panel_ob_gt:{panel_id}:{delegate_tid}:{idx}",
+                )
+            ]
         )
-    rows = chunk_buttons(buttons, columns=1)
-    rows.append([inline_button(t("admin_back", lang), f"panel_ob_grant:{panel_id}")])
+    rows.append(
+        [
+            inline_button(t("admin_ibloc_confirm", lang), f"panel_ob_gcf:{panel_id}:{delegate_tid}"),
+            inline_button(t("admin_back", lang), f"panel_ob_gbk:{panel_id}"),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -291,7 +316,12 @@ async def panel_ob_grant(callback: CallbackQuery, settings: Settings, services: 
 
 
 @router.callback_query(F.data.startswith("panel_ob_gadm:"))
-async def panel_ob_gadm(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+async def panel_ob_gadm(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
@@ -328,21 +358,48 @@ async def panel_ob_gadm(callback: CallbackQuery, settings: Settings, services: S
     if not tags:
         await callback.answer(t("panel_outbounds_empty", lang), show_alert=True)
         return
+    dmap = await services.db.get_panel_outbound_display_map(panel_id)
+    labels = [dmap.get(t, t) for t in tags]
+    existing = await services.db.list_panel_outbound_grants_for_delegate(panel_id, delegate_tid)
+    selected = {x for x in existing if x in tags}
+    await state.set_state(OutboundGrantStates.picking)
+    await state.update_data(
+        obg_panel_id=panel_id,
+        obg_delegate_tid=delegate_tid,
+        obg_tags=json.dumps(tags, ensure_ascii=False),
+        obg_selected=json.dumps(sorted(selected), ensure_ascii=False),
+    )
     await callback.message.answer(
         t("panel_ob_pick_outbound_grant", lang),
-        reply_markup=_grant_tags_keyboard(panel_id, delegate_tid, tags, lang),
+        reply_markup=_grant_outbounds_pick_keyboard(
+            panel_id=panel_id,
+            delegate_tid=delegate_tid,
+            tags=tags,
+            labels=labels,
+            selected=selected,
+            lang=lang,
+        ),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("panel_ob_gob:"))
-async def panel_ob_gob(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+@router.callback_query(F.data.startswith("panel_ob_gt:"))
+async def panel_ob_grant_toggle(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if callback.data is None:
+    if callback.message is None or callback.data is None:
         await callback.answer()
         return
     lang = await services.db.get_user_language(callback.from_user.id)
+    cur = await state.get_state()
+    if cur != OutboundGrantStates.picking.state:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
     parts = callback.data.split(":")
     try:
         panel_id = int(parts[1])
@@ -350,6 +407,10 @@ async def panel_ob_gob(callback: CallbackQuery, settings: Settings, services: Se
         idx = int(parts[3])
     except (ValueError, IndexError):
         await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    data = await state.get_data()
+    if int(data.get("obg_panel_id") or 0) != panel_id or int(data.get("obg_delegate_tid") or 0) != delegate_tid:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
     if not await services.access_service.can_access_panel(
         user_id=callback.from_user.id, settings=settings, panel_id=panel_id
@@ -362,16 +423,129 @@ async def panel_ob_gob(callback: CallbackQuery, settings: Settings, services: Se
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
     try:
-        tags = await services.panel_service.list_outbound_tags(panel_id)
-    except Exception as exc:
-        await callback.answer(t("panel_outbounds_fetch_error", lang, error=exc), show_alert=True)
+        tags = json.loads(str(data.get("obg_tags") or "[]"))
+    except json.JSONDecodeError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
-    if idx < 0 or idx >= len(tags):
+    if not isinstance(tags, list) or idx < 0 or idx >= len(tags):
         await callback.answer(t("admin_edit_location_bad", lang), show_alert=True)
         return
-    tag = tags[idx]
-    await services.db.insert_panel_outbound_delegate_grant(panel_id, tag, delegate_tid)
-    await callback.answer(t("panel_ob_grant_ok", lang, tag=tag), show_alert=True)
+    try:
+        raw_sel = json.loads(str(data.get("obg_selected") or "[]"))
+        selected = set(raw_sel) if isinstance(raw_sel, list) else set()
+    except json.JSONDecodeError:
+        selected = set()
+    tag = str(tags[idx]).strip()
+    if tag in selected:
+        selected.discard(tag)
+    else:
+        selected.add(tag)
+    await state.update_data(obg_selected=json.dumps(sorted(selected), ensure_ascii=False))
+    dmap = await services.db.get_panel_outbound_display_map(panel_id)
+    labels = [dmap.get(str(t).strip(), str(t).strip()) for t in tags]
+    await callback.message.edit_reply_markup(
+        reply_markup=_grant_outbounds_pick_keyboard(
+            panel_id=panel_id,
+            delegate_tid=delegate_tid,
+            tags=[str(x).strip() for x in tags],
+            labels=labels,
+            selected=selected,
+            lang=lang,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel_ob_gcf:"))
+async def panel_ob_grant_confirm(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if await state.get_state() != OutboundGrantStates.picking.state:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    parts = callback.data.split(":")
+    try:
+        panel_id = int(parts[1])
+        delegate_tid = int(parts[2])
+    except (ValueError, IndexError):
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    data = await state.get_data()
+    if int(data.get("obg_panel_id") or 0) != panel_id or int(data.get("obg_delegate_tid") or 0) != delegate_tid:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id, settings=settings, panel_id=panel_id
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    if not await services.panel_service.actor_may_grant_or_add_outbound(
+        panel_id, callback.from_user.id, settings, services.access_service
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    try:
+        tags = json.loads(str(data.get("obg_tags") or "[]"))
+        raw_sel = json.loads(str(data.get("obg_selected") or "[]"))
+    except json.JSONDecodeError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not isinstance(tags, list) or not isinstance(raw_sel, list):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    tag_set = {str(x).strip() for x in tags if str(x).strip()}
+    chosen = [str(x).strip() for x in raw_sel if str(x).strip() in tag_set]
+    await services.db.replace_panel_outbound_delegate_grants(panel_id, delegate_tid, chosen)
+    await state.clear()
+    await callback.message.edit_text(t("panel_ob_grants_saved", lang))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel_ob_gbk:"))
+async def panel_ob_grant_back_to_delegates(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        panel_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id, settings=settings, panel_id=panel_id
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    if not await services.panel_service.actor_may_grant_or_add_outbound(
+        panel_id, callback.from_user.id, settings, services.access_service
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    await state.clear()
+    mgr = None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+    admins = await services.db.list_delegated_admins(manager_user_id=mgr)
+    await callback.message.edit_text(
+        t("panel_ob_pick_delegate", lang),
+        reply_markup=_grant_delegates_keyboard(panel_id, admins, lang),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("panel_ob_a:"))
