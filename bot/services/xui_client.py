@@ -92,6 +92,22 @@ class XUIClient:
         endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
         return f"{base}/panel/api{endpoint}"
 
+    @staticmethod
+    def _panel_path(web_base_path: str, endpoint: str) -> str:
+        """Session routes under /panel/ (e.g. XraySettingController), not /panel/api/."""
+        base = web_base_path.strip()
+        if base and not base.startswith("/"):
+            base = f"/{base}"
+        base = base.rstrip("/")
+        endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+        return f"{base}/panel{endpoint}"
+
+    @staticmethod
+    def _url_for_endpoint(web_base_path: str, endpoint: str, *, under_panel: bool) -> str:
+        if under_panel:
+            return XUIClient._panel_path(web_base_path, endpoint)
+        return XUIClient._api_path(web_base_path, endpoint)
+
     async def login(self, conn: PanelConnection) -> Dict[str, str]:
         payload = {"username": conn.username, "password": conn.password}
         if conn.two_factor:
@@ -153,8 +169,9 @@ class XUIClient:
         endpoint: str,
         cookies: Dict[str, str] | None,
         payload: Dict[str, Any] | None = None,
+        under_panel: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        url = f"{conn.base_url}{self._api_path(conn.web_base_path, endpoint)}"
+        url = f"{conn.base_url}{self._url_for_endpoint(conn.web_base_path, endpoint, under_panel=under_panel)}"
         headers: Dict[str, str] = {}
         cookie_header = self._cookie_header(cookies)
         if cookie_header:
@@ -220,8 +237,9 @@ class XUIClient:
         endpoint: str,
         cookies: Dict[str, str] | None,
         form: Dict[str, str],
+        under_panel: bool = False,
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        url = f"{conn.base_url}{self._api_path(conn.web_base_path, endpoint)}"
+        url = f"{conn.base_url}{self._url_for_endpoint(conn.web_base_path, endpoint, under_panel=under_panel)}"
         headers: Dict[str, str] = {}
         cookie_header = self._cookie_header(cookies)
         if cookie_header:
@@ -284,13 +302,21 @@ class XUIClient:
     async def get_xray_setting(
         self, conn: PanelConnection, cookies: Dict[str, str] | None
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        return await self.request(
-            conn=conn,
-            method="POST",
-            endpoint="/xray/",
-            cookies=cookies,
-            payload=None,
-        )
+        for under_panel in (True, False):
+            try:
+                return await self.request(
+                    conn=conn,
+                    method="POST",
+                    endpoint="/xray/",
+                    cookies=cookies,
+                    payload=None,
+                    under_panel=under_panel,
+                )
+            except XUIError as exc:
+                if under_panel and "404" in str(exc):
+                    continue
+                raise
+        raise XUIError("xray settings: path not found on panel.")
 
     async def update_xray_setting(
         self,
@@ -300,16 +326,25 @@ class XUIClient:
         xray_setting_json: str,
         outbound_test_url: str,
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        return await self.request_form(
-            conn=conn,
-            method="POST",
-            endpoint="/xray/update",
-            cookies=cookies,
-            form={
-                "xraySetting": xray_setting_json,
-                "outboundTestUrl": outbound_test_url or "https://www.google.com/generate_204",
-            },
-        )
+        form = {
+            "xraySetting": xray_setting_json,
+            "outboundTestUrl": outbound_test_url or "https://www.google.com/generate_204",
+        }
+        for under_panel in (True, False):
+            try:
+                return await self.request_form(
+                    conn=conn,
+                    method="POST",
+                    endpoint="/xray/update",
+                    cookies=cookies,
+                    form=form,
+                    under_panel=under_panel,
+                )
+            except XUIError as exc:
+                if under_panel and "404" in str(exc):
+                    continue
+                raise
+        raise XUIError("xray settings update: path not found on panel.")
 
     async def get_client_traffics(
         self, conn: PanelConnection, cookies: Dict[str, str] | None, client_email: str
