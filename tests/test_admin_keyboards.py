@@ -26,6 +26,7 @@ def test_admin_keyboard_removes_search_user_button() -> None:
     assert btn("btn_bulk_operations", "fa") in labels
     assert btn("btn_list_inbounds", "fa") not in labels
     assert btn("btn_last_online_users", "fa") not in labels
+    assert btn("btn_change_inbound_location", "fa") in labels
 
 
 def test_limited_admin_keyboard_includes_low_traffic_users() -> None:
@@ -33,6 +34,7 @@ def test_limited_admin_keyboard_includes_low_traffic_users() -> None:
     labels = [button.text for row in markup.keyboard for button in row]
 
     assert btn("btn_low_traffic_users", "fa") in labels
+    assert btn("btn_change_inbound_location", "fa") in labels
 
 
 def test_edit_config_actions_keyboard_includes_toggle_button() -> None:

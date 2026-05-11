@@ -965,6 +965,14 @@ class AdminProvisioningService:
         email = str(detail.get("email") or "").strip()
         if not email:
             raise ValueError("client email missing.")
+        if not await self.panel_service.actor_may_use_outbound_tag(
+            ref.panel_id,
+            actor_user_id,
+            outbound_tag.strip(),
+            settings,
+            self.access_service,
+        ):
+            raise ValueError("outbound not allowed for this admin.")
         await self.panel_service.set_client_outbound_tag(
             ref.panel_id, ref.inbound_id, email, outbound_tag.strip()
         )

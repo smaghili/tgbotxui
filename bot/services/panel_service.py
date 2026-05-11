@@ -8,7 +8,9 @@ from datetime import datetime
 from typing import Any, Dict, Awaitable, Callable
 from urllib.parse import quote, urlencode, urlparse, urlunparse
 
+from bot.config import Settings
 from bot.db import Database
+from bot.services.access_service import AccessService
 from bot.utils import inbound_display_name
 from bot.services.crypto import CryptoService
 from bot.services.xui_client import (
@@ -1757,6 +1759,27 @@ class PanelService:
                 return 1
         return 0
 
+    @staticmethod
+    def _resolve_xray_inbound_tag(*, inbound: Dict[str, Any], inbound_id: int, full_xray_cfg: Dict[str, Any]) -> str:
+        for key in ("tag", "Tag"):
+            raw = inbound.get(key)
+            if raw is not None:
+                t = str(raw).strip()
+                if t:
+                    return t
+        port = int(inbound.get("port") or 0)
+        inbounds = full_xray_cfg.get("inbounds")
+        if port > 0 and isinstance(inbounds, list):
+            for item in inbounds:
+                if not isinstance(item, dict):
+                    continue
+                if int(item.get("port") or 0) != port:
+                    continue
+                t = str(item.get("tag") or "").strip()
+                if t:
+                    return t
+        return f"inbound-{inbound_id}"
+
     async def list_outbound_tags(self, panel_id: int) -> list[str]:
         raw, _ = await self._with_auth_request(
             panel_id,
@@ -1764,6 +1787,101 @@ class PanelService:
         )
         bundle = self._parse_xray_setting_bundle(raw)
         return self._list_outbound_tags(bundle["config"])
+
+    async def outbound_actor_sees_all_panel_outbounds(
+        self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
+    ) -> bool:
+        ctx = await access.get_admin_context(actor_user_id, settings)
+        if ctx.is_root_admin:
+            return True
+        if not ctx.is_full_admin:
+            return False
+        if not await access.can_access_panel(user_id=actor_user_id, settings=settings, panel_id=panel_id):
+            return False
+        panel = await self.get_panel(panel_id)
+        if panel is None:
+            return False
+        if int(panel.get("is_default") or 0) == 1 or int(panel.get("created_by") or 0) == actor_user_id:
+            return True
+        rows = await self.db.list_delegated_admin_panel_access_rows(actor_user_id)
+        return any(int(r["panel_id"]) == panel_id for r in rows)
+
+    async def list_outbound_tags_for_actor(
+        self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
+    ) -> list[str]:
+        all_tags = await self.list_outbound_tags(panel_id)
+        if await self.outbound_actor_sees_all_panel_outbounds(panel_id, actor_user_id, settings, access):
+            return list(all_tags)
+        allowed = set(await self.db.list_panel_outbound_delegate_visible_tags(panel_id, actor_user_id))
+        return sorted(t for t in all_tags if t in allowed)
+
+    async def list_outbound_tags_labels_for_actor(
+        self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
+    ) -> list[tuple[str, str]]:
+        tags = await self.list_outbound_tags_for_actor(panel_id, actor_user_id, settings, access)
+        displays = await self.db.get_panel_outbound_display_map(panel_id)
+        return [(t, displays.get(t, t)) for t in tags]
+
+    async def actor_may_grant_or_add_outbound(
+        self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
+    ) -> bool:
+        if access.is_root_admin(actor_user_id, settings):
+            return True
+        return await self.outbound_actor_sees_all_panel_outbounds(panel_id, actor_user_id, settings, access)
+
+    async def actor_may_use_outbound_tag(
+        self,
+        panel_id: int,
+        actor_user_id: int,
+        outbound_tag: str,
+        settings: Settings,
+        access: AccessService,
+    ) -> bool:
+        allowed = set(
+            await self.list_outbound_tags_for_actor(panel_id, actor_user_id, settings, access)
+        )
+        return outbound_tag.strip() in allowed
+
+    async def append_outbound_from_share_link(
+        self, panel_id: int, uri: str, owner_telegram_user_id: int
+    ) -> str:
+        from bot.services.outbound_share_link import parse_share_link_to_outbound
+
+        ob = parse_share_link_to_outbound(uri)
+        tag = str(ob.get("tag") or "").strip()
+        if not tag:
+            raise ValueError("parsed outbound missing tag.")
+        raw, _ = await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.get_xray_setting(conn, cookies),
+        )
+        bundle = self._parse_xray_setting_bundle(raw)
+        cfg = bundle["config"]
+        test_url = bundle["outbound_test_url"]
+        outs = cfg.get("outbounds")
+        if not isinstance(outs, list):
+            outs = []
+        existing = set(self._list_outbound_tags(cfg))
+        base_tag = tag
+        n = 0
+        while tag in existing:
+            n += 1
+            tag = f"{base_tag}-{n}"
+        ob["tag"] = tag
+        outs.append(ob)
+        cfg["outbounds"] = outs
+        payload = json.dumps(cfg, ensure_ascii=False)
+        await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.update_xray_setting(
+                conn,
+                cookies,
+                xray_setting_json=payload,
+                outbound_test_url=test_url,
+            ),
+        )
+        await self.db.upsert_panel_outbound_owner(panel_id, tag, owner_telegram_user_id)
+        return tag
 
     async def set_client_outbound_tag(
         self,
@@ -1782,7 +1900,12 @@ class PanelService:
         tags = self._list_outbound_tags(cfg)
         if outbound_tag not in tags:
             raise ValueError("outbound tag not found on panel.")
-        inbound_tag = f"inbound-{inbound_id}"
+        inbound_row = await self._get_inbound_by_id(panel_id, inbound_id)
+        if inbound_row is None:
+            raise ValueError("inbound not found.")
+        inbound_tag = self._resolve_xray_inbound_tag(
+            inbound=inbound_row, inbound_id=inbound_id, full_xray_cfg=cfg
+        )
         email = client_email.strip()
         routing = cfg.get("routing")
         if not isinstance(routing, dict):
@@ -1821,6 +1944,121 @@ class PanelService:
                 outbound_test_url=test_url,
             ),
         )
+
+    @staticmethod
+    def _rule_is_inbound_wide_exact_tag(rule: Dict[str, Any], tag: str) -> bool:
+        users = rule.get("user")
+        if users is not None:
+            if isinstance(users, list) and len(users) > 0:
+                return False
+            if isinstance(users, str) and str(users).strip():
+                return False
+        tags = PanelService._normalize_tag_list(rule.get("inboundTag"))
+        if len(tags) != 1:
+            return False
+        return tags[0] == tag
+
+    @staticmethod
+    def _inbound_wide_outbound_on_rule(rule: Dict[str, Any], tag: str) -> str | None:
+        if not PanelService._rule_is_inbound_wide_exact_tag(rule, tag):
+            return None
+        ot = str(rule.get("outboundTag") or "").strip()
+        if ot:
+            return ot
+        bt = str(rule.get("balancerTag") or "").strip()
+        return bt or None
+
+    async def set_inbounds_default_outbound_routing(
+        self,
+        panel_id: int,
+        inbound_ids: list[int],
+        outbound_tag: str,
+    ) -> int:
+        """Set default (no per-user filter) routing for inbounds. Returns count of inbounds updated."""
+        ids = sorted({int(x) for x in inbound_ids if int(x) > 0})
+        if not ids:
+            return 0
+        raw, _ = await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.get_xray_setting(conn, cookies),
+        )
+        bundle = self._parse_xray_setting_bundle(raw)
+        cfg = bundle["config"]
+        test_url = bundle["outbound_test_url"]
+        tags = self._list_outbound_tags(cfg)
+        if outbound_tag not in tags:
+            raise ValueError("outbound tag not found on panel.")
+        routing = cfg.get("routing")
+        if not isinstance(routing, dict):
+            routing = {}
+        raw_rules = routing.get("rules")
+        rules_objs: list[Dict[str, Any]] = []
+        if isinstance(raw_rules, list):
+            for r in raw_rules:
+                rules_objs.append(dict(r) if isinstance(r, dict) else {})
+        drop_tags: set[str] = set()
+        add_specs: list[tuple[str, str]] = []
+        for iid in ids:
+            inbound_row = await self._get_inbound_by_id(panel_id, iid)
+            if inbound_row is None:
+                continue
+            xtag = self._resolve_xray_inbound_tag(
+                inbound=inbound_row, inbound_id=iid, full_xray_cfg=cfg
+            )
+            current: str | None = None
+            for r in rules_objs:
+                if isinstance(r, dict):
+                    current = self._inbound_wide_outbound_on_rule(r, xtag)
+                    if current is not None:
+                        break
+            if current == outbound_tag:
+                continue
+            drop_tags.add(xtag)
+            add_specs.append((xtag, outbound_tag))
+        if not add_specs:
+            return 0
+        rules_objs = [
+            r
+            for r in rules_objs
+            if not (
+                isinstance(r, dict)
+                and any(PanelService._rule_is_inbound_wide_exact_tag(r, xt) for xt in drop_tags)
+            )
+        ]
+        for xtag, ot in add_specs:
+            ins = self._new_rule_insert_index(rules_objs)
+            rules_objs.insert(
+                ins,
+                {"type": "field", "inboundTag": [xtag], "outboundTag": ot},
+            )
+        routing["rules"] = rules_objs
+        cfg["routing"] = routing
+        payload = json.dumps(cfg, ensure_ascii=False)
+        await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.update_xray_setting(
+                conn,
+                cookies,
+                xray_setting_json=payload,
+                outbound_test_url=test_url,
+            ),
+        )
+        return len(add_specs)
+
+    async def set_inbounds_default_outbound_routing_for_actor(
+        self,
+        panel_id: int,
+        inbound_ids: list[int],
+        outbound_tag: str,
+        actor_user_id: int,
+        settings: Settings,
+        access: AccessService,
+    ) -> int:
+        if not await self.actor_may_use_outbound_tag(
+            panel_id, actor_user_id, outbound_tag.strip(), settings, access
+        ):
+            raise ValueError("outbound not allowed for this admin.")
+        return await self.set_inbounds_default_outbound_routing(panel_id, inbound_ids, outbound_tag)
 
     async def sync_single_service(self, service_row: Dict[str, Any]) -> Dict[str, Any]:
         usage = await self.fetch_client_usage(service_row["panel_id"], service_row["client_email"])

@@ -1796,6 +1796,77 @@ class Database:
         )
         await self.conn.commit()
 
+    async def upsert_panel_outbound_display(
+        self, panel_id: int, outbound_tag: str, display_label: str
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO panel_outbound_display(panel_id, outbound_tag, display_label, updated_at)
+            VALUES(?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(panel_id, outbound_tag) DO UPDATE SET
+                display_label=excluded.display_label,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (panel_id, outbound_tag.strip(), display_label.strip()),
+        )
+        await self.conn.commit()
+
+    async def upsert_panel_outbound_owner(
+        self, panel_id: int, outbound_tag: str, owner_telegram_user_id: int
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO panel_outbound_owner(panel_id, outbound_tag, owner_telegram_user_id, created_at)
+            VALUES(?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(panel_id, outbound_tag) DO UPDATE SET
+                owner_telegram_user_id=excluded.owner_telegram_user_id;
+            """,
+            (panel_id, outbound_tag.strip(), int(owner_telegram_user_id)),
+        )
+        await self.conn.commit()
+
+    async def list_panel_outbound_delegate_visible_tags(
+        self, panel_id: int, delegate_telegram_user_id: int
+    ) -> list[str]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT outbound_tag FROM panel_outbound_owner
+            WHERE panel_id=? AND owner_telegram_user_id=?
+            UNION
+            SELECT outbound_tag FROM panel_outbound_delegate_grant
+            WHERE panel_id=? AND delegate_telegram_user_id=?;
+            """,
+            (panel_id, int(delegate_telegram_user_id), panel_id, int(delegate_telegram_user_id)),
+        )
+        rows = await cur.fetchall()
+        return sorted({str(r["outbound_tag"]).strip() for r in rows if str(r["outbound_tag"]).strip()})
+
+    async def get_panel_outbound_display_map(self, panel_id: int) -> Dict[str, str]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            "SELECT outbound_tag, display_label FROM panel_outbound_display WHERE panel_id=?;",
+            (panel_id,),
+        )
+        rows = await cur.fetchall()
+        return {str(r["outbound_tag"]): str(r["display_label"]) for r in rows}
+
+    async def insert_panel_outbound_delegate_grant(
+        self, panel_id: int, outbound_tag: str, delegate_telegram_user_id: int
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO panel_outbound_delegate_grant(
+                panel_id, outbound_tag, delegate_telegram_user_id, created_at
+            ) VALUES(?, ?, ?, CURRENT_TIMESTAMP);
+            """,
+            (panel_id, outbound_tag.strip(), int(delegate_telegram_user_id)),
+        )
+        await self.conn.commit()
+
     async def count_panels(self) -> int:
         assert self.conn is not None
         cur = await self.conn.execute("SELECT COUNT(*) AS cnt FROM panels;")

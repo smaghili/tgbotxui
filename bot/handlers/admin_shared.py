@@ -521,15 +521,15 @@ def edit_config_location_outbound_keyboard(
     panel_id: int,
     inbound_id: int,
     client_uuid: str,
-    outbound_tags: list[str],
+    outbound_rows: list[tuple[str, str]],
     lang: str | None = None,
 ) -> InlineKeyboardMarkup:
     buttons: list[InlineKeyboardButton] = []
-    for idx, tag in enumerate(outbound_tags):
-        label = _truncate_button_text(tag, 28)
+    for idx, (_tag, label) in enumerate(outbound_rows):
+        text_label = _truncate_button_text(label, 28)
         buttons.append(
             InlineKeyboardButton(
-                text=label,
+                text=text_label,
                 callback_data=f"pec:locp:{panel_id}:{inbound_id}:{client_uuid}:{idx}",
             )
         )

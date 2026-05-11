@@ -9,7 +9,9 @@ from bot.handlers import (
     admin_client_bulk,
     admin_clients,
     admin_finance,
+    admin_inbound_location,
     admin_notifications,
+    admin_outbound_panel,
     admin_panels,
     admin_provisioning,
 )
@@ -19,7 +21,9 @@ router.include_router(admin_cancel.router)
 router.include_router(admin_finance.router)
 router.include_router(admin_notifications.router)
 router.include_router(admin_panels.router)
+router.include_router(admin_outbound_panel.router)
 router.include_router(admin_access.router)
+router.include_router(admin_inbound_location.router)
 router.include_router(admin_provisioning.router)
 router.include_router(admin_client_bulk.router)
 router.include_router(admin_clients.router)

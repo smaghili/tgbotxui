@@ -10,6 +10,7 @@ from bot.keyboards import main_keyboard
 from bot.services.container import ServiceContainer
 from bot.states import AddPanelStates, AdminSettingsStates, InboundsListStates
 
+from .admin_outbound_panel import send_panel_outbounds_overview
 from .admin_shared import (
     answer_with_admin_menu,
     answer_with_cancel,
@@ -18,6 +19,7 @@ from .admin_shared import (
     panels_glass_keyboard,
     panels_list_text,
     refresh_panels_message,
+    reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
     show_inbounds_for_panel,
     show_inbounds_overview_for_panel,
@@ -292,7 +294,7 @@ async def list_panels(message: Message, settings: Settings, services: ServiceCon
 
 @router.callback_query(F.data.startswith("panel_outbounds_list:"))
 async def panel_outbounds_list(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await _reject_callback_if_not_full_admin(callback, settings, services):
+    if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
         await callback.answer()
@@ -314,24 +316,14 @@ async def panel_outbounds_list(callback: CallbackQuery, settings: Settings, serv
     if not panel:
         await callback.answer(t("admin_panel_not_found", lang), show_alert=True)
         return
-    try:
-        tags = await services.panel_service.list_outbound_tags(panel_id)
-    except Exception as exc:
-        await callback.message.answer(t("panel_outbounds_fetch_error", lang, error=exc))
-        await callback.answer()
-        return
-    if not tags:
-        await callback.message.answer(
-            t("panel_outbounds_header", lang, name=panel["name"], count=0)
-            + "\n"
-            + t("panel_outbounds_empty", lang),
-        )
-        await callback.answer()
-        return
-    body_lines = [f"{i}. {tag}" for i, tag in enumerate(tags, start=1)]
-    text = t("panel_outbounds_header", lang, name=panel["name"], count=len(tags)) + "\n".join(body_lines)
-    for part in _chunk_text_by_lines(text):
-        await callback.message.answer(part)
+    await send_panel_outbounds_overview(
+        callback.message,
+        services=services,
+        settings=settings,
+        panel_id=panel_id,
+        actor_user_id=callback.from_user.id,
+        lang=lang,
+    )
     await callback.answer()
 
 

@@ -1381,16 +1381,21 @@ async def edit_config_location_menu(callback: CallbackQuery, settings: Settings,
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
     try:
-        tags = await services.panel_service.list_outbound_tags(panel_id)
+        rows = await services.panel_service.list_outbound_tags_labels_for_actor(
+            panel_id,
+            callback.from_user.id,
+            settings,
+            services.access_service,
+        )
     except Exception as exc:
         await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
         return
-    if not tags:
+    if not rows:
         await callback.answer(t("admin_edit_location_none", lang), show_alert=True)
         return
     await callback.message.edit_reply_markup(
         reply_markup=edit_config_location_outbound_keyboard(
-            panel_id, inbound_id, client_uuid, tags, lang
+            panel_id, inbound_id, client_uuid, rows, lang
         ),
     )
     await callback.answer()
@@ -1420,14 +1425,19 @@ async def edit_config_location_pick(callback: CallbackQuery, settings: Settings,
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
     try:
-        tags = await services.panel_service.list_outbound_tags(panel_id)
+        rows = await services.panel_service.list_outbound_tags_labels_for_actor(
+            panel_id,
+            callback.from_user.id,
+            settings,
+            services.access_service,
+        )
     except Exception as exc:
         await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
         return
-    if idx < 0 or idx >= len(tags):
+    if idx < 0 or idx >= len(rows):
         await callback.answer(t("admin_edit_location_bad", lang), show_alert=True)
         return
-    outbound_tag = tags[idx]
+    outbound_tag = rows[idx][0]
     try:
         await services.admin_provisioning_service.set_client_outbound_tag_for_actor(
             actor_user_id=callback.from_user.id,

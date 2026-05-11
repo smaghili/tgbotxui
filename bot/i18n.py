@@ -26,6 +26,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "btn_last_online_users": {"fa": "🕘 آخرین آنلاین", "en": "🕘 Last Online"},
     "btn_inbounds_overview": {"fa": "📋 اطلاعات کلی ورودی‌ها", "en": "📋 Inbound Overview"},
     "btn_create_user": {"fa": "➕ ساخت کاربر", "en": "➕ Create User"},
+    "btn_change_inbound_location": {"fa": "🌍 تغییر لوکیشن اینباند", "en": "🌍 Inbound location"},
     "btn_edit_config": {"fa": "🛠 ویرایش کانفیگ", "en": "🛠 Edit Config"},
     "btn_manage_admins": {"fa": "👥 مدیریت ادمین‌ها", "en": "👥 Manage Admins"},
     "btn_cleanup_settings": {"fa": "⏱ تنظیم حذف خودکار", "en": "⏱ Auto cleanup"},
@@ -602,6 +603,30 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "دریافت لیست اوت‌باند ناموفق:\n{error}",
         "en": "Failed to fetch outbounds:\n{error}",
     },
+    "panel_ob_add_link": {"fa": "➕ افزودن با لینک", "en": "➕ Add from link"},
+    "panel_ob_grant_menu": {"fa": "👤 اعطا به نماینده", "en": "👤 Grant to delegate"},
+    "panel_ob_send_link": {
+        "fa": "لینک اشتراک را بفرستید (vless / vmess / trojan / ss / hysteria2).",
+        "en": "Send a share link (vless / vmess / trojan / ss / hysteria2).",
+    },
+    "panel_ob_link_invalid": {"fa": "لینک نامعتبر:\n{error}", "en": "Invalid link:\n{error}"},
+    "panel_ob_link_failed": {"fa": "افزودن اوت‌باند ناموفق:\n{error}", "en": "Failed to add outbound:\n{error}"},
+    "panel_ob_added_ok": {"fa": "✅ اوت‌باند با تگ «{tag}» به پنل اضافه شد.", "en": "✅ Outbound added with tag «{tag}»."},
+    "panel_ob_pick_delegate": {"fa": "نماینده را انتخاب کنید:", "en": "Pick a delegate:"},
+    "panel_ob_delegate_no_panel": {
+        "fa": "این نماینده به این پنل دسترسی ندارد.",
+        "en": "This delegate has no access to this panel.",
+    },
+    "panel_ob_pick_outbound_grant": {
+        "fa": "اوت‌باند پنل را که این نماینده ببیند انتخاب کنید:",
+        "en": "Pick a panel outbound this delegate may use:",
+    },
+    "panel_ob_grant_ok": {"fa": "اعطا شد: «{tag}»", "en": "Granted: «{tag}»"},
+    "panel_ob_send_display_name": {
+        "fa": "نام نمایشی جدید برای «{tag}» را بفرستید (فقط در ربات دیده می‌شود).",
+        "en": "Send a new display label for «{tag}» (bot only; panel tag unchanged).",
+    },
+    "panel_ob_display_saved": {"fa": "✅ نام نمایشی ذخیره شد.", "en": "✅ Display label saved."},
     "panel_add_enter_twofa": {"fa": "کد twoFactorCode را وارد کنید:", "en": "Enter twoFactorCode:"},
     "panel_add_twofa_empty": {"fa": "کد twoFactorCode نمی‌تواند خالی باشد. یا گزینه «خیر» را انتخاب کنید.", "en": "twoFactorCode cannot be empty. Choose No if disabled."},
     "panel_default_set": {"fa": "پنل پیش‌فرض تنظیم شد.", "en": "Default panel set."},
@@ -811,6 +836,40 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_create_user_no_access": {
         "fa": "هیچ اینباند مجازی برای شما ثبت نشده است.",
         "en": "No allowed inbound is registered for you.",
+    },
+    "admin_ibloc_no_access": {
+        "fa": "ورودی‌ای برای تغییر لوکیشن در دسترس شما نیست.",
+        "en": "No inbounds available for you to change routing.",
+    },
+    "admin_ibloc_pick_panel": {
+        "fa": "ابتدا پنل را انتخاب کنید (فقط ورودی‌های همان پنل را می‌توان با هم تغییر داد):",
+        "en": "Choose a panel first (only inbounds on the same panel can be changed together):",
+    },
+    "admin_ibloc_pick_inbounds": {
+        "fa": "یک یا چند ورودی را بزنید تا ✅ شود؛ سپس «تایید» را بزنید تا لیست اوت‌باند نمایش داده شود.",
+        "en": "Tap one or more inbounds to mark ✅, then tap Confirm to see outbounds.",
+    },
+    "admin_ibloc_confirm": {"fa": "✅ تایید", "en": "✅ Confirm"},
+    "admin_ibloc_cancel": {"fa": "❌ لغو", "en": "❌ Cancel"},
+    "admin_ibloc_none_selected": {
+        "fa": "حداقل یک ورودی را انتخاب کنید.",
+        "en": "Select at least one inbound.",
+    },
+    "admin_ibloc_pick_outbound": {
+        "fa": "اوت‌باند مقصد برای ورودی‌های انتخاب‌شده:",
+        "en": "Target outbound for the selected inbounds:",
+    },
+    "admin_ibloc_done": {
+        "fa": "✅ لوکیشن ورودی‌های انتخاب‌شده به «{tag}» تنظیم شد.",
+        "en": "✅ Selected inbounds are now routed to «{tag}».",
+    },
+    "admin_ibloc_noop": {
+        "fa": "برای این ورودی‌ها همین اوت‌باند از قبل تنظیم بود؛ تغییری اعمال نشد.",
+        "en": "Those inbounds already used this outbound; nothing changed.",
+    },
+    "admin_ibloc_error": {
+        "fa": "خطا در تنظیم لوکیشن:\n{error}",
+        "en": "Failed to update routing:\n{error}",
     },
     "admin_create_enter_email": {
         "fa": "نام/ایمیل کاربر را وارد کنید:",
