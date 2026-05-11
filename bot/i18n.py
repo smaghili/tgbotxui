@@ -69,16 +69,16 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Financial management:\n- User wallets\n- User/admin pricing\n- Overall financial report",
     },
     "finance_root_delegate_menu": {
-        "fa": "مدیریت مالی مدیر اصلی:\n- نمایندگی‌ها\n- فروش امروز\n- گزارش‌های امروز",
-        "en": "Root financial management:\n- Delegates\n- Today's sales\n- Today's reports",
+        "fa": "مدیریت مالی مدیر اصلی:\n- نمایندگی‌ها\n- فروش امروز\n- گزارش‌های امروز\n\n💡 در این منو دکمهٔ «مشاهده اعتبار» مثل نماینده نیست؛ جزئیات مالی هر نماینده را از لیست نمایندگی‌ها باز کنید.",
+        "en": "Root financial menu:\n- Delegates\n- Today's sales\n- Today's reports\n\n💡 There is no separate \"View credit\" button here like delegates use; open each delegate from the list for their balance and summary.",
     },
     "finance_delegated_title": {
         "fa": "مدیریت مالی:\n- مشاهده اعتبار\n- نمایندگی‌ها\n- فروش امروز\n- گزارش‌های امروز\n- بازگشت",
         "en": "Financial management:\n- View credit\n- Delegates\n- Today's sales\n- Today's reports\n- Back",
     },
     "finance_limited_delegated_title": {
-        "fa": "مدیریت مالی:\n- فروش امروز\n- گزارش‌های امروز\n- بازگشت",
-        "en": "Financial management:\n- Today's sales\n- Today's reports\n- Back",
+        "fa": "مدیریت مالی:\n- جزئیات نمایندگی من 📋\n- فروش امروز\n- گزارش‌های امروز\n- بازگشت",
+        "en": "Financial management:\n- My delegation details 📋\n- Today's sales\n- Today's reports\n- Back",
     },
     "finance_wallet_manage": {"fa": "👛 کیف پول کاربران", "en": "👛 User Wallets"},
     "finance_pricing_manage": {"fa": "💳 تنظیم قیمت کاربران", "en": "💳 User Pricing"},
@@ -852,6 +852,11 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Panel: {panel}\nEdit search: {query}\nResults: {count}",
     },
     "admin_edit_add_traffic": {"fa": "➕ افزودن حجم", "en": "➕ Add traffic"},
+    "admin_edit_reset_traffic": {"fa": "🔄 ریست ترافیک", "en": "🔄 Reset traffic"},
+    "admin_edit_reset_traffic_confirm": {
+        "fa": "مصرف ترافیک این کاربر صفر شود؟\n(سقف حجم کانفیگ عوض نمی‌شود؛ فقط شمارندهٔ مصرف ریست می‌شود.)",
+        "en": "Reset this client's traffic usage?\n(Total traffic limit stays the same; only usage counters are cleared.)",
+    },
     "admin_edit_add_days": {"fa": "➕ افزودن روز", "en": "➕ Add days"},
     "admin_edit_delete_client": {"fa": "🗑 حذف کاربر", "en": "🗑 Delete client"},
     "admin_edit_show_detail": {"fa": "🔎 نمایش جزئیات", "en": "🔎 Show detail"},

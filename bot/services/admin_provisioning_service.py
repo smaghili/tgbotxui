@@ -115,6 +115,18 @@ class ManagedClientRef:
     client_email: str
 
 
+@dataclass
+class _ScopeFinancialLedger:
+    delegate_finance_excluded_used_bytes: int = 0
+    clients_count: int = 0
+    allocated_bytes: int = 0
+    consumed_bytes: int = 0
+    remaining_bytes: int = 0
+    panel_total_consumed_bytes: int = 0
+    root_created_consumed_bytes: int = 0
+    billable_segment_consumed_bytes: int = 0
+
+
 class AdminProvisioningService:
     def __init__(
         self,
@@ -1451,42 +1463,13 @@ class AdminProvisioningService:
             return await self.db.get_delegated_admin_subtree_user_ids(manager_user_id=actor_user_id, include_self=True)
         return [actor_user_id]
 
-    async def get_admin_scope_financial_summary(
+    async def _accumulate_scope_financial_ledger(
         self,
         *,
         actor_user_id: int,
         settings: Settings,
-    ) -> dict[str, Any]:
-        wallet = await self.financial_service.get_wallet(actor_user_id) if self.financial_service is not None else {
-            "balance": 0,
-            "currency": "تومان",
-        }
-        pricing = await self.financial_service.get_pricing(actor_user_id) if self.financial_service is not None else {
-            "price_per_gb": 0,
-            "price_per_day": 0,
-            "currency": "تومان",
-            "charge_basis": "allocated",
-            "apply_price_to_past_reports": 1,
-        }
-        owner_ids = await self.financial_scope_user_ids(actor_user_id=actor_user_id, settings=settings)
-        if not owner_ids:
-            return {
-                "wallet": wallet,
-                "pricing": pricing,
-                "clients_count": 0,
-                "allocated_bytes": 0,
-                "consumed_bytes": 0,
-                "remaining_bytes": 0,
-                "allocated_gb": 0,
-                "consumed_gb": 0,
-                "remaining_gb": 0,
-                "sale_amount": 0,
-                "debt_amount": 0,
-                "remaining_amount": 0,
-                "total_transactions": 0,
-                "scope_user_ids": [],
-            }
-        owner_id_set = {str(owner_id) for owner_id in owner_ids}
+        owner_id_set: set[str],
+    ) -> _ScopeFinancialLedger:
         delegate_finance_excluded_used_bytes = 0
         seen: set[tuple[int, int, str]] = set()
         clients_count = 0
@@ -1665,6 +1648,66 @@ class AdminProvisioningService:
                     consumed_bytes += client_used_bytes
                     if client_total_bytes > 0 and key not in exclude_remaining_keys:
                         remaining_bytes += max(client_total_bytes - client_used_bytes, 0)
+        return _ScopeFinancialLedger(
+            delegate_finance_excluded_used_bytes=delegate_finance_excluded_used_bytes,
+            clients_count=clients_count,
+            allocated_bytes=allocated_bytes,
+            consumed_bytes=consumed_bytes,
+            remaining_bytes=remaining_bytes,
+            panel_total_consumed_bytes=panel_total_consumed_bytes,
+            root_created_consumed_bytes=root_created_consumed_bytes,
+            billable_segment_consumed_bytes=billable_segment_consumed_bytes,
+        )
+
+    async def get_admin_scope_financial_summary(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+    ) -> dict[str, Any]:
+        wallet = await self.financial_service.get_wallet(actor_user_id) if self.financial_service is not None else {
+            "balance": 0,
+            "currency": "تومان",
+        }
+        pricing = await self.financial_service.get_pricing(actor_user_id) if self.financial_service is not None else {
+            "price_per_gb": 0,
+            "price_per_day": 0,
+            "currency": "تومان",
+            "charge_basis": "allocated",
+            "apply_price_to_past_reports": 1,
+        }
+        owner_ids = await self.financial_scope_user_ids(actor_user_id=actor_user_id, settings=settings)
+        if not owner_ids:
+            return {
+                "wallet": wallet,
+                "pricing": pricing,
+                "clients_count": 0,
+                "allocated_bytes": 0,
+                "consumed_bytes": 0,
+                "remaining_bytes": 0,
+                "allocated_gb": 0,
+                "consumed_gb": 0,
+                "remaining_gb": 0,
+                "sale_amount": 0,
+                "debt_amount": 0,
+                "remaining_amount": 0,
+                "total_transactions": 0,
+                "scope_user_ids": [],
+            }
+        owner_id_set = {str(owner_id) for owner_id in owner_ids}
+        ledger = await self._accumulate_scope_financial_ledger(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            owner_id_set=owner_id_set,
+        )
+        delegate_finance_excluded_used_bytes = ledger.delegate_finance_excluded_used_bytes
+        clients_count = ledger.clients_count
+        allocated_bytes = ledger.allocated_bytes
+        consumed_bytes = ledger.consumed_bytes
+        remaining_bytes = ledger.remaining_bytes
+        panel_total_consumed_bytes = ledger.panel_total_consumed_bytes
+        root_created_consumed_bytes = ledger.root_created_consumed_bytes
+        billable_segment_consumed_bytes = ledger.billable_segment_consumed_bytes
         price_per_gb = int(pricing.get("price_per_gb") or 0)
         allocated_gb = allocated_bytes // (1024 ** 3)
         if allocated_bytes % (1024 ** 3):

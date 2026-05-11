@@ -15,6 +15,11 @@ from bot.utils import (
 )
 
 
+def wallet_currency_label(raw: str | None, *, lang: str | None) -> str:
+    text = str(raw or "").strip()
+    return text if text else t("finance_currency_default", lang)
+
+
 def _format_amount(value: int) -> str:
     return f"{value:,}"
 

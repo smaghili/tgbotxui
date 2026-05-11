@@ -20,6 +20,7 @@ from .admin_shared import (
     answer_with_cancel,
     ensure_client_access,
     edit_config_actions_keyboard,
+    edit_config_reset_traffic_confirm_keyboard,
     format_client_detail,
     inline_button,
     normalize_tg_id,
@@ -1231,6 +1232,126 @@ async def edit_config_add_traffic_prompt(callback: CallbackQuery, state: FSMCont
     await state.set_state(ProvisioningStates.waiting_edit_add_traffic_gb)
     await callback.message.answer(t("admin_edit_enter_add_traffic", lang))
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pec:traffic_reset_ask:"))
+async def edit_config_reset_traffic_ask(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    try:
+        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
+        panel_id = int(panel_raw)
+        inbound_id = int(inbound_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=edit_config_reset_traffic_confirm_keyboard(panel_id, inbound_id, client_uuid, lang),
+    )
+    await callback.answer(t("admin_edit_reset_traffic_confirm", lang), show_alert=True)
+
+
+@router.callback_query(F.data.startswith("pec:traffic_reset_cancel:"))
+async def edit_config_reset_traffic_cancel(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.data is None:
+        await callback.answer()
+        return
+    try:
+        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
+        panel_id = int(panel_raw)
+        inbound_id = int(inbound_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    await render_client_detail(
+        callback,
+        services=services,
+        settings=settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        lang=lang,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pec:traffic_reset_do:"))
+async def edit_config_reset_traffic_do(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.data is None:
+        await callback.answer()
+        return
+    try:
+        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
+        panel_id = int(panel_raw)
+        inbound_id = int(inbound_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    try:
+        await services.admin_provisioning_service.reset_client_traffic_for_actor(
+            actor_user_id=callback.from_user.id,
+            settings=settings,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+    except Exception as exc:
+        delegated_error = _delegated_profile_error_text(exc, lang)
+        if delegated_error is not None:
+            await callback.answer(delegated_error, show_alert=True)
+            return
+        await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
+        return
+    await render_client_detail(
+        callback,
+        services=services,
+        settings=settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        lang=lang,
+    )
+    await callback.answer(t("admin_reset_done", lang))
 
 
 @router.message(ProvisioningStates.waiting_edit_add_traffic_gb)
