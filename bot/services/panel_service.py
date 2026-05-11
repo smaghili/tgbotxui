@@ -1651,6 +1651,177 @@ class PanelService:
         usage["service_name"] = service_name or usage["service_name"]
         return usage
 
+    @staticmethod
+    def _unwrap_xray_template_string(raw: str) -> str:
+        s = raw.strip()
+        for _ in range(8):
+            try:
+                top = json.loads(s)
+            except json.JSONDecodeError:
+                return s
+            if not isinstance(top, dict) or "xraySetting" not in top:
+                return s
+            for k in ("inbounds", "outbounds", "routing", "api", "dns", "log", "policy", "stats"):
+                if k in top:
+                    return s
+            inner = top["xraySetting"]
+            if isinstance(inner, str):
+                inner_st = inner.strip()
+                if inner_st.startswith('"'):
+                    try:
+                        inner_st = json.loads(inner_st)
+                    except json.JSONDecodeError:
+                        pass
+                if isinstance(inner_st, dict):
+                    s = json.dumps(inner_st, ensure_ascii=False)
+                else:
+                    s = str(inner_st)
+                continue
+            if isinstance(inner, dict):
+                s = json.dumps(inner, ensure_ascii=False)
+                continue
+            return s
+        return s
+
+    @staticmethod
+    def _parse_xray_setting_bundle(body: Dict[str, Any]) -> Dict[str, Any]:
+        obj = body.get("obj")
+        if isinstance(obj, str):
+            wrapper = json.loads(obj)
+        elif isinstance(obj, dict):
+            wrapper = obj
+        else:
+            raise ValueError("unexpected xray panel response.")
+        test_url = str(wrapper.get("outboundTestUrl") or "").strip() or "https://www.google.com/generate_204"
+        xs = wrapper.get("xraySetting")
+        if isinstance(xs, str):
+            cfg = json.loads(PanelService._unwrap_xray_template_string(xs))
+        elif isinstance(xs, dict):
+            cfg = json.loads(
+                PanelService._unwrap_xray_template_string(json.dumps(xs, ensure_ascii=False))
+            )
+        else:
+            raise ValueError("missing xraySetting in panel response.")
+        if not isinstance(cfg, dict):
+            raise ValueError("invalid xray template.")
+        return {"config": cfg, "outbound_test_url": test_url}
+
+    @staticmethod
+    def _normalize_tag_list(val: Any) -> list[str]:
+        if val is None:
+            return []
+        if isinstance(val, str):
+            return [val] if val else []
+        if isinstance(val, list):
+            return [str(x) for x in val if str(x)]
+        return []
+
+    @staticmethod
+    def _list_outbound_tags(cfg: Dict[str, Any]) -> list[str]:
+        out = cfg.get("outbounds")
+        if not isinstance(out, list):
+            return []
+        tags: list[str] = []
+        for item in out:
+            if not isinstance(item, dict):
+                continue
+            tag = str(item.get("tag") or "").strip()
+            if tag:
+                tags.append(tag)
+        return sorted(set(tags))
+
+    @staticmethod
+    def _rule_matches_client(rule: Dict[str, Any], email: str, inbound_tag: str) -> bool:
+        users = PanelService._normalize_tag_list(rule.get("user"))
+        if email not in users:
+            return False
+        in_tags = PanelService._normalize_tag_list(rule.get("inboundTag"))
+        if not in_tags:
+            return True
+        return inbound_tag in in_tags
+
+    @staticmethod
+    def _first_rule_index_for_client(rules: list[Dict[str, Any]], email: str, inbound_tag: str) -> int | None:
+        for i, rule in enumerate(rules):
+            if isinstance(rule, dict) and PanelService._rule_matches_client(rule, email, inbound_tag):
+                return i
+        return None
+
+    @staticmethod
+    def _new_rule_insert_index(rules: list[Dict[str, Any]]) -> int:
+        if not rules:
+            return 0
+        r0 = rules[0]
+        if isinstance(r0, dict) and str(r0.get("outboundTag") or "") == "api":
+            if "api" in PanelService._normalize_tag_list(r0.get("inboundTag")):
+                return 1
+        return 0
+
+    async def list_outbound_tags(self, panel_id: int) -> list[str]:
+        raw, _ = await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.get_xray_setting(conn, cookies),
+        )
+        bundle = self._parse_xray_setting_bundle(raw)
+        return self._list_outbound_tags(bundle["config"])
+
+    async def set_client_outbound_tag(
+        self,
+        panel_id: int,
+        inbound_id: int,
+        client_email: str,
+        outbound_tag: str,
+    ) -> None:
+        raw, _ = await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.get_xray_setting(conn, cookies),
+        )
+        bundle = self._parse_xray_setting_bundle(raw)
+        cfg = bundle["config"]
+        test_url = bundle["outbound_test_url"]
+        tags = self._list_outbound_tags(cfg)
+        if outbound_tag not in tags:
+            raise ValueError("outbound tag not found on panel.")
+        inbound_tag = f"inbound-{inbound_id}"
+        email = client_email.strip()
+        routing = cfg.get("routing")
+        if not isinstance(routing, dict):
+            routing = {}
+        raw_rules = routing.get("rules")
+        rules_objs: list[Dict[str, Any]] = []
+        if isinstance(raw_rules, list):
+            for r in raw_rules:
+                rules_objs.append(dict(r) if isinstance(r, dict) else {})
+        idx = self._first_rule_index_for_client(rules_objs, email, inbound_tag)
+        if idx is not None:
+            target = rules_objs[idx]
+            target["type"] = "field"
+            target["outboundTag"] = outbound_tag
+            target.pop("balancerTag", None)
+        else:
+            ins = self._new_rule_insert_index(rules_objs)
+            rules_objs.insert(
+                ins,
+                {
+                    "type": "field",
+                    "inboundTag": [inbound_tag],
+                    "user": [email],
+                    "outboundTag": outbound_tag,
+                },
+            )
+        routing["rules"] = rules_objs
+        cfg["routing"] = routing
+        payload = json.dumps(cfg, ensure_ascii=False)
+        await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.update_xray_setting(
+                conn,
+                cookies,
+                xray_setting_json=payload,
+                outbound_test_url=test_url,
+            ),
+        )
+
     async def sync_single_service(self, service_row: Dict[str, Any]) -> Dict[str, Any]:
         usage = await self.fetch_client_usage(service_row["panel_id"], service_row["client_email"])
         await self.db.update_user_service_stats(

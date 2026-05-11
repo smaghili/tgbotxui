@@ -11,6 +11,7 @@ NOTIFICATION_KIND_LABEL_KEY: dict[str, str] = {
     "admin_activity_action_set_total_gb": "admin_activity_action_set_total_gb",
     "admin_activity_action_set_expiry_days": "admin_activity_action_set_expiry_days",
     "admin_activity_action_reset_traffic": "admin_activity_action_reset_traffic",
+    "admin_activity_action_change_location": "admin_activity_action_change_location",
     "admin_activity_action_set_ip_limit": "admin_activity_action_set_ip_limit",
     "bot_notify_auto_cleanup_deleted": "notif_kind_auto_cleanup_deleted",
     "bot_notify_manager_service_depleted": "notif_kind_manager_service_depleted",

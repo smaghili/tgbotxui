@@ -946,6 +946,54 @@ class AdminProvisioningService:
         )
         return detail
 
+    async def set_client_outbound_tag_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        outbound_tag: str,
+    ) -> dict[str, Any]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        detail = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        email = str(detail.get("email") or "").strip()
+        if not email:
+            raise ValueError("client email missing.")
+        await self.panel_service.set_client_outbound_tag(
+            ref.panel_id, ref.inbound_id, email, outbound_tag.strip()
+        )
+        await self.db.add_audit_log(
+            actor_user_id=actor_user_id,
+            action="set_client_outbound",
+            target_type="client",
+            target_id=ref.client_uuid,
+            success=True,
+            details=f"outbound={outbound_tag}",
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_change_location",
+            user=email,
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[
+                t(
+                    "admin_activity_detail_outbound_tag",
+                    lang,
+                    tag=outbound_tag.strip(),
+                )
+            ],
+        )
+        return detail
+
     async def set_client_limit_ip_for_actor(
         self,
         *,

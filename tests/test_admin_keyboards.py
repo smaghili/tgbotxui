@@ -46,6 +46,7 @@ def test_edit_config_actions_keyboard_includes_toggle_button() -> None:
     assert "pec:rotate_ask:1:2:uuid-1" in callbacks
     assert t("admin_toggle_on", "fa") in labels
     assert "pec:toggle:1:2:uuid-1" in callbacks
+    assert "pec:locm:1:2:uuid-1" in callbacks
     assert t("admin_edit_show_detail", "fa") not in labels
 
 
@@ -139,6 +140,7 @@ def test_panels_glass_keyboard_includes_panel_access_button() -> None:
 
     assert "panel_access_ask:7" in callbacks
     assert "panel_delete_ask:7" in callbacks
+    assert "panel_outbounds_list:7" in callbacks
 
 
 def test_yes_no_inline_keyboard_builds_two_buttons() -> None:

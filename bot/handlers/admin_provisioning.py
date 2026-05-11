@@ -20,12 +20,15 @@ from .admin_shared import (
     answer_with_cancel,
     ensure_client_access,
     edit_config_actions_keyboard,
+    edit_config_location_outbound_keyboard,
     edit_config_reset_traffic_confirm_keyboard,
     format_client_detail,
     inline_button,
     normalize_tg_id,
     panel_select_keyboard,
     parse_client_callback,
+    parse_location_menu_callback,
+    parse_location_pick_callback,
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
     render_client_detail,
@@ -1352,6 +1355,105 @@ async def edit_config_reset_traffic_do(callback: CallbackQuery, settings: Settin
         lang=lang,
     )
     await callback.answer(t("admin_reset_done", lang))
+
+
+@router.callback_query(F.data.startswith("pec:locm:"))
+async def edit_config_location_menu(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    try:
+        panel_id, inbound_id, client_uuid = parse_location_menu_callback(callback.data)
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    try:
+        tags = await services.panel_service.list_outbound_tags(panel_id)
+    except Exception as exc:
+        await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
+        return
+    if not tags:
+        await callback.answer(t("admin_edit_location_none", lang), show_alert=True)
+        return
+    await callback.message.edit_reply_markup(
+        reply_markup=edit_config_location_outbound_keyboard(
+            panel_id, inbound_id, client_uuid, tags, lang
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pec:locp:"))
+async def edit_config_location_pick(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.data is None:
+        await callback.answer()
+        return
+    try:
+        panel_id, inbound_id, client_uuid, idx = parse_location_pick_callback(callback.data)
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    try:
+        tags = await services.panel_service.list_outbound_tags(panel_id)
+    except Exception as exc:
+        await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
+        return
+    if idx < 0 or idx >= len(tags):
+        await callback.answer(t("admin_edit_location_bad", lang), show_alert=True)
+        return
+    outbound_tag = tags[idx]
+    try:
+        await services.admin_provisioning_service.set_client_outbound_tag_for_actor(
+            actor_user_id=callback.from_user.id,
+            settings=settings,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            outbound_tag=outbound_tag,
+        )
+    except Exception as exc:
+        delegated_error = _delegated_profile_error_text(exc, lang)
+        if delegated_error is not None:
+            await callback.answer(delegated_error, show_alert=True)
+            return
+        await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
+        return
+    await render_client_detail(
+        callback,
+        services=services,
+        settings=settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        lang=lang,
+    )
+    await callback.answer(t("admin_edit_location_done", lang, tag=outbound_tag))
 
 
 @router.message(ProvisioningStates.waiting_edit_add_traffic_gb)

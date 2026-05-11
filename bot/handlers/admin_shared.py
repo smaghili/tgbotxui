@@ -290,7 +290,7 @@ def panel_select_keyboard(panels: list[dict], callback_prefix: str) -> InlineKey
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def panels_glass_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
+def panels_glass_keyboard(panels: list[dict], lang: str | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for p in panels:
         rows.append(
@@ -300,6 +300,7 @@ def panels_glass_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
                 inline_button("🗑️", f"panel_delete_ask:{p['id']}"),
             ]
         )
+        rows.append([inline_button(t("panel_list_outbounds_button", lang), f"panel_outbounds_list:{p['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -492,6 +493,7 @@ def edit_config_actions_keyboard(
         ],
         [
             inline_button(t("admin_edit_reset_traffic", lang), f"pec:traffic_reset_ask:{panel_id}:{inbound_id}:{client_uuid}"),
+            inline_button(t("admin_edit_change_location", lang), f"pec:locm:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
         [inline_button(t("admin_set_tg", lang), f"pec:tg_input:{panel_id}:{inbound_id}:{client_uuid}")],
         [inline_button(toggle_text, f"pec:toggle:{panel_id}:{inbound_id}:{client_uuid}")],
@@ -513,6 +515,29 @@ def edit_config_reset_traffic_confirm_keyboard(
             ],
         ]
     )
+
+
+def edit_config_location_outbound_keyboard(
+    panel_id: int,
+    inbound_id: int,
+    client_uuid: str,
+    outbound_tags: list[str],
+    lang: str | None = None,
+) -> InlineKeyboardMarkup:
+    buttons: list[InlineKeyboardButton] = []
+    for idx, tag in enumerate(outbound_tags):
+        label = _truncate_button_text(tag, 28)
+        buttons.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"pec:locp:{panel_id}:{inbound_id}:{client_uuid}:{idx}",
+            )
+        )
+    rows = chunk_buttons(buttons, columns=2)
+    rows.append(
+        [inline_button(t("admin_back", lang), f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def client_actions_keyboard(
@@ -855,6 +880,25 @@ def parse_client_callback_with_value(data: str, prefix: str) -> tuple[int, int, 
         raise ValueError("callback_data_invalid") from exc
 
 
+def parse_location_menu_callback(data: str) -> tuple[int, int, str]:
+    prefix = "pec:locm:"
+    if not data.startswith(prefix):
+        raise ValueError("callback_data_invalid")
+    rest = data[len(prefix) :]
+    panel_s, inbound_s, client_uuid = rest.split(":", 2)
+    return int(panel_s), int(inbound_s), client_uuid
+
+
+def parse_location_pick_callback(data: str) -> tuple[int, int, str, int]:
+    prefix = "pec:locp:"
+    if not data.startswith(prefix):
+        raise ValueError("callback_data_invalid")
+    rest = data[len(prefix) :]
+    head, idx_s = rest.rsplit(":", 1)
+    panel_s, inbound_s, client_uuid = head.split(":", 2)
+    return int(panel_s), int(inbound_s), client_uuid, int(idx_s)
+
+
 def format_datetime(epoch_seconds: int | None, tz_name: str, lang: str | None = None) -> str:
     if not epoch_seconds:
         return t("admin_unlimited", lang)
@@ -977,14 +1021,15 @@ async def set_client_action_context(state: FSMContext, *, panel_id: int, inbound
 async def refresh_panels_message(callback: CallbackQuery, services: ServiceContainer, settings: Settings) -> None:
     if callback.message is None:
         return
+    lang = await services.db.get_user_language(callback.from_user.id)
     panels = await services.access_service.list_accessible_panels(
         user_id=callback.from_user.id,
         settings=settings,
     )
     if not panels:
-        await callback.message.edit_text(t("bind_no_panel", None))
+        await callback.message.edit_text(t("bind_no_panel", lang))
         return
-    await callback.message.edit_text(panels_list_text(), reply_markup=panels_glass_keyboard(panels))
+    await callback.message.edit_text(panels_list_text(), reply_markup=panels_glass_keyboard(panels, lang))
 
 
 async def show_inbounds_for_panel(message: Message, services: ServiceContainer, settings: Settings, panel_id: int) -> None:

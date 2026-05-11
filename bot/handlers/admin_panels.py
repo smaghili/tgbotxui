@@ -27,6 +27,35 @@ from .admin_shared import (
 router = Router(name="admin_panels")
 
 
+def _chunk_text_by_lines(text: str, max_len: int = 4000) -> list[str]:
+    if len(text) <= max_len:
+        return [text]
+    lines = text.split("\n")
+    chunks: list[str] = []
+    buf: list[str] = []
+    cur = 0
+    for line in lines:
+        if len(line) > max_len:
+            if buf:
+                chunks.append("\n".join(buf))
+                buf = []
+                cur = 0
+            for j in range(0, len(line), max_len):
+                chunks.append(line[j : j + max_len])
+            continue
+        add = len(line) + (1 if buf else 0)
+        if cur + add > max_len and buf:
+            chunks.append("\n".join(buf))
+            buf = [line]
+            cur = len(line)
+        else:
+            buf.append(line)
+            cur += add
+    if buf:
+        chunks.append("\n".join(buf))
+    return chunks
+
+
 def _panel_access_admins_keyboard(panel_id: int, admins: list[dict], lang: str | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for admin in admins:
@@ -257,7 +286,53 @@ async def list_panels(message: Message, settings: Settings, services: ServiceCon
     if not panels:
         await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
         return
-    await message.answer(panels_list_text(), reply_markup=panels_glass_keyboard(panels))
+    lang = await services.db.get_user_language(message.from_user.id)
+    await message.answer(panels_list_text(), reply_markup=panels_glass_keyboard(panels, lang))
+
+
+@router.callback_query(F.data.startswith("panel_outbounds_list:"))
+async def panel_outbounds_list(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        panel_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    panel = await services.panel_service.get_panel(panel_id)
+    if not panel:
+        await callback.answer(t("admin_panel_not_found", lang), show_alert=True)
+        return
+    try:
+        tags = await services.panel_service.list_outbound_tags(panel_id)
+    except Exception as exc:
+        await callback.message.answer(t("panel_outbounds_fetch_error", lang, error=exc))
+        await callback.answer()
+        return
+    if not tags:
+        await callback.message.answer(
+            t("panel_outbounds_header", lang, name=panel["name"], count=0)
+            + "\n"
+            + t("panel_outbounds_empty", lang),
+        )
+        await callback.answer()
+        return
+    body_lines = [f"{i}. {tag}" for i, tag in enumerate(tags, start=1)]
+    text = t("panel_outbounds_header", lang, name=panel["name"], count=len(tags)) + "\n".join(body_lines)
+    for part in _chunk_text_by_lines(text):
+        await callback.message.answer(part)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("panel_default_toggle:"))

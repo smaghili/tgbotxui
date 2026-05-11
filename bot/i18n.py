@@ -589,6 +589,19 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "panel_add_xui_error": {"fa": "اتصال ناموفق بود:\n{error}", "en": "Connection failed:\n{error}"},
     "panel_add_unexpected": {"fa": "خطای غیرمنتظره:\n{error}", "en": "Unexpected error:\n{error}"},
     "panel_add_ok": {"fa": "✅ با موفقیت وارد شد و پنل ذخیره شد.", "en": "✅ Login successful and panel saved."},
+    "panel_list_outbounds_button": {"fa": "📡 لیست اوت‌باند‌ها", "en": "📡 List outbounds"},
+    "panel_outbounds_header": {
+        "fa": "پنل: {name}\nتعداد اوت‌باند: {count}\n",
+        "en": "Panel: {name}\nOutbound count: {count}\n",
+    },
+    "panel_outbounds_empty": {
+        "fa": "در کانفیگ Xray این پنل اوت‌باندی ثبت نشده است.",
+        "en": "No outbounds in this panel's Xray config.",
+    },
+    "panel_outbounds_fetch_error": {
+        "fa": "دریافت لیست اوت‌باند ناموفق:\n{error}",
+        "en": "Failed to fetch outbounds:\n{error}",
+    },
     "panel_add_enter_twofa": {"fa": "کد twoFactorCode را وارد کنید:", "en": "Enter twoFactorCode:"},
     "panel_add_twofa_empty": {"fa": "کد twoFactorCode نمی‌تواند خالی باشد. یا گزینه «خیر» را انتخاب کنید.", "en": "twoFactorCode cannot be empty. Choose No if disabled."},
     "panel_default_set": {"fa": "پنل پیش‌فرض تنظیم شد.", "en": "Default panel set."},
@@ -862,6 +875,16 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Reset this client's traffic usage?\n(Total traffic limit stays the same; only usage counters are cleared.)",
     },
     "admin_edit_add_days": {"fa": "➕ افزودن روز", "en": "➕ Add days"},
+    "admin_edit_change_location": {"fa": "🌍 تغییر لوکیشن", "en": "🌍 Change location"},
+    "admin_edit_location_none": {
+        "fa": "اوت‌باندی در کانفیگ Xray این پنل پیدا نشد.",
+        "en": "No outbounds found in this panel's Xray config.",
+    },
+    "admin_edit_location_bad": {"fa": "گزینهٔ نامعتبر است؛ دوباره باز کنید.", "en": "Invalid choice; open the menu again."},
+    "admin_edit_location_done": {
+        "fa": "✅ لوکیشن روی اوت‌باند «{tag}» تنظیم شد.",
+        "en": "✅ Location set to outbound «{tag}».",
+    },
     "admin_edit_delete_client": {"fa": "🗑 حذف کاربر", "en": "🗑 Delete client"},
     "admin_edit_show_detail": {"fa": "🔎 نمایش جزئیات", "en": "🔎 Show detail"},
     "admin_edit_enter_add_traffic": {
@@ -936,6 +959,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "ریست ترافیک کاربر توسط زیرمجموعه‌ها",
         "en": "Reset client traffic (by subordinates)",
     },
+    "admin_activity_action_change_location": {
+        "fa": "تغییر لوکیشن (اوت‌باند) کاربر توسط زیرمجموعه‌ها",
+        "en": "Change client outbound (location) (by subordinates)",
+    },
     "admin_activity_action_set_ip_limit": {
         "fa": "تغییر محدودیت IP کاربر توسط زیرمجموعه‌ها",
         "en": "Set client IP limit (by subordinates)",
@@ -948,6 +975,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_activity_detail_expiry_change": {"fa": "تاریخ از {before} به {after} تغییر کرد", "en": "Expiry changed from {before} to {after}"},
     "admin_activity_detail_new_value": {"fa": "مقدار جدید: {value}", "en": "New value: {value}"},
     "admin_activity_detail_new_status": {"fa": "وضعیت جدید: {value}", "en": "New status: {value}"},
+    "admin_activity_detail_outbound_tag": {"fa": "اوت‌باند: {tag}", "en": "Outbound: {tag}"},
     "admin_invalid_positive_number": {
         "fa": "عدد معتبر و بزرگ‌تر از صفر وارد کنید.",
         "en": "Enter a valid positive number.",

@@ -52,11 +52,16 @@ def parse_login_url(raw_login_url: str) -> tuple[str, str, str]:
     if not parsed.scheme or not parsed.netloc:
         raise ValueError("invalid login url.")
 
-    path = parsed.path or "/login/"
-    if not path.endswith("/"):
-        path = f"{path}/"
+    path = (parsed.path or "").strip()
+    if not path or path == "/":
+        path = "/login/"
+    else:
+        if not path.endswith("/"):
+            path = f"{path}/"
+        if not path.lower().endswith("/login/"):
+            path = path.rstrip("/") + "/login/"
     if not path.lower().endswith("/login/"):
-        raise ValueError("login url must end with /login/.")
+        raise ValueError("login url must be the panel path, ending with /login/ (e.g. .../secret/login/).")
 
     web_base_path = path[: -len("/login/")] or ""
     if web_base_path.endswith("/"):
@@ -206,6 +211,105 @@ class XUIClient:
                 return body, new_cookies
 
         raise XUIError("request exhausted retries")
+
+    async def request_form(
+        self,
+        *,
+        conn: PanelConnection,
+        method: str,
+        endpoint: str,
+        cookies: Dict[str, str] | None,
+        form: Dict[str, str],
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        url = f"{conn.base_url}{self._api_path(conn.web_base_path, endpoint)}"
+        headers: Dict[str, str] = {}
+        cookie_header = self._cookie_header(cookies)
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+
+        for attempt in range(1, self.max_retries + 2):
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                response = await session.request(
+                    method=method.upper(),
+                    url=url,
+                    headers=headers,
+                    data=form,
+                )
+                text = await response.text()
+                new_cookies = {name: morsel.value for name, morsel in response.cookies.items()}
+
+                if response.status in (401, 403):
+                    XUI_REQUESTS.labels(endpoint=endpoint, status="auth").inc()
+                    XUI_ERRORS.labels(type="auth").inc()
+                    raise XUIAuthError(f"unauthorized on {endpoint}.")
+                if response.status in (400, 415, 422):
+                    XUI_REQUESTS.labels(endpoint=endpoint, status="validation").inc()
+                    XUI_ERRORS.labels(type="validation").inc()
+                    raise XUIValidationError(f"validation failed on {endpoint}: {text[:300]}")
+                if response.status == 429:
+                    if attempt <= self.max_retries:
+                        await sleep(0.5 * attempt)
+                        continue
+                    XUI_REQUESTS.labels(endpoint=endpoint, status="429").inc()
+                    XUI_ERRORS.labels(type="rate_limit").inc()
+                    raise XUIRateLimitError(f"rate limited on {endpoint}.")
+                if response.status >= 500:
+                    if attempt <= self.max_retries:
+                        await sleep(0.5 * attempt)
+                        continue
+                    XUI_REQUESTS.labels(endpoint=endpoint, status="5xx").inc()
+                    XUI_ERRORS.labels(type="server").inc()
+                    raise XUIServerError(f"server error on {endpoint}: {text[:300]}")
+                if response.status >= 400:
+                    XUI_REQUESTS.labels(endpoint=endpoint, status=str(response.status)).inc()
+                    XUI_ERRORS.labels(type="unknown").inc()
+                    raise XUIError(f"request failed ({response.status}) on {endpoint}: {text[:300]}")
+
+                try:
+                    body = json.loads(text) if text else {}
+                except json.JSONDecodeError as exc:
+                    XUI_ERRORS.labels(type="invalid_json").inc()
+                    raise XUIError(f"invalid json on {endpoint}.") from exc
+
+                if isinstance(body, dict) and body.get("success") is False:
+                    XUI_REQUESTS.labels(endpoint=endpoint, status="app_error").inc()
+                    XUI_ERRORS.labels(type="app").inc()
+                    raise XUIError(body.get("msg") or f"3x-ui rejected {endpoint}.")
+
+                XUI_REQUESTS.labels(endpoint=endpoint, status="ok").inc()
+                return body, new_cookies
+
+        raise XUIError("request exhausted retries")
+
+    async def get_xray_setting(
+        self, conn: PanelConnection, cookies: Dict[str, str] | None
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        return await self.request(
+            conn=conn,
+            method="POST",
+            endpoint="/xray/",
+            cookies=cookies,
+            payload=None,
+        )
+
+    async def update_xray_setting(
+        self,
+        conn: PanelConnection,
+        cookies: Dict[str, str] | None,
+        *,
+        xray_setting_json: str,
+        outbound_test_url: str,
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        return await self.request_form(
+            conn=conn,
+            method="POST",
+            endpoint="/xray/update",
+            cookies=cookies,
+            form={
+                "xraySetting": xray_setting_json,
+                "outboundTestUrl": outbound_test_url or "https://www.google.com/generate_204",
+            },
+        )
 
     async def get_client_traffics(
         self, conn: PanelConnection, cookies: Dict[str, str] | None, client_email: str
