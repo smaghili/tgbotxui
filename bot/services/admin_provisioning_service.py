@@ -1901,7 +1901,7 @@ class AdminProvisioningService:
         if not is_primary_delegate:
             excluded_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
             excluded_inbounds = await excluded_loader(actor_user_id) if excluded_loader is not None else set()
-        if charge_basis == "consumed":
+        if charge_basis == "consumed" and not is_primary_delegate:
             consumed_bytes = max(
                 0,
                 panel_total_consumed_bytes
