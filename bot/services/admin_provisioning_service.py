@@ -1857,9 +1857,6 @@ class AdminProvisioningService:
             "apply_price_to_past_reports": 1,
         }
         owner_ids = await self.financial_scope_user_ids(actor_user_id=actor_user_id, settings=settings)
-        delegated_loader = getattr(self.db, "get_delegated_admin_by_user_id", None)
-        delegated = await delegated_loader(actor_user_id) if delegated_loader is not None else None
-        is_primary_delegate = delegated is not None and int(delegated.get("parent_user_id") or 0) == 0
         if not owner_ids:
             return {
                 "wallet": wallet,
@@ -1883,32 +1880,17 @@ class AdminProvisioningService:
             settings=settings,
             owner_id_set=owner_id_set,
         )
-        delegate_finance_excluded_used_bytes = ledger.delegate_finance_excluded_used_bytes
         clients_count = ledger.clients_count
         allocated_bytes = ledger.allocated_bytes
         consumed_bytes = ledger.consumed_bytes
         remaining_bytes = ledger.remaining_bytes
-        panel_total_consumed_bytes = ledger.panel_total_consumed_bytes
-        root_created_consumed_bytes = ledger.root_created_consumed_bytes
-        billable_segment_consumed_bytes = ledger.billable_segment_consumed_bytes
         price_per_gb = int(pricing.get("price_per_gb") or 0)
         allocated_gb = allocated_bytes // (1024 ** 3)
         if allocated_bytes % (1024 ** 3):
             allocated_gb += 1
         gb_unit = 1024 ** 3
         charge_basis = str(pricing.get("charge_basis") or "allocated")
-        excluded_inbounds: set[tuple[int, int]] = set()
-        if not is_primary_delegate:
-            excluded_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
-            excluded_inbounds = await excluded_loader(actor_user_id) if excluded_loader is not None else set()
-        if charge_basis == "consumed" and not is_primary_delegate:
-            consumed_bytes = max(
-                0,
-                panel_total_consumed_bytes
-                - root_created_consumed_bytes
-                - delegate_finance_excluded_used_bytes
-                + billable_segment_consumed_bytes,
-            )
+        excluded_inbounds, _ = await self._merged_delegate_finance_exclusions_for_actor(actor_user_id=actor_user_id)
         consumed_gb = float(consumed_bytes) / float(gb_unit) if consumed_bytes > 0 else 0.0
         remaining_gb = float(remaining_bytes) / float(gb_unit) if remaining_bytes > 0 else 0.0
         scope_totals = (
