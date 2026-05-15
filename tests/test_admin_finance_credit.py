@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from bot.handlers.admin_finance import _finance_delegated_keyboard
-from bot.handlers.admin_finance_helpers import payable_from_wallet
+from bot.handlers.admin_finance_helpers import consumed_basis_payable_remainder
 from bot.services.admin_provisioning_service import AdminProvisioningService
 from bot.services.financial_service import FinancialService
 
@@ -16,9 +16,12 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
         button = markup.inline_keyboard[0][0]
         self.assertEqual(button.callback_data, "fin:credit:me")
 
-    def test_payable_from_wallet_uses_wallet_balance_only(self) -> None:
-        self.assertEqual(payable_from_wallet(-35_900_000), 35_900_000)
-        self.assertEqual(payable_from_wallet(4_100_000), -4_100_000)
+    def test_consumed_basis_payable_remainder(self) -> None:
+        self.assertEqual(
+            consumed_basis_payable_remainder(debt_amount=215_603_767, wallet_balance=181_713_660),
+            33_890_107,
+        )
+        self.assertEqual(consumed_basis_payable_remainder(debt_amount=50, wallet_balance=100), 0)
 
     async def test_scope_financial_summary_aggregates_subtree_consumed_usage(self) -> None:
         class FakeDB:

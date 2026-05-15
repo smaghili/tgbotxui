@@ -32,8 +32,9 @@ def _format_gb_exact(value: float | int) -> str:
     return shared_format_gb_exact(value)
 
 
-def payable_from_wallet(balance: int) -> int:
-    return -int(balance)
+def consumed_basis_payable_remainder(*, debt_amount: int, wallet_balance: int) -> int:
+    """Rial still owed after applying wallet credits to consumed/allocated debt (never negative)."""
+    return max(0, int(debt_amount) - int(wallet_balance))
 
 
 def _parse_detail_pairs(raw: str | None) -> dict[str, str]:

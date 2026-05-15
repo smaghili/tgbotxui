@@ -26,7 +26,7 @@ from bot.utils import (
     to_local_date,
     to_persian_digits,
 )
-from .admin_finance_helpers import payable_from_wallet
+from .admin_finance_helpers import consumed_basis_payable_remainder
 
 router = Router(name="admin_access")
 
@@ -582,8 +582,10 @@ async def _render_delegated_detail(
         currency=str(wallet.get("currency") or "تومان"),
     )
     if charge_basis == "consumed":
-        total_sales_value = int(financial_summary.get("debt_amount") or 0)
-        payable_amount = payable_from_wallet(int(wallet.get("balance") or 0))
+        debt_amt = int(financial_summary.get("debt_amount") or 0)
+        total_sales_value = debt_amt
+        wallet_bal = int(wallet.get("balance") or 0)
+        payable_amount = consumed_basis_payable_remainder(debt_amount=debt_amt, wallet_balance=wallet_bal)
         extra_lines = t(
             "admin_delegated_consumed_lines",
             lang,
@@ -596,7 +598,8 @@ async def _render_delegated_detail(
     else:
         total_sales_value = int(sales_report.get("total_sales") or 0)
         debt_amt = int(financial_summary.get("debt_amount") or 0)
-        payable_amount = payable_from_wallet(int(wallet.get("balance") or 0))
+        wallet_bal = int(wallet.get("balance") or 0)
+        payable_amount = consumed_basis_payable_remainder(debt_amount=debt_amt, wallet_balance=wallet_bal)
         extra_lines = t(
             "admin_delegated_allocated_payable_lines",
             lang,
@@ -1601,7 +1604,10 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
     )
     extra_lines = ""
     if not is_primary_delegate and str(summary["pricing"].get("charge_basis") or "allocated") == "consumed":
-        payable_amount = payable_from_wallet(int(summary["wallet"]["balance"] or 0))
+        payable_amount = consumed_basis_payable_remainder(
+            debt_amount=int(summary["debt_amount"] or 0),
+            wallet_balance=int(summary["wallet"]["balance"] or 0),
+        )
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,

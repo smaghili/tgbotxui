@@ -16,7 +16,7 @@ from bot.services.container import ServiceContainer
 from bot.handlers.admin_finance_helpers import (
     _format_amount,
     _format_gb_exact,
-    payable_from_wallet,
+    consumed_basis_payable_remainder,
     wallet_currency_label,
 )
 
@@ -146,7 +146,10 @@ async def _answer_sales_report(
     charge_basis = str(pricing.get("charge_basis") or "allocated")
     extra_lines = ""
     if charge_basis == "consumed":
-        payable_amount = payable_from_wallet(int(wallet["balance"] or 0))
+        payable_amount = consumed_basis_payable_remainder(
+            debt_amount=int(summary["debt_amount"] or 0),
+            wallet_balance=int(wallet["balance"] or 0),
+        )
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,
