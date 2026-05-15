@@ -1573,6 +1573,43 @@ class AdminProvisioningService:
             return await self.db.get_delegated_admin_subtree_user_ids(manager_user_id=actor_user_id, include_self=True)
         return [actor_user_id]
 
+    async def _merged_delegate_finance_exclusions_for_actor(
+        self, *, actor_user_id: int
+    ) -> tuple[set[tuple[int, int]], set[tuple[int, int, str]]]:
+        """Union inbound / per-client exclusions for this admin and every parent in the delegation chain.
+
+        Root configures finance exclusions on the primary delegate row; subtree delegates must inherit them.
+        """
+        excluded_inbounds: set[tuple[int, int]] = set()
+        exclude_remaining_keys: set[tuple[int, int, str]] = set()
+        inbound_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
+        remain_loader = getattr(self.db, "list_delegate_finance_exclude_client_remaining", None)
+        current: int | None = actor_user_id
+        seen: set[int] = set()
+        while current is not None and current not in seen:
+            seen.add(current)
+            if inbound_loader is not None:
+                try:
+                    excluded_inbounds |= await inbound_loader(current)
+                except Exception:
+                    pass
+            if remain_loader is not None:
+                try:
+                    exclude_remaining_keys |= await remain_loader(current)
+                except Exception:
+                    pass
+            get_delegated = getattr(self.db, "get_delegated_admin_by_user_id", None)
+            if get_delegated is None:
+                break
+            row = await get_delegated(current)
+            if row is None:
+                break
+            parent = int(row.get("parent_user_id") or 0)
+            if parent <= 0 or parent == current:
+                break
+            current = parent
+        return excluded_inbounds, exclude_remaining_keys
+
     async def _accumulate_scope_financial_ledger(
         self,
         *,
@@ -1590,20 +1627,9 @@ class AdminProvisioningService:
         root_created_consumed_bytes = 0
         billable_segment_consumed_bytes = 0
         root_admin_id_set = {str(admin_id) for admin_id in settings.admin_ids}
-        excluded_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
-        excluded_inbounds: set[tuple[int, int]] = set()
-        if excluded_loader is not None:
-            try:
-                excluded_inbounds = await excluded_loader(actor_user_id)
-            except Exception:
-                excluded_inbounds = set()
-        exclude_remaining_fn = getattr(self.db, "list_delegate_finance_exclude_client_remaining", None)
-        exclude_remaining_keys: set[tuple[int, int, str]] = set()
-        if exclude_remaining_fn is not None:
-            try:
-                exclude_remaining_keys = await exclude_remaining_fn(actor_user_id)
-            except Exception:
-                exclude_remaining_keys = set()
+        excluded_inbounds, exclude_remaining_keys = await self._merged_delegate_finance_exclusions_for_actor(
+            actor_user_id=actor_user_id
+        )
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
             moaf_exempt_for_scope: set[tuple[int, str]] = set()
