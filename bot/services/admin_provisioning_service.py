@@ -1849,6 +1849,9 @@ class AdminProvisioningService:
             "apply_price_to_past_reports": 1,
         }
         owner_ids = await self.financial_scope_user_ids(actor_user_id=actor_user_id, settings=settings)
+        delegated_loader = getattr(self.db, "get_delegated_admin_by_user_id", None)
+        delegated = await delegated_loader(actor_user_id) if delegated_loader is not None else None
+        is_primary_delegate = delegated is not None and int(delegated.get("parent_user_id") or 0) == 0
         if not owner_ids:
             return {
                 "wallet": wallet,
@@ -1886,8 +1889,10 @@ class AdminProvisioningService:
             allocated_gb += 1
         gb_unit = 1024 ** 3
         charge_basis = str(pricing.get("charge_basis") or "allocated")
-        excluded_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
-        excluded_inbounds = await excluded_loader(actor_user_id) if excluded_loader is not None else set()
+        excluded_inbounds: set[tuple[int, int]] = set()
+        if not is_primary_delegate:
+            excluded_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
+            excluded_inbounds = await excluded_loader(actor_user_id) if excluded_loader is not None else set()
         if charge_basis == "consumed":
             consumed_bytes = max(
                 0,
@@ -1901,7 +1906,7 @@ class AdminProvisioningService:
         scope_totals = (
             await self.financial_service.get_scope_sales_totals(
                 owner_ids,
-                excluded_inbound_pairs=excluded_inbounds,
+                excluded_inbound_pairs=excluded_inbounds if excluded_inbounds else None,
             )
             if self.financial_service is not None
             else {

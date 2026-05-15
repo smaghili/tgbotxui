@@ -1592,13 +1592,15 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         if formatted is not None:
             activity_lines.append(formatted)
     user = overview["user"] or {}
+    delegated = overview["delegated"] or {}
+    is_primary_delegate = int(delegated.get("parent_user_id") or 0) == 0
     title = (
         str(user.get("username") or "").strip()
         or str(user.get("full_name") or "").strip()
         or str(target_user_id)
     )
     extra_lines = ""
-    if str(summary["pricing"].get("charge_basis") or "allocated") == "consumed":
+    if not is_primary_delegate and str(summary["pricing"].get("charge_basis") or "allocated") == "consumed":
         payable_amount = payable_from_wallet(int(summary["wallet"]["balance"] or 0))
         extra_lines = t(
             "finance_credit_consumed_lines",
