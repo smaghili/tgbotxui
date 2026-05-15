@@ -21,6 +21,10 @@ def parse_details(raw: str | None) -> dict[str, str]:
     return parse_detail_pairs(raw)
 
 
+def payable_from_wallet(balance: int) -> int:
+    return -int(balance)
+
+
 def consumed_credit_lines(summary: dict, *, lang: str | None, currency: str) -> str:
     if str(summary.get("pricing", {}).get("charge_basis") or "allocated") != "consumed":
         return ""
@@ -29,7 +33,7 @@ def consumed_credit_lines(summary: dict, *, lang: str | None, currency: str) -> 
         lang,
         consumed_gb=format_exact_gb(summary.get("consumed_gb") or 0),
         debt_amount=format_amount(int(summary.get("debt_amount") or 0)),
-        payable_amount=format_amount(int(summary.get("payable_amount") or 0)),
+        payable_amount=format_amount(payable_from_wallet(int(summary.get("wallet", {}).get("balance") or 0))),
         remaining_gb=format_exact_gb(summary.get("remaining_gb") or 0),
         remaining_amount=format_amount(int(summary.get("remaining_amount") or 0)),
         currency=currency,
@@ -43,7 +47,7 @@ def delegated_consumed_lines(summary: dict, *, lang: str | None, currency: str) 
         "admin_delegated_consumed_lines",
         lang,
         consumed_gb=format_exact_gb(summary.get("consumed_gb") or 0),
-        payable_amount=format_amount(int(summary.get("payable_amount") or 0)),
+        payable_amount=format_amount(payable_from_wallet(int(summary.get("wallet", {}).get("balance") or 0))),
         remaining_gb=format_exact_gb(summary.get("remaining_gb") or 0),
         remaining_amount=format_amount(int(summary.get("remaining_amount") or 0)),
         currency=currency,

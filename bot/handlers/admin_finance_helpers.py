@@ -32,6 +32,10 @@ def _format_gb_exact(value: float | int) -> str:
     return shared_format_gb_exact(value)
 
 
+def payable_from_wallet(balance: int) -> int:
+    return -int(balance)
+
+
 def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
     return shared_parse_detail_pairs(raw)
 

@@ -39,6 +39,28 @@ def _delegate_finance_comment_tag(comment: str) -> str | None:
     return None
 
 
+def _delegate_finance_client_out_of_scope(
+    *,
+    panel_id: int,
+    inbound_id: int,
+    client_uuid: str,
+    comment: str,
+    owner_id_set: set[str],
+    exclude_remaining_keys: set[tuple[int, int, str]],
+    moaf_exempt_for_scope: set[tuple[int, str]],
+) -> bool:
+    """True if this client must not appear in delegate consumed / panel totals (full split)."""
+    if (panel_id, inbound_id, client_uuid) in exclude_remaining_keys:
+        return True
+    if (inbound_id, client_uuid) in moaf_exempt_for_scope:
+        return True
+    fin_tag = _delegate_finance_comment_tag(comment)
+    comment_owner_id = _owner_id_from_comment(comment)
+    if fin_tag == "moaf" and comment_owner_id is not None and str(comment_owner_id) in owner_id_set:
+        return True
+    return False
+
+
 def _billable_segment_totals(
     *,
     segments: list[dict[str, Any]],
@@ -921,30 +943,61 @@ class AdminProvisioningService:
         panel_id: int,
         inbound_id: int,
         client_uuid: str,
-    ) -> dict[str, Any]:
+        total_gb: float,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         ref = await self._managed_ref_from_panel_client(
             panel_id=panel_id,
             inbound_id=inbound_id,
             client_uuid=client_uuid,
         )
         detail = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
-        await self.panel_service.reset_client_traffic(ref.panel_id, ref.inbound_id, str(detail.get("email") or ""))
+        email = str(detail.get("email") or "").strip()
+        if not email:
+            raise ValueError("client email missing.")
+        charge_tx = None
+        if self.financial_service is not None:
+            charge_tx = await self.financial_service.charge_operation(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                operation="reset_client_traffic",
+                traffic_gb=total_gb,
+                details=f"panel={ref.panel_id};inbound={ref.inbound_id};email={email}",
+            )
+        try:
+            await self.panel_service.reset_client_traffic(ref.panel_id, ref.inbound_id, email)
+            await self.panel_service.set_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, total_gb)
+            updated = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        except Exception:
+            await self._refund_charge_bundle(
+                actor_user_id=actor_user_id,
+                charge_tx=charge_tx,
+                reason=f"refund:reset_client_traffic_failed:{ref.client_uuid}",
+            )
+            raise
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
             action="reset_client_traffic",
             target_type="client",
             target_id=ref.client_uuid,
             success=True,
+            details=f"total_gb={total_gb}",
         )
         await self._record_templated_admin_activity(
             actor_user_id=actor_user_id,
             settings=settings,
             action_key="admin_activity_action_reset_traffic",
-            user=str(detail.get("email") or ref.client_email or "-"),
+            user=email or ref.client_email or "-",
             panel_id=ref.panel_id,
             inbound_id=ref.inbound_id,
+            details=[t("admin_activity_detail_new_value", await self.db.get_user_language(actor_user_id), value=str(total_gb))],
         )
-        return detail
+        if self.usage_service is not None:
+            await self.usage_service.notify_user_traffic_reset(
+                panel_id=ref.panel_id,
+                client_email=email,
+                new_total_bytes=gb_to_bytes(total_gb),
+            )
+        return detail, updated
 
     async def set_client_outbound_tag_for_actor(
         self,
@@ -976,6 +1029,7 @@ class AdminProvisioningService:
         await self.panel_service.set_client_outbound_tag(
             ref.panel_id, ref.inbound_id, email, outbound_tag.strip()
         )
+        await self.panel_service.reload_xray_config(ref.panel_id)
         await self.db.add_audit_log(
             actor_user_id=actor_user_id,
             action="set_client_outbound",
@@ -1552,6 +1606,16 @@ class AdminProvisioningService:
                 exclude_remaining_keys = set()
         for panel in await self.panel_service.list_panels():
             panel_id = int(panel["id"])
+            moaf_exempt_for_scope: set[tuple[int, str]] = set()
+            exemptions_loader = getattr(self.db, "list_moaf_client_exemptions_for_panel", None)
+            if exemptions_loader is not None:
+                try:
+                    raw_ex = await exemptions_loader(panel_id)
+                    for (ex_in_id, ex_uuid), meta in raw_ex.items():
+                        if str(meta.get("owner_user_id") or "") in owner_id_set:
+                            moaf_exempt_for_scope.add((int(ex_in_id), str(ex_uuid)))
+                except Exception:
+                    moaf_exempt_for_scope = set()
             segment_loader = getattr(self.db, "list_moaf_client_traffic_segments_for_panel", None)
             segments_by_key = await segment_loader(panel_id) if segment_loader is not None else {}
             resume_loader = getattr(self.db, "list_moaf_resume_delegate_caps_for_panel", None)
@@ -1569,6 +1633,26 @@ class AdminProvisioningService:
                 inbound_id = int(inbound.get("id") or 0)
                 if inbound_id <= 0:
                     continue
+                if (panel_id, inbound_id) in excluded_inbounds:
+                    continue
+
+                settings_raw = inbound.get("settings")
+                settings_obj: dict[str, Any] = {}
+                if isinstance(settings_raw, str) and settings_raw.strip():
+                    try:
+                        parsed = json.loads(settings_raw)
+                        if isinstance(parsed, dict):
+                            settings_obj = parsed
+                    except Exception:
+                        settings_obj = {}
+                clients = settings_obj.get("clients") if isinstance(settings_obj.get("clients"), list) else []
+                uuid_to_comment: dict[str, str] = {}
+                for client in clients:
+                    if not isinstance(client, dict):
+                        continue
+                    cu = str(client.get("id") or client.get("uuid") or "").strip()
+                    if cu:
+                        uuid_to_comment[cu] = str(client.get("comment") or "").strip()
 
                 stats_by_uuid: dict[str, dict[str, int]] = {}
                 for stat in inbound.get("clientStats") or []:
@@ -1581,21 +1665,30 @@ class AdminProvisioningService:
                         "used": max(0, int(stat.get("up") or 0)) + max(0, int(stat.get("down") or 0)),
                         "total": max(0, int(stat.get("total") or 0)),
                     }
-                if "up" in inbound or "down" in inbound:
-                    panel_total_consumed_bytes += max(0, int(inbound.get("up") or 0)) + max(0, int(inbound.get("down") or 0))
+
+                if stats_by_uuid:
+                    panel_sum = 0
+                    for stat_uuid, usage in stats_by_uuid.items():
+                        cmt = uuid_to_comment.get(stat_uuid, "")
+                        if _delegate_finance_client_out_of_scope(
+                            panel_id=panel_id,
+                            inbound_id=inbound_id,
+                            client_uuid=stat_uuid,
+                            comment=cmt,
+                            owner_id_set=owner_id_set,
+                            exclude_remaining_keys=exclude_remaining_keys,
+                            moaf_exempt_for_scope=moaf_exempt_for_scope,
+                        ):
+                            continue
+                        panel_sum += int(usage.get("used") or 0)
+                    panel_total_consumed_bytes += panel_sum
+                elif "up" in inbound or "down" in inbound:
+                    panel_total_consumed_bytes += max(0, int(inbound.get("up") or 0)) + max(
+                        0, int(inbound.get("down") or 0)
+                    )
                 else:
                     panel_total_consumed_bytes += sum(int(item.get("used") or 0) for item in stats_by_uuid.values())
 
-                settings_raw = inbound.get("settings")
-                settings_obj: dict[str, Any] = {}
-                if isinstance(settings_raw, str) and settings_raw.strip():
-                    try:
-                        parsed = json.loads(settings_raw)
-                        if isinstance(parsed, dict):
-                            settings_obj = parsed
-                    except Exception:
-                        settings_obj = {}
-                clients = settings_obj.get("clients") if isinstance(settings_obj.get("clients"), list) else []
                 for client in clients:
                     if not isinstance(client, dict):
                         continue
@@ -1608,16 +1701,15 @@ class AdminProvisioningService:
                     fin_tag = _delegate_finance_comment_tag(comment)
                     comment_owner_id = _owner_id_from_comment(comment)
 
-                    if (panel_id, inbound_id) in excluded_inbounds:
-                        delegate_finance_excluded_used_bytes += client_used_bytes
-                        continue
-
-                    if (
-                        fin_tag == "moaf"
-                        and comment_owner_id is not None
-                        and str(comment_owner_id) in owner_id_set
+                    if _delegate_finance_client_out_of_scope(
+                        panel_id=panel_id,
+                        inbound_id=inbound_id,
+                        client_uuid=client_uuid,
+                        comment=comment,
+                        owner_id_set=owner_id_set,
+                        exclude_remaining_keys=exclude_remaining_keys,
+                        moaf_exempt_for_scope=moaf_exempt_for_scope,
                     ):
-                        delegate_finance_excluded_used_bytes += client_used_bytes
                         continue
 
                     key = (panel_id, inbound_id, client_uuid)
@@ -1653,8 +1745,7 @@ class AdminProvisioningService:
                         allocated_bytes += billable_total_bytes
                         consumed_bytes += billable_used_bytes
                         billable_segment_consumed_bytes += billable_used_bytes
-                        if key not in exclude_remaining_keys:
-                            remaining_bytes += billable_remaining_bytes
+                        remaining_bytes += billable_remaining_bytes
                         continue
 
                     if comment == "" or comment in root_admin_id_set:
@@ -1694,15 +1785,14 @@ class AdminProvisioningService:
                         delegate_remaining = max(0, effective_total - client_used_bytes)
                         clients_count += 1
                         allocated_bytes += effective_total
-                        if key not in exclude_remaining_keys:
-                            remaining_bytes += delegate_remaining
+                        remaining_bytes += delegate_remaining
                         consumed_bytes += client_used_bytes
                         continue
 
                     clients_count += 1
                     allocated_bytes += client_total_bytes
                     consumed_bytes += client_used_bytes
-                    if client_total_bytes > 0 and key not in exclude_remaining_keys:
+                    if client_total_bytes > 0:
                         remaining_bytes += max(client_total_bytes - client_used_bytes, 0)
         return _ScopeFinancialLedger(
             delegate_finance_excluded_used_bytes=delegate_finance_excluded_used_bytes,

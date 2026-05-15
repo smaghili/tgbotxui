@@ -1961,6 +1961,23 @@ class PanelService:
             ),
         )
 
+    async def reload_xray_config(self, panel_id: int) -> None:
+        raw, _ = await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.get_xray_setting(conn, cookies),
+        )
+        bundle = self._parse_xray_setting_bundle(raw)
+        payload = json.dumps(bundle["config"], ensure_ascii=False)
+        await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.update_xray_setting(
+                conn,
+                cookies,
+                xray_setting_json=payload,
+                outbound_test_url=bundle["outbound_test_url"],
+            ),
+        )
+
     @staticmethod
     def _rule_is_inbound_wide_exact_tag(rule: Dict[str, Any], tag: str) -> bool:
         users = rule.get("user")

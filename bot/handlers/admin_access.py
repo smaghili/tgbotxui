@@ -26,6 +26,7 @@ from bot.utils import (
     to_local_date,
     to_persian_digits,
 )
+from .admin_finance_helpers import payable_from_wallet
 
 router = Router(name="admin_access")
 
@@ -582,7 +583,7 @@ async def _render_delegated_detail(
     )
     if charge_basis == "consumed":
         total_sales_value = int(financial_summary.get("debt_amount") or 0)
-        payable_amount = total_sales_value - int(wallet.get("balance") or 0)
+        payable_amount = payable_from_wallet(int(wallet.get("balance") or 0))
         extra_lines = t(
             "admin_delegated_consumed_lines",
             lang,
@@ -595,7 +596,7 @@ async def _render_delegated_detail(
     else:
         total_sales_value = int(sales_report.get("total_sales") or 0)
         debt_amt = int(financial_summary.get("debt_amount") or 0)
-        payable_amount = debt_amt - int(wallet.get("balance") or 0)
+        payable_amount = payable_from_wallet(int(wallet.get("balance") or 0))
         extra_lines = t(
             "admin_delegated_allocated_payable_lines",
             lang,
@@ -1597,8 +1598,9 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         or str(target_user_id)
     )
     extra_lines = ""
+    report_sales = int(summary["sale_amount"] or 0)
     if str(summary["pricing"].get("charge_basis") or "allocated") == "consumed":
-        payable_amount = int(summary["debt_amount"] or 0) - int(summary["wallet"]["balance"] or 0)
+        payable_amount = payable_from_wallet(int(summary["wallet"]["balance"] or 0))
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,
@@ -1609,6 +1611,7 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
             remaining_amount=_format_amount(int(summary["remaining_amount"] or 0)),
             currency=str(summary["wallet"]["currency"] or "تومان"),
         )
+        report_sales = int(summary["debt_amount"] or 0)
     await callback.message.edit_text(
         t(
             "admin_delegated_report_text",
@@ -1618,7 +1621,7 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
             currency=str(report["wallet"]["currency"] or "تومان"),
             price_gb=_format_amount(int(summary["pricing"]["price_per_gb"] or 0)),
             price_day=_format_amount(int(summary["pricing"]["price_per_day"] or 0)),
-            sales=_format_amount(int(summary["sale_amount"] or 0)),
+            sales=_format_amount(report_sales),
             transactions=int(summary["total_transactions"] or 0),
             owned_clients=int(summary["clients_count"] or 0),
             extra_lines=extra_lines,

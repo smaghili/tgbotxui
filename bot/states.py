@@ -71,6 +71,7 @@ class ProvisioningStates(StatesGroup):
     waiting_vless_config = State()
     waiting_edit_search_panel = State()
     waiting_edit_add_traffic_gb = State()
+    waiting_edit_reset_traffic_gb = State()
     waiting_edit_add_expiry_days = State()
 
 

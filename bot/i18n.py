@@ -935,8 +935,16 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_edit_add_traffic": {"fa": "➕ افزودن حجم", "en": "➕ Add traffic"},
     "admin_edit_reset_traffic": {"fa": "🔄 ریست ترافیک", "en": "🔄 Reset traffic"},
     "admin_edit_reset_traffic_confirm": {
-        "fa": "مصرف ترافیک این کاربر صفر شود؟\n(سقف حجم کانفیگ عوض نمی‌شود؛ فقط شمارندهٔ مصرف ریست می‌شود.)",
-        "en": "Reset this client's traffic usage?\n(Total traffic limit stays the same; only usage counters are cleared.)",
+        "fa": "برای ریست، حجم جدید را به گیگابایت وارد کنید.\nمثال: 5 یعنی کل مصرف قبلی صفر می‌شود و سقف روی 5 گیگ تنظیم می‌شود.",
+        "en": "Enter the new GB limit to reset this client.\nExample: 5 means previous usage is cleared and the limit is set to 5 GB.",
+    },
+    "admin_edit_enter_reset_traffic": {
+        "fa": "حجم جدید را به گیگابایت وارد کنید (مثال: 5 یا 10.5):",
+        "en": "Enter the new GB limit (example: 5 or 10.5):",
+    },
+    "admin_edit_traffic_reset_done": {
+        "fa": "✅ ترافیک ریست شد و سقف روی {gb} گیگ تنظیم شد.",
+        "en": "✅ Traffic was reset and the limit was set to {gb} GB.",
     },
     "admin_edit_add_days": {"fa": "➕ افزودن روز", "en": "➕ Add days"},
     "admin_edit_change_location": {"fa": "🌍 تغییر لوکیشن", "en": "🌍 Change location"},
@@ -1040,6 +1048,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_activity_detail_new_value": {"fa": "مقدار جدید: {value}", "en": "New value: {value}"},
     "admin_activity_detail_new_status": {"fa": "وضعیت جدید: {value}", "en": "New status: {value}"},
     "admin_activity_detail_outbound_tag": {"fa": "اوت‌باند: {tag}", "en": "Outbound: {tag}"},
+    "bot_notify_user_traffic_reset": {
+        "fa": "اطلاع سرویس:\nادمین ترافیک سرویس {service_name} را ریست کرد و حجم جدید را روی {new_total} تنظیم کرد.",
+        "en": "Service update:\nThe admin reset your service {service_name} and set the new traffic limit to {new_total}.",
+    },
     "admin_invalid_positive_number": {
         "fa": "عدد معتبر و بزرگ‌تر از صفر وارد کنید.",
         "en": "Enter a valid positive number.",

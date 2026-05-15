@@ -776,8 +776,35 @@ class UsageService:
                     "اطلاع سرویس:\n"
                     f"{format_bytes(added_bytes, lang)} توسط ادمین به سرویس {service_name} اضافه شد.\n"
                     f"حجم جدید سرویس: {format_gb(new_total_bytes, lang)}"
-                )
+            )
             await self._deliver_bot_notification(user_id, text, notification_kind="bot_notify_user_traffic_increased")
+
+    async def notify_user_traffic_reset(
+        self,
+        *,
+        panel_id: int,
+        client_email: str,
+        new_total_bytes: int,
+    ) -> None:
+        if new_total_bytes < 0:
+            return
+        rows = await self.db.get_user_services_by_panel_email(panel_id, client_email)
+        notified_user_ids: set[int] = set()
+        for row in rows:
+            user_id = int(row["telegram_user_id"])
+            if user_id in notified_user_ids:
+                continue
+            notified_user_ids.add(user_id)
+            lang = await self.db.get_user_language(user_id)
+            service_name = str(row.get("service_name") or row.get("client_email") or client_email)
+            new_total_text = format_gb(new_total_bytes, lang)
+            text = t(
+                "bot_notify_user_traffic_reset",
+                lang,
+                service_name=service_name,
+                new_total=new_total_text,
+            )
+            await self._deliver_bot_notification(user_id, text, notification_kind="bot_notify_user_traffic_reset")
 
     async def notify_user_expiry_extended(
         self,

@@ -33,6 +33,7 @@ from bot.utils import (
 )
 
 from .admin_finance_helpers import wallet_currency_label
+from .admin_finance_helpers import payable_from_wallet
 from .admin_shared import answer_with_cancel, reject_callback_if_not_any_admin, reject_if_not_any_admin
 
 router = Router(name="admin_finance")
@@ -785,7 +786,7 @@ async def _answer_sales_report(
     charge_basis = str(pricing.get("charge_basis") or "allocated")
     extra_lines = ""
     if charge_basis == "consumed":
-        payable_amount = int(summary["debt_amount"] or 0) - int(wallet["balance"] or 0)
+        payable_amount = payable_from_wallet(int(wallet["balance"] or 0))
         extra_lines = t(
             "finance_credit_consumed_lines",
             lang,

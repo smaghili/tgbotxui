@@ -163,11 +163,12 @@ def test_delegated_detail_keyboard_toggles_primary_parent_directly() -> None:
         charge_basis="consumed",
         admin_scope="limited",
         allow_negative_wallet=False,
+        is_root_parent=False,
         lang="fa",
     )
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
-    assert "dag:toggle_parent:55" in callbacks
+    assert "dag:set_root_parent:55" in callbacks
     assert "dag:subs:55" in callbacks
     assert "dag:field:parent_user_id:55" not in callbacks
 
@@ -179,6 +180,7 @@ def test_delegated_detail_keyboard_hides_primary_parent_for_full_delegate() -> N
         charge_basis="consumed",
         admin_scope="full",
         allow_negative_wallet=False,
+        is_root_parent=True,
         lang="fa",
     )
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
