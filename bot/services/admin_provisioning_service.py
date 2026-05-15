@@ -1572,6 +1572,9 @@ class AdminProvisioningService:
         if context.is_delegated_admin:
             # Billing / consumed summaries must include the whole delegated tree (children),
             # not only the manager row — "limited" here refers to inbound UI scope, not finance subtree.
+            fn = getattr(self.db, "get_delegated_admin_financial_scope_user_ids", None)
+            if fn is not None:
+                return await fn(manager_user_id=actor_user_id, include_self=True)
             return await self.db.get_delegated_admin_subtree_user_ids(
                 manager_user_id=actor_user_id,
                 include_self=True,

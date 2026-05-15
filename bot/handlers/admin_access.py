@@ -238,8 +238,11 @@ async def _can_manage_delegated_target(
     context = await services.access_service.get_admin_context(actor_user_id, settings)
     if not (context.is_delegated_admin and context.delegated_scope == "full"):
         return False
+    scope_fn = getattr(services.db, "get_delegated_admin_financial_scope_user_ids", None)
     subtree_ids = set(
-        await services.db.get_delegated_admin_subtree_user_ids(
+        await scope_fn(manager_user_id=actor_user_id, include_self=True)
+        if scope_fn is not None
+        else await services.db.get_delegated_admin_subtree_user_ids(
             manager_user_id=actor_user_id,
             include_self=True,
         )

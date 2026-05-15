@@ -360,6 +360,44 @@ class Database:
             user_ids = [item for item in user_ids if item != manager_user_id]
         return user_ids
 
+    async def get_delegated_admin_financial_scope_user_ids(
+        self,
+        *,
+        manager_user_id: int,
+        include_self: bool = True,
+    ) -> List[int]:
+        """Delegated admins whose traffic may roll up to this manager.
+
+        Includes the parent_user_id subtree plus any active delegates whose ``created_by`` is already
+        in the scope (covers rows still parented to root but created under this manager).
+        """
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            WITH RECURSIVE scope(telegram_user_id) AS (
+                SELECT telegram_user_id
+                FROM delegated_admins
+                WHERE telegram_user_id=? AND is_active=1
+                UNION ALL
+                SELECT da.telegram_user_id
+                FROM delegated_admins AS da
+                JOIN scope AS s ON (
+                    da.parent_user_id = s.telegram_user_id
+                    OR da.created_by = s.telegram_user_id
+                )
+                WHERE da.is_active=1
+            )
+            SELECT DISTINCT telegram_user_id
+            FROM scope;
+            """,
+            (manager_user_id,),
+        )
+        rows = await cur.fetchall()
+        user_ids = [int(row["telegram_user_id"]) for row in rows]
+        if not include_self:
+            user_ids = [item for item in user_ids if item != manager_user_id]
+        return user_ids
+
     async def ensure_delegated_admin_profile(self, telegram_user_id: int) -> None:
         assert self.conn is not None
         await self.conn.execute(
