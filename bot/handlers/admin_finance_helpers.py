@@ -37,6 +37,11 @@ def consumed_basis_payable_remainder(*, debt_amount: int, wallet_balance: int) -
     return max(0, int(debt_amount) - int(wallet_balance))
 
 
+def payable_from_wallet(wallet_balance: int) -> int:
+    """Show payable as the inverse of wallet balance for delegated sub-admins."""
+    return -int(wallet_balance)
+
+
 def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
     return shared_parse_detail_pairs(raw)
 
