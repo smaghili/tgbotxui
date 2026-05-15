@@ -1886,6 +1886,8 @@ class AdminProvisioningService:
             allocated_gb += 1
         gb_unit = 1024 ** 3
         charge_basis = str(pricing.get("charge_basis") or "allocated")
+        excluded_loader = getattr(self.db, "list_delegate_finance_excluded_inbounds", None)
+        excluded_inbounds = await excluded_loader(actor_user_id) if excluded_loader is not None else set()
         if charge_basis == "consumed":
             consumed_bytes = max(
                 0,
@@ -1897,7 +1899,10 @@ class AdminProvisioningService:
         consumed_gb = float(consumed_bytes) / float(gb_unit) if consumed_bytes > 0 else 0.0
         remaining_gb = float(remaining_bytes) / float(gb_unit) if remaining_bytes > 0 else 0.0
         scope_totals = (
-            await self.financial_service.get_scope_sales_totals(owner_ids)
+            await self.financial_service.get_scope_sales_totals(
+                owner_ids,
+                excluded_inbound_pairs=excluded_inbounds,
+            )
             if self.financial_service is not None
             else {
                 "total_sales": 0,

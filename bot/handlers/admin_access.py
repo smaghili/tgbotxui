@@ -1598,7 +1598,6 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
         or str(target_user_id)
     )
     extra_lines = ""
-    report_sales = int(summary["sale_amount"] or 0)
     if str(summary["pricing"].get("charge_basis") or "allocated") == "consumed":
         payable_amount = payable_from_wallet(int(summary["wallet"]["balance"] or 0))
         extra_lines = t(
@@ -1611,7 +1610,6 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
             remaining_amount=_format_amount(int(summary["remaining_amount"] or 0)),
             currency=str(summary["wallet"]["currency"] or "تومان"),
         )
-        report_sales = int(summary["debt_amount"] or 0)
     await callback.message.edit_text(
         t(
             "admin_delegated_report_text",
@@ -1621,7 +1619,7 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
             currency=str(report["wallet"]["currency"] or "تومان"),
             price_gb=_format_amount(int(summary["pricing"]["price_per_gb"] or 0)),
             price_day=_format_amount(int(summary["pricing"]["price_per_day"] or 0)),
-            sales=_format_amount(report_sales),
+            sales=_format_amount(int(summary["sale_amount"] or 0)),
             transactions=int(summary["total_transactions"] or 0),
             owned_clients=int(summary["clients_count"] or 0),
             extra_lines=extra_lines,

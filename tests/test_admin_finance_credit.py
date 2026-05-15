@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from bot.handlers.admin_finance import _finance_delegated_keyboard
 from bot.handlers.admin_finance_helpers import payable_from_wallet
 from bot.services.admin_provisioning_service import AdminProvisioningService
+from bot.services.financial_service import FinancialService
 
 
 class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
@@ -67,7 +68,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
                     "charge_basis": "consumed",
                 }
 
-            async def get_scope_sales_totals(self, telegram_user_ids: list[int]) -> dict:
+            async def get_scope_sales_totals(self, telegram_user_ids: list[int], **kwargs) -> dict:
                 return {
                     "total_sales": 880_000,
                     "total_transactions": 4,
@@ -166,7 +167,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
                     "charge_basis": "consumed",
                 }
 
-            async def get_scope_sales_totals(self, telegram_user_ids: list[int]) -> dict:
+            async def get_scope_sales_totals(self, telegram_user_ids: list[int], **kwargs) -> dict:
                 return {"total_sales": 1200, "total_transactions": 1}
 
         panel_service = FakePanelService()
@@ -276,7 +277,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
                     "charge_basis": "consumed",
                 }
 
-            async def get_scope_sales_totals(self, telegram_user_ids: list[int]) -> dict:
+            async def get_scope_sales_totals(self, telegram_user_ids: list[int], **kwargs) -> dict:
                 return {"total_sales": 0, "total_transactions": 0}
 
         service = AdminProvisioningService(
@@ -294,6 +295,36 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["clients_count"], 1)
         self.assertEqual(summary["consumed_gb"], 2)
         self.assertEqual(summary["debt_amount"], 200_000)
+
+    async def test_scope_sales_totals_excludes_inbound_pairs_when_requested(self) -> None:
+        class FakeConn:
+            async def execute(self, query: str, params: tuple[int, ...]):
+                class Cur:
+                    async def fetchall(self_nonlocal):
+                        return [
+                            {"telegram_user_id": 1, "amount": -100, "kind": "charge", "details": "panel=7;inbound=11;email=a"},
+                            {"telegram_user_id": 1, "amount": -200, "kind": "charge", "details": "panel=7;inbound=12;email=b"},
+                            {"telegram_user_id": 1, "amount": 50, "kind": "refund", "details": "panel=7;inbound=11;email=a"},
+                        ]
+
+                return Cur()
+
+        class FakeDB:
+            def __init__(self) -> None:
+                self.conn = FakeConn()
+
+        class FakeAccessService:
+            pass
+
+        fs = FinancialService(
+            db=FakeDB(),  # type: ignore[arg-type]
+            access_service=FakeAccessService(),  # type: ignore[arg-type]
+        )
+
+        totals = await fs.get_scope_sales_totals([1], excluded_inbound_pairs={(7, 11)})
+        self.assertEqual(totals["total_sales"], 200)
+        self.assertEqual(totals["total_refunds"], 0)
+        self.assertEqual(totals["total_transactions"], 1)
 
     async def test_scope_financial_summary_ignores_invalid_old_detach_snapshots(self) -> None:
         gb = 1024 ** 3
@@ -377,7 +408,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
                     "charge_basis": "consumed",
                 }
 
-            async def get_scope_sales_totals(self, telegram_user_ids: list[int]) -> dict:
+            async def get_scope_sales_totals(self, telegram_user_ids: list[int], **kwargs) -> dict:
                 return {"total_sales": 0, "total_transactions": 0}
 
         service = AdminProvisioningService(

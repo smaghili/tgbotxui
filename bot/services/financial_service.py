@@ -8,6 +8,7 @@ from typing import Any
 from bot.config import Settings
 from bot.db import Database
 from bot.services.access_service import AccessService
+from bot.utils import parse_detail_pairs
 
 
 def _parse_consumed_pricing_tiers_json(raw: Any) -> list[dict[str, int]]:
@@ -318,7 +319,12 @@ class FinancialService:
         )
         return await self.get_pricing(telegram_user_id)
 
-    async def get_scope_sales_totals(self, telegram_user_ids: list[int]) -> dict[str, int]:
+    async def get_scope_sales_totals(
+        self,
+        telegram_user_ids: list[int],
+        *,
+        excluded_inbound_pairs: set[tuple[int, int]] | None = None,
+    ) -> dict[str, int]:
         assert self.db.conn is not None
         if not telegram_user_ids:
             return {
@@ -330,23 +336,36 @@ class FinancialService:
         placeholders = ",".join("?" for _ in telegram_user_ids)
         cur = await self.db.conn.execute(
             f"""
-            SELECT
-                COALESCE(SUM(CASE WHEN kind='charge' THEN ABS(amount) ELSE 0 END), 0) AS total_sales,
-                COALESCE(SUM(CASE WHEN kind='refund' THEN amount ELSE 0 END), 0) AS total_refunds,
-                COALESCE(COUNT(*), 0) AS total_transactions
+            SELECT telegram_user_id, amount, kind, details
             FROM wallet_transactions
             WHERE telegram_user_id IN ({placeholders});
             """,
             tuple(telegram_user_ids),
         )
-        row = await cur.fetchone()
-        total_sales = int(row["total_sales"] or 0)
-        total_refunds = int(row["total_refunds"] or 0)
+        filtered_sales = 0
+        filtered_refunds = 0
+        filtered_total = 0
+        for tx in await cur.fetchall():
+            details = parse_detail_pairs(tx["details"])
+            panel_raw = str(details.get("panel") or "").strip()
+            inbound_raw = str(details.get("inbound") or "").strip()
+            if excluded_inbound_pairs and panel_raw.isdigit() and inbound_raw.isdigit():
+                if (int(panel_raw), int(inbound_raw)) in excluded_inbound_pairs:
+                    continue
+            filtered_total += 1
+            amount = int(tx["amount"] or 0)
+            if str(tx["kind"] or "") == "charge":
+                filtered_sales += abs(amount)
+            elif str(tx["kind"] or "") == "refund":
+                filtered_refunds += amount
+        total_sales = filtered_sales
+        total_refunds = filtered_refunds
+        total_transactions = filtered_total
         return {
             "total_sales": total_sales,
             "total_refunds": total_refunds,
             "net_sales": total_sales - total_refunds,
-            "total_transactions": int(row["total_transactions"] or 0),
+            "total_transactions": total_transactions,
         }
 
     async def calculate_charge(
