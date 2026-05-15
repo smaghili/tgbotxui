@@ -1625,6 +1625,9 @@ class AdminProvisioningService:
         settings: Settings,
         owner_id_set: set[str],
     ) -> _ScopeFinancialLedger:
+        delegated_loader = getattr(self.db, "get_delegated_admin_by_user_id", None)
+        delegated = await delegated_loader(actor_user_id) if delegated_loader is not None else None
+        is_primary_delegate = delegated is not None and int(delegated.get("parent_user_id") or 0) == 0
         delegate_finance_excluded_used_bytes = 0
         seen: set[tuple[int, int, str]] = set()
         clients_count = 0
@@ -1753,6 +1756,18 @@ class AdminProvisioningService:
                         comment=comment,
                         root_admin_id_set=root_admin_id_set,
                     )
+
+                    if is_primary_delegate:
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        client_total_bytes = max(0, int(client.get("totalGB") or 0))
+                        clients_count += 1
+                        allocated_bytes += client_total_bytes
+                        consumed_bytes += client_used_bytes
+                        if client_total_bytes > 0:
+                            remaining_bytes += max(client_total_bytes - client_used_bytes, 0)
+                        continue
 
                     counted_as_root_created = False
                     if comment == "" or comment in root_admin_id_set:
