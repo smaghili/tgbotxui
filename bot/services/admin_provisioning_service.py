@@ -1569,8 +1569,13 @@ class AdminProvisioningService:
         context = await self.access_service.get_admin_context(actor_user_id, settings)
         if context.is_root_admin:
             return []
-        if context.delegated_scope == "full":
-            return await self.db.get_delegated_admin_subtree_user_ids(manager_user_id=actor_user_id, include_self=True)
+        if context.is_delegated_admin:
+            # Billing / consumed summaries must include the whole delegated tree (children),
+            # not only the manager row — "limited" here refers to inbound UI scope, not finance subtree.
+            return await self.db.get_delegated_admin_subtree_user_ids(
+                manager_user_id=actor_user_id,
+                include_self=True,
+            )
         return [actor_user_id]
 
     async def _merged_delegate_finance_exclusions_for_actor(

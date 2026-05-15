@@ -57,7 +57,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeAccessService:
             async def get_admin_context(self, user_id: int, settings) -> SimpleNamespace:
-                return SimpleNamespace(is_root_admin=False, delegated_scope="full")
+                return SimpleNamespace(is_root_admin=False, is_delegated_admin=True, delegated_scope="full")
 
         class FakeFinancialService:
             async def get_wallet(self, telegram_user_id: int) -> dict:
@@ -156,7 +156,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeAccessService:
             async def get_admin_context(self, user_id: int, settings) -> SimpleNamespace:
-                return SimpleNamespace(is_root_admin=False, delegated_scope="full")
+                return SimpleNamespace(is_root_admin=False, is_delegated_admin=True, delegated_scope="full")
 
         class FakeFinancialService:
             async def get_wallet(self, telegram_user_id: int) -> dict:
@@ -266,7 +266,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeAccessService:
             async def get_admin_context(self, user_id: int, settings) -> SimpleNamespace:
-                return SimpleNamespace(is_root_admin=False, delegated_scope="full")
+                return SimpleNamespace(is_root_admin=False, is_delegated_admin=True, delegated_scope="full")
 
         class FakeFinancialService:
             async def get_wallet(self, telegram_user_id: int) -> dict:
@@ -397,7 +397,7 @@ class AdminFinanceCreditTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeAccessService:
             async def get_admin_context(self, user_id: int, settings) -> SimpleNamespace:
-                return SimpleNamespace(is_root_admin=False, delegated_scope="full")
+                return SimpleNamespace(is_root_admin=False, is_delegated_admin=True, delegated_scope="full")
 
         class FakeFinancialService:
             async def get_wallet(self, telegram_user_id: int) -> dict:
