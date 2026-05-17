@@ -346,6 +346,34 @@ class XUIClient:
                 raise
         raise XUIError("xray settings update: path not found on panel.")
 
+    async def restart_xray_service(
+        self, conn: PanelConnection, cookies: Dict[str, str] | None
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        # Different x-ui/3x-ui builds expose different restart endpoints.
+        candidates = (
+            ("/xray/restart", True),
+            ("/xray/restart", False),
+            ("/server/restartXrayService", True),
+            ("/server/restartXrayService", False),
+        )
+        last_exc: Exception | None = None
+        for endpoint, under_panel in candidates:
+            try:
+                return await self.request(
+                    conn=conn,
+                    method="POST",
+                    endpoint=endpoint,
+                    cookies=cookies,
+                    payload=None,
+                    under_panel=under_panel,
+                )
+            except XUIError as exc:
+                last_exc = exc
+                continue
+        if last_exc is not None:
+            raise XUIError(f"xray restart failed: {last_exc}")
+        raise XUIError("xray restart failed: no endpoint available.")
+
     async def get_client_traffics(
         self, conn: PanelConnection, cookies: Dict[str, str] | None, client_email: str
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:

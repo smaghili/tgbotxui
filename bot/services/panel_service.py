@@ -1960,6 +1960,10 @@ class PanelService:
                 outbound_test_url=test_url,
             ),
         )
+        await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.restart_xray_service(conn, cookies),
+        )
 
     async def reload_xray_config(self, panel_id: int) -> None:
         raw, _ = await self._with_auth_request(
@@ -2075,6 +2079,10 @@ class PanelService:
                 xray_setting_json=payload,
                 outbound_test_url=test_url,
             ),
+        )
+        await self._with_auth_request(
+            panel_id,
+            lambda conn, cookies: self.xui.restart_xray_service(conn, cookies),
         )
         return len(add_specs)
 
