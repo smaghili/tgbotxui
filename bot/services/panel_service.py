@@ -147,6 +147,16 @@ class PanelService:
             lambda conn, cookies: self.xui.get_client_traffics(conn, cookies, client_email),
         )
 
+    async def reconnect_panel(self, panel_id: int) -> None:
+        conn = await self._build_conn(panel_id)
+        try:
+            cookies = await self.xui.login(conn)
+            await self.db.save_panel_session(panel_id, cookies)
+            await self.db.set_panel_login_status(panel_id, ok=True, last_error=None)
+        except XUIError as exc:
+            await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
+            raise
+
     async def list_inbounds(self, panel_id: int) -> list[Dict[str, Any]]:
         try:
             raw, _ = await self._with_auth_request(

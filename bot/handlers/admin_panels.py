@@ -384,6 +384,36 @@ async def panel_access_ask(callback: CallbackQuery, settings: Settings, services
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("panel_reconnect:"))
+async def panel_reconnect(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        panel_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    try:
+        await services.panel_service.reconnect_panel(panel_id)
+    except Exception as exc:
+        await refresh_panels_message(callback, services, settings)
+        await callback.answer(f"{t('panel_add_xui_error', lang, error=exc)}", show_alert=True)
+        return
+    await refresh_panels_message(callback, services, settings)
+    await callback.answer(t("admin_refresh_done", lang))
+
+
 @router.callback_query(F.data.startswith("panel_access_grant:"))
 async def panel_access_grant(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
