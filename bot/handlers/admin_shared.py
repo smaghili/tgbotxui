@@ -502,19 +502,6 @@ def edit_config_actions_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def edit_config_reset_traffic_confirm_keyboard(
-    panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None
-) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                inline_button(t("btn_yes", lang), f"pec:traffic_reset_do:{panel_id}:{inbound_id}:{client_uuid}"),
-                inline_button(t("admin_cancel", lang), f"pec:traffic_reset_cancel:{panel_id}:{inbound_id}:{client_uuid}"),
-            ],
-        ]
-    )
-
-
 def edit_config_location_outbound_keyboard(
     panel_id: int,
     inbound_id: int,
