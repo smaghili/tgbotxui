@@ -384,6 +384,44 @@ async def panel_access_ask(callback: CallbackQuery, settings: Settings, services
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("panel_actions:"))
+async def panel_actions(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        panel_id = int(callback.data.split(":", 1)[1])
+    except ValueError:
+        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
+        return
+    panel = await services.panel_service.get_panel(panel_id)
+    if panel is None:
+        await callback.answer(t("admin_panel_not_found", lang), show_alert=True)
+        return
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    status = "✅" if panel.get("last_login_ok") else "❌"
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔑", callback_data=f"panel_access_ask:{panel_id}")],
+            [InlineKeyboardButton(text="🔄", callback_data=f"panel_reconnect:{panel_id}")],
+            [InlineKeyboardButton(text="🗑️", callback_data=f"panel_delete_ask:{panel_id}")],
+            [InlineKeyboardButton(text="⬅️", callback_data="panel_actions_back")],
+        ]
+    )
+    connection_label = "وضعیت اتصال" if (lang or "fa").startswith("fa") else "Connection status"
+    await callback.message.edit_text(f"{panel['name']}\n{connection_label}: {status}", reply_markup=kb)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("panel_reconnect:"))
 async def panel_reconnect(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
@@ -412,6 +450,14 @@ async def panel_reconnect(callback: CallbackQuery, settings: Settings, services:
         return
     await refresh_panels_message(callback, services, settings)
     await callback.answer(t("admin_refresh_done", lang))
+
+
+@router.callback_query(F.data == "panel_actions_back")
+async def panel_actions_back(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    await refresh_panels_message(callback, services, settings)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("panel_access_grant:"))
