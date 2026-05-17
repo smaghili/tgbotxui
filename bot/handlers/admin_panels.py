@@ -411,10 +411,12 @@ async def panel_actions(callback: CallbackQuery, settings: Settings, services: S
     status = "✅" if panel.get("last_login_ok") else "❌"
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔑", callback_data=f"panel_access_ask:{panel_id}")],
-            [InlineKeyboardButton(text="🔄", callback_data=f"panel_reconnect:{panel_id}")],
-            [InlineKeyboardButton(text="🗑️", callback_data=f"panel_delete_ask:{panel_id}")],
-            [InlineKeyboardButton(text="⬅️", callback_data="panel_actions_back")],
+            [
+                InlineKeyboardButton(text="🔑 دسترسی", callback_data=f"panel_access_ask:{panel_id}"),
+                InlineKeyboardButton(text="🔄 تلاش مجدد", callback_data=f"panel_reconnect:{panel_id}"),
+                InlineKeyboardButton(text="🗑️ حذف", callback_data=f"panel_delete_ask:{panel_id}"),
+            ],
+            [InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data="panel_actions_back")],
         ]
     )
     connection_label = "وضعیت اتصال" if (lang or "fa").startswith("fa") else "Connection status"

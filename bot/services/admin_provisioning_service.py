@@ -989,7 +989,13 @@ class AdminProvisioningService:
             user=email or ref.client_email or "-",
             panel_id=ref.panel_id,
             inbound_id=ref.inbound_id,
-            details=[t("admin_activity_detail_new_value", await self.db.get_user_language(actor_user_id), value=str(total_gb))],
+            details=[
+                t(
+                    "admin_activity_detail_amount_gb",
+                    await self.db.get_user_language(actor_user_id),
+                    value=total_gb,
+                )
+            ],
         )
         if self.usage_service is not None:
             await self.usage_service.notify_user_traffic_reset(
