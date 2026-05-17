@@ -1238,7 +1238,9 @@ async def edit_config_add_traffic_prompt(callback: CallbackQuery, state: FSMCont
 
 
 @router.callback_query(F.data.startswith("pec:traffic_reset_ask:"))
-async def edit_config_reset_traffic_ask(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+async def edit_config_reset_traffic_ask(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer
+) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
@@ -1275,10 +1277,10 @@ async def edit_config_reset_traffic_value(message: Message, state: FSMContext, s
     lang = await services.db.get_user_language(message.from_user.id)
     try:
         gb = parse_gb_amount(message.text or "")
-        if gb <= 0:
+        if gb < 0:
             raise ValueError
     except ValueError:
-        await message.answer(t("admin_invalid_positive_number", lang))
+        await message.answer(t("admin_invalid_nonnegative_number", lang))
         return
     data = await state.get_data()
     await state.clear()
@@ -1302,7 +1304,7 @@ async def edit_config_reset_traffic_value(message: Message, state: FSMContext, s
             panel_id=panel_id,
             inbound_id=inbound_id,
             client_uuid=client_uuid,
-            total_gb=gb,
+            total_gb=None if gb == 0 else gb,
         )
     except Exception as exc:
         delegated_error = _delegated_profile_error_text(exc, lang)
@@ -1311,10 +1313,12 @@ async def edit_config_reset_traffic_value(message: Message, state: FSMContext, s
             return
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
-    await message.answer(
-        t("admin_edit_traffic_reset_done", lang, gb=gb),
-        reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
+    done_text = (
+        t("admin_edit_traffic_reset_done", lang, gb=gb)
+        if gb > 0
+        else t("admin_edit_traffic_reset_done_unlimited", lang)
     )
+    await message.answer(done_text, reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang))
     await render_client_detail(
         message,
         services=services,

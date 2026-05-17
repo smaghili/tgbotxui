@@ -946,6 +946,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "✅ ترافیک ریست شد و سقف روی {gb} گیگ تنظیم شد.",
         "en": "✅ Traffic was reset and the limit was set to {gb} GB.",
     },
+    "admin_edit_traffic_reset_done_unlimited": {
+        "fa": "✅ ترافیک ریست شد و حجم روی نامحدود تنظیم شد.",
+        "en": "✅ Traffic was reset and the limit was set to unlimited.",
+    },
     "admin_edit_add_days": {"fa": "➕ افزودن روز", "en": "➕ Add days"},
     "admin_edit_change_location": {"fa": "🌍 تغییر لوکیشن", "en": "🌍 Change location"},
     "admin_edit_location_none": {
@@ -962,6 +966,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_edit_enter_add_traffic": {
         "fa": "مقدار حجمی که باید اضافه شود را به گیگابایت وارد کنید (مثال: 0.5 یا 2.6):",
         "en": "Enter GB amount to add (example: 0.5 or 2.6):",
+    },
+    "admin_invalid_nonnegative_number": {
+        "fa": "لطفاً یک عدد معتبر بزرگ‌تر یا مساوی صفر وارد کنید.",
+        "en": "Please enter a valid number greater than or equal to zero.",
     },
     "admin_edit_enter_add_days": {
         "fa": "تعداد روزی که باید اضافه شود را وارد کنید:",

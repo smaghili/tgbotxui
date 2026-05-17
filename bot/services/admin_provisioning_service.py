@@ -943,7 +943,7 @@ class AdminProvisioningService:
         panel_id: int,
         inbound_id: int,
         client_uuid: str,
-        total_gb: float,
+        total_gb: float | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         ref = await self._managed_ref_from_panel_client(
             panel_id=panel_id,
@@ -960,7 +960,7 @@ class AdminProvisioningService:
                 actor_user_id=actor_user_id,
                 settings=settings,
                 operation="reset_client_traffic",
-                traffic_gb=total_gb,
+                traffic_gb=0 if total_gb is None else total_gb,
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};email={email}",
             )
         try:
@@ -980,7 +980,7 @@ class AdminProvisioningService:
             target_type="client",
             target_id=ref.client_uuid,
             success=True,
-            details=f"total_gb={total_gb}",
+            details=f"total_gb={'unlimited' if total_gb is None else total_gb}",
         )
         await self._record_templated_admin_activity(
             actor_user_id=actor_user_id,
@@ -993,7 +993,7 @@ class AdminProvisioningService:
                 t(
                     "admin_activity_detail_amount_gb",
                     await self.db.get_user_language(actor_user_id),
-                    value=total_gb,
+                    value="∞" if total_gb is None else total_gb,
                 )
             ],
         )
@@ -1001,7 +1001,7 @@ class AdminProvisioningService:
             await self.usage_service.notify_user_traffic_reset(
                 panel_id=ref.panel_id,
                 client_email=email,
-                new_total_bytes=gb_to_bytes(total_gb),
+                new_total_bytes=0 if total_gb is None else gb_to_bytes(total_gb),
             )
         return detail, updated
 
