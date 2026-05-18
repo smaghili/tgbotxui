@@ -612,7 +612,6 @@ TEXTS: dict[str, dict[Lang, str]] = {
     },
     "panel_ob_link_invalid": {"fa": "لینک نامعتبر:\n{error}", "en": "Invalid link:\n{error}"},
     "panel_ob_link_failed": {"fa": "افزودن اوت‌باند ناموفق:\n{error}", "en": "Failed to add outbound:\n{error}"},
-    "panel_ob_added_ok": {"fa": "✅ اوت‌باند با تگ «{tag}» به پنل اضافه شد.", "en": "✅ Outbound added with tag «{tag}»."},
     "panel_ob_pick_delegate": {"fa": "نماینده را انتخاب کنید:", "en": "Pick a delegate:"},
     "panel_ob_delegate_no_panel": {
         "fa": "این نماینده به این پنل دسترسی ندارد.",

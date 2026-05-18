@@ -1032,6 +1032,8 @@ class AdminProvisioningService:
             self.access_service,
         ):
             raise ValueError("outbound not allowed for this admin.")
+        display_map = await self.db.get_panel_outbound_display_map(ref.panel_id)
+        display_tag = display_map.get(outbound_tag.strip(), outbound_tag.strip())
         await self.panel_service.set_client_outbound_tag(
             ref.panel_id, ref.inbound_id, email, outbound_tag.strip()
         )
@@ -1056,7 +1058,7 @@ class AdminProvisioningService:
                 t(
                     "admin_activity_detail_outbound_tag",
                     lang,
-                    tag=outbound_tag.strip(),
+                    tag=display_tag,
                 )
             ],
         )

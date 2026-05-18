@@ -148,7 +148,10 @@ async def send_panel_outbounds_overview(
     except Exception as exc:
         await message.answer(t("panel_outbounds_fetch_error", lang, error=exc))
         return
-    can_grant_add = await services.panel_service.actor_may_grant_or_add_outbound(
+    can_add = await services.panel_service.actor_may_add_outbound(
+        panel_id, actor_user_id, settings, services.access_service
+    )
+    can_grant = await services.panel_service.actor_may_grant_outbound(
         panel_id, actor_user_id, settings, services.access_service
     )
     show_alias = bool(rows)
@@ -160,7 +163,7 @@ async def send_panel_outbounds_overview(
         )
         kb = _outbound_list_keyboard(
             panel_id=panel_id,
-            show_grant_add=can_grant_add,
+            show_grant_add=can_add or can_grant,
             show_alias=False,
             tag_rows=[],
             lang=lang,
@@ -171,7 +174,7 @@ async def send_panel_outbounds_overview(
     text = t("panel_outbounds_header", lang, name=panel["name"], count=len(rows)) + "\n".join(body_lines)
     kb = _outbound_list_keyboard(
         panel_id=panel_id,
-        show_grant_add=can_grant_add,
+        show_grant_add=can_add or can_grant,
         show_alias=show_alias,
         tag_rows=rows,
         lang=lang,
@@ -229,7 +232,7 @@ async def panel_ob_add(callback: CallbackQuery, state: FSMContext, settings: Set
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
+    if not await services.panel_service.actor_may_add_outbound(
         panel_id, callback.from_user.id, settings, services.access_service
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
@@ -256,7 +259,7 @@ async def panel_ob_receive_link(message: Message, state: FSMContext, settings: S
         await state.clear()
         await message.answer(t("no_admin_access", lang))
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
+    if not await services.panel_service.actor_may_add_outbound(
         panel_id, message.from_user.id, settings, services.access_service
     ):
         await state.clear()
@@ -271,16 +274,9 @@ async def panel_ob_receive_link(message: Message, state: FSMContext, settings: S
     except Exception as exc:
         await message.answer(t("panel_ob_link_failed", lang, error=exc))
         return
-    await state.clear()
-    await message.answer(t("panel_ob_added_ok", lang, tag=tag))
-    await send_panel_outbounds_overview(
-        message,
-        services=services,
-        settings=settings,
-        panel_id=panel_id,
-        actor_user_id=message.from_user.id,
-        lang=lang,
-    )
+    await state.set_state(OutboundPanelStates.waiting_display_label)
+    await state.update_data(panel_ob_panel_id=panel_id, panel_ob_tag=tag)
+    await message.answer(t("panel_ob_send_display_name", lang, tag=tag))
 
 
 @router.callback_query(F.data.startswith("panel_ob_grant:"))
@@ -301,7 +297,7 @@ async def panel_ob_grant(callback: CallbackQuery, settings: Settings, services: 
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
+    if not await services.panel_service.actor_may_grant_outbound(
         panel_id, callback.from_user.id, settings, services.access_service
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
@@ -340,7 +336,7 @@ async def panel_ob_gadm(
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
+    if not await services.panel_service.actor_may_grant_outbound(
         panel_id, callback.from_user.id, settings, services.access_service
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
@@ -417,7 +413,7 @@ async def panel_ob_grant_toggle(
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
+    if not await services.panel_service.actor_may_grant_outbound(
         panel_id, callback.from_user.id, settings, services.access_service
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
@@ -488,7 +484,7 @@ async def panel_ob_grant_confirm(
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
+    if not await services.panel_service.actor_may_grant_outbound(
         panel_id, callback.from_user.id, settings, services.access_service
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
@@ -533,7 +529,7 @@ async def panel_ob_grant_back_to_delegates(
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
-    if not await services.panel_service.actor_may_grant_or_add_outbound(
+    if not await services.panel_service.actor_may_grant_outbound(
         panel_id, callback.from_user.id, settings, services.access_service
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)

@@ -1753,10 +1753,35 @@ class PanelService:
         return inbound_tag in in_tags
 
     @staticmethod
-    def _first_rule_index_for_client(rules: list[Dict[str, Any]], email: str, inbound_tag: str) -> int | None:
+    def _append_unique_rule_user(rule: Dict[str, Any], email: str) -> None:
+        users = PanelService._normalize_tag_list(rule.get("user"))
+        if email not in users:
+            users.append(email)
+        rule["type"] = "field"
+        rule["user"] = users
+        rule.pop("balancerTag", None)
+
+    @staticmethod
+    def _find_rule_for_client_outbound(
+        rules: list[Dict[str, Any]],
+        *,
+        email: str,
+        inbound_tag: str,
+        outbound_tag: str,
+    ) -> int | None:
         for i, rule in enumerate(rules):
-            if isinstance(rule, dict) and PanelService._rule_matches_client(rule, email, inbound_tag):
-                return i
+            if not isinstance(rule, dict):
+                continue
+            current_outbound = str(rule.get("outboundTag") or rule.get("balancerTag") or "").strip()
+            if current_outbound != outbound_tag:
+                continue
+            users = PanelService._normalize_tag_list(rule.get("user"))
+            if users and email and email not in users:
+                continue
+            inbound_tags = PanelService._normalize_tag_list(rule.get("inboundTag"))
+            if inbound_tags and inbound_tag not in inbound_tags:
+                continue
+            return i
         return None
 
     @staticmethod
@@ -1798,30 +1823,10 @@ class PanelService:
         bundle = self._parse_xray_setting_bundle(raw)
         return self._list_outbound_tags(bundle["config"])
 
-    async def outbound_actor_sees_all_panel_outbounds(
-        self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
-    ) -> bool:
-        ctx = await access.get_admin_context(actor_user_id, settings)
-        if ctx.is_root_admin:
-            return True
-        if not ctx.is_full_admin:
-            return False
-        if not await access.can_access_panel(user_id=actor_user_id, settings=settings, panel_id=panel_id):
-            return False
-        panel = await self.get_panel(panel_id)
-        if panel is None:
-            return False
-        if int(panel.get("is_default") or 0) == 1 or int(panel.get("created_by") or 0) == actor_user_id:
-            return True
-        rows = await self.db.list_delegated_admin_panel_access_rows(actor_user_id)
-        return any(int(r["panel_id"]) == panel_id for r in rows)
-
     async def list_outbound_tags_for_actor(
         self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
     ) -> list[str]:
         all_tags = await self.list_outbound_tags(panel_id)
-        if await self.outbound_actor_sees_all_panel_outbounds(panel_id, actor_user_id, settings, access):
-            return list(all_tags)
         allowed = set(await self.db.list_panel_outbound_delegate_visible_tags(panel_id, actor_user_id))
         return sorted(t for t in all_tags if t in allowed)
 
@@ -1832,12 +1837,25 @@ class PanelService:
         displays = await self.db.get_panel_outbound_display_map(panel_id)
         return [(t, displays.get(t, t)) for t in tags]
 
-    async def actor_may_grant_or_add_outbound(
+    async def actor_may_add_outbound(
         self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
     ) -> bool:
         if access.is_root_admin(actor_user_id, settings):
             return True
-        return await self.outbound_actor_sees_all_panel_outbounds(panel_id, actor_user_id, settings, access)
+        if not await access.can_access_panel(user_id=actor_user_id, settings=settings, panel_id=panel_id):
+            return False
+        ctx = await access.get_admin_context(actor_user_id, settings)
+        return ctx.is_full_admin
+
+    async def actor_may_grant_outbound(
+        self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
+    ) -> bool:
+        if access.is_root_admin(actor_user_id, settings):
+            return True
+        panel = await self.get_panel(panel_id)
+        if panel is None:
+            return False
+        return int(panel.get("created_by") or 0) == actor_user_id
 
     async def actor_may_use_outbound_tag(
         self,
@@ -1862,7 +1880,7 @@ class PanelService:
     ) -> bool:
         if not await access.can_access_panel(user_id=actor_user_id, settings=settings, panel_id=panel_id):
             return False
-        if await self.actor_may_grant_or_add_outbound(panel_id, actor_user_id, settings, access):
+        if await self.actor_may_grant_outbound(panel_id, actor_user_id, settings, access):
             return True
         return await self.actor_may_use_outbound_tag(
             panel_id, actor_user_id, outbound_tag.strip(), settings, access
@@ -1941,12 +1959,21 @@ class PanelService:
         if isinstance(raw_rules, list):
             for r in raw_rules:
                 rules_objs.append(dict(r) if isinstance(r, dict) else {})
-        idx = self._first_rule_index_for_client(rules_objs, email, inbound_tag)
+        idx = self._find_rule_for_client_outbound(
+            rules_objs,
+            email=email,
+            inbound_tag=inbound_tag,
+            outbound_tag=outbound_tag,
+        )
         if idx is not None:
             target = rules_objs[idx]
             target["type"] = "field"
             target["outboundTag"] = outbound_tag
-            target.pop("balancerTag", None)
+            inbound_tags = PanelService._normalize_tag_list(target.get("inboundTag"))
+            if inbound_tag not in inbound_tags:
+                inbound_tags.append(inbound_tag)
+            target["inboundTag"] = inbound_tags
+            self._append_unique_rule_user(target, email)
         else:
             ins = self._new_rule_insert_index(rules_objs)
             rules_objs.insert(
@@ -2064,15 +2091,34 @@ class PanelService:
             add_specs.append((xtag, outbound_tag))
         if not add_specs:
             return 0
-        rules_objs = [
-            r
-            for r in rules_objs
-            if not (
-                isinstance(r, dict)
-                and any(PanelService._rule_is_inbound_wide_exact_tag(r, xt) for xt in drop_tags)
-            )
-        ]
         for xtag, ot in add_specs:
+            merged = False
+            for rule in rules_objs:
+                if not isinstance(rule, dict):
+                    continue
+                current_outbound = str(rule.get("outboundTag") or rule.get("balancerTag") or "").strip()
+                if current_outbound != ot:
+                    continue
+                inbound_tags = PanelService._normalize_tag_list(rule.get("inboundTag"))
+                if inbound_tags and xtag not in inbound_tags:
+                    continue
+                if xtag not in inbound_tags:
+                    inbound_tags.append(xtag)
+                    rule["inboundTag"] = inbound_tags
+                rule["type"] = "field"
+                rule.pop("balancerTag", None)
+                merged = True
+                break
+            if merged:
+                continue
+            rules_objs = [
+                r
+                for r in rules_objs
+                if not (
+                    isinstance(r, dict)
+                    and any(PanelService._rule_is_inbound_wide_exact_tag(r, xt) for xt in drop_tags)
+                )
+            ]
             ins = self._new_rule_insert_index(rules_objs)
             rules_objs.insert(
                 ins,
