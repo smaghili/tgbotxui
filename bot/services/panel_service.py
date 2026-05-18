@@ -1827,6 +1827,9 @@ class PanelService:
         self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
     ) -> list[str]:
         all_tags = await self.list_outbound_tags(panel_id)
+        ctx = await access.get_admin_context(actor_user_id, settings)
+        if ctx.is_root_admin:
+            return list(all_tags)
         allowed = set(await self.db.list_panel_outbound_delegate_visible_tags(panel_id, actor_user_id))
         return sorted(t for t in all_tags if t in allowed)
 
@@ -1845,7 +1848,7 @@ class PanelService:
         if not await access.can_access_panel(user_id=actor_user_id, settings=settings, panel_id=panel_id):
             return False
         ctx = await access.get_admin_context(actor_user_id, settings)
-        return ctx.is_full_admin
+        return ctx.is_full_admin or ctx.is_root_admin
 
     async def actor_may_grant_outbound(
         self, panel_id: int, actor_user_id: int, settings: Settings, access: AccessService
