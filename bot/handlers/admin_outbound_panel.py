@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from bot.config import Settings
 from bot.handlers.admin_shared import (
+    answer_with_cancel,
     inline_button,
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
@@ -239,7 +240,7 @@ async def panel_ob_add(callback: CallbackQuery, state: FSMContext, settings: Set
         return
     await state.set_state(OutboundPanelStates.waiting_share_link)
     await state.update_data(panel_ob_panel_id=panel_id)
-    await callback.message.answer(t("panel_ob_send_link", lang))
+    await answer_with_cancel(callback.message, t("panel_ob_send_link", lang), lang=lang)
     await callback.answer()
 
 
@@ -276,7 +277,7 @@ async def panel_ob_receive_link(message: Message, state: FSMContext, settings: S
         return
     await state.set_state(OutboundPanelStates.waiting_display_label)
     await state.update_data(panel_ob_panel_id=panel_id, panel_ob_tag=tag)
-    await message.answer(t("panel_ob_send_display_name", lang, tag=tag))
+    await answer_with_cancel(message, t("panel_ob_send_display_name", lang, tag=tag), lang=lang)
 
 
 @router.callback_query(F.data.startswith("panel_ob_grant:"))
@@ -578,7 +579,7 @@ async def panel_ob_alias_start(callback: CallbackQuery, state: FSMContext, setti
         return
     await state.set_state(OutboundPanelStates.waiting_display_label)
     await state.update_data(panel_ob_panel_id=panel_id, panel_ob_tag=tag)
-    await callback.message.answer(t("panel_ob_send_display_name", lang, tag=tag))
+    await answer_with_cancel(callback.message, t("panel_ob_send_display_name", lang, tag=tag), lang=lang)
     await callback.answer()
 
 
