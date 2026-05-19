@@ -263,6 +263,40 @@ class AdminProvisioningService:
             notification_kind=action_key,
         )
 
+    async def _initial_expiry_days_for_client(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_email: str,
+    ) -> int | None:
+        """Return initial expiry days from the earliest create_client charge metadata."""
+        if self.db.conn is None:
+            return None
+        cur = await self.db.conn.execute(
+            """
+            SELECT metadata_json
+            FROM wallet_transactions
+            WHERE operation='create_client'
+              AND details LIKE ?
+            ORDER BY id ASC;
+            """,
+            (f"%panel={int(panel_id)};inbound={int(inbound_id)};email={client_email}%",),
+        )
+        rows = await cur.fetchall()
+        for row in rows:
+            try:
+                raw = str(row["metadata_json"] or "").strip()
+                if not raw:
+                    continue
+                meta = json.loads(raw)
+                days = int(meta.get("expiry_days") or 0)
+                if days > 0:
+                    return days
+            except Exception:
+                continue
+        return None
+
     async def _managed_ref_from_panel_client(
         self,
         *,
@@ -966,6 +1000,15 @@ class AdminProvisioningService:
         try:
             await self.panel_service.reset_client_traffic(ref.panel_id, ref.inbound_id, email)
             await self.panel_service.set_client_total_gb(ref.panel_id, ref.inbound_id, ref.client_uuid, total_gb)
+            initial_days = await self._initial_expiry_days_for_client(
+                panel_id=ref.panel_id,
+                inbound_id=ref.inbound_id,
+                client_email=email,
+            )
+            if initial_days is not None:
+                await self.panel_service.set_client_expiry_days(
+                    ref.panel_id, ref.inbound_id, ref.client_uuid, initial_days
+                )
             updated = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
         except Exception:
             await self._refund_charge_bundle(

@@ -1582,8 +1582,14 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
     except Exception as exc:
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
+    try:
+        detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+    except Exception as exc:
+        await message.answer(t("admin_error_fetch_client", lang) + f":\n{exc}")
+        return
+    detail_text = format_client_detail(detail, settings.timezone, lang)
     await message.answer(
-        t("admin_edit_days_added", lang),
+        f"{t('admin_edit_days_added', lang)}\n\n{detail_text}",
         reply_markup=_edit_actions_keyboard(panel_id, inbound_id, client_uuid, lang),
     )
 

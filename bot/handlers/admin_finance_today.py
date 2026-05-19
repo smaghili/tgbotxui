@@ -74,6 +74,15 @@ async def _format_today_sale_line(
             t("finance_report_amount_part", lang, value=amount_label),
         ]
         return f"{row_label}. " + " - ".join(parts)
+    if operation == "reset_client_traffic":
+        parts = [
+            f"{t('admin_activity_action_reset_traffic', lang)} {email}",
+            t("finance_report_traffic_part", lang, value=traffic_label),
+            t("finance_report_actor_part", lang, value=actor_name),
+            t("finance_report_time_part", lang, value=created_at),
+            t("finance_report_amount_part", lang, value=amount_label),
+        ]
+        return f"{row_label}. " + " - ".join(parts)
     parts = [
         f"{t('admin_activity_action_add_traffic', lang)} {email}",
         t("finance_report_traffic_part", lang, value=traffic_label),
@@ -218,7 +227,7 @@ async def _answer_today_sales(
     start_utc, end_utc = _today_utc_range_strings(settings.timezone)
     rows = await services.db.list_scope_wallet_transactions(
         owner_ids,
-        operation_names=["create_client", "add_client_traffic", "add_client_total_gb"],
+        operation_names=["create_client", "add_client_traffic", "add_client_total_gb", "reset_client_traffic"],
         kind="charge",
         created_at_from=start_utc,
         created_at_to=end_utc,
@@ -426,4 +435,3 @@ async def finance_today_sales_callback(callback: CallbackQuery, settings: Settin
         lang=lang,
     )
     await callback.answer()
-
