@@ -22,7 +22,6 @@ from .admin_shared import (
     answer_with_admin_menu,
     back_to_detail_keyboard,
     callback_error_alert,
-    client_actions_keyboard,
     client_confirm_reset_keyboard,
     client_expiry_menu_keyboard,
     client_iplimit_menu_keyboard,
@@ -39,8 +38,6 @@ from .admin_shared import (
     set_client_action_context,
     show_online_clients_for_panel_callback,
     show_online_clients_for_panel_message,
-    load_online_clients_for_actor,
-    show_online_clients_for_actor_message,
     show_users_inbounds_for_panel_callback,
     show_users_inbounds_for_panel_message,
     normalize_tg_id,
@@ -53,6 +50,25 @@ router = Router(name="admin_clients")
 @router.message(F.text.in_(button_variants("btn_list_users")))
 async def start_users_list(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
+        return
+    try:
+        panel_id = await services.panel_service.resolve_panel_id(None)
+    except ValueError:
+        panel_id = None
+    if panel_id is not None:
+        _, allowed_inbound_ids = await _actor_scope(
+            user_id=message.from_user.id,
+            settings=settings,
+            services=services,
+            panel_id=panel_id,
+        )
+        await show_users_inbounds_for_panel_message(
+            message,
+            services,
+            settings,
+            panel_id,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
         return
     if await services.access_service.is_delegated_admin(message.from_user.id):
         access_rows = await services.admin_provisioning_service.list_visible_inbounds_for_actor(
@@ -76,20 +92,41 @@ async def start_users_list(message: Message, settings: Settings, services: Servi
 async def start_online_users_list(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    context = await services.access_service.get_admin_context(message.from_user.id, settings)
-    allowed_panel_ids = None
-    if context.is_delegated_admin:
+    try:
+        panel_id = await services.panel_service.resolve_panel_id(None)
+    except ValueError:
+        panel_id = None
+    if panel_id is not None:
+        owner_filter, allowed_inbound_ids = await _actor_scope(
+            user_id=message.from_user.id,
+            settings=settings,
+            services=services,
+            panel_id=panel_id,
+        )
+        await show_online_clients_for_panel_message(
+            message,
+            services,
+            settings,
+            panel_id,
+            owner_admin_user_id=owner_filter,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
+        return
+    if await services.access_service.is_delegated_admin(message.from_user.id):
         access_rows = await services.admin_provisioning_service.list_visible_inbounds_for_actor(
             actor_user_id=message.from_user.id,
             settings=settings,
         )
-        allowed_panel_ids = {row.panel_id for row in access_rows}
-    await show_online_clients_for_actor_message(
-        message,
-        services,
-        settings,
-        owner_admin_user_id=message.from_user.id if context.is_delegated_admin else None,
-        allowed_panel_ids=allowed_panel_ids,
+        visible_panel_ids = {row.panel_id for row in access_rows}
+        panels = [panel for panel in await services.panel_service.list_panels() if int(panel["id"]) in visible_panel_ids]
+    else:
+        panels = await services.panel_service.list_panels()
+    if not panels:
+        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
+        return
+    await message.answer(
+        t("admin_default_not_selected_online", None),
+        reply_markup=online_panel_select_keyboard(panels),
     )
 
 
@@ -524,26 +561,6 @@ async def online_refresh_list(callback: CallbackQuery, settings: Settings, servi
     except ValueError:
         await callback.answer(t("admin_invalid_data", None), show_alert=True)
         return
-    if panel_id == 0:
-        context = await services.access_service.get_admin_context(callback.from_user.id, settings)
-        allowed_panel_ids = None
-        if context.is_delegated_admin:
-            access_rows = await services.admin_provisioning_service.list_visible_inbounds_for_actor(
-                actor_user_id=callback.from_user.id,
-                settings=settings,
-            )
-            allowed_panel_ids = {row.panel_id for row in access_rows}
-        clients = await load_online_clients_for_actor(
-            services,
-            owner_admin_user_id=callback.from_user.id if context.is_delegated_admin else None,
-            allowed_panel_ids=allowed_panel_ids,
-        )
-        await callback.message.edit_text(
-            t("admin_online_header", None, name="همه پنل‌ها", count=len(clients)),
-            reply_markup=online_clients_keyboard(0, clients, page=1),
-        )
-        await callback.answer(t("admin_refresh_done", None))
-        return
     owner_filter, allowed_inbound_ids = await _actor_scope(
         user_id=callback.from_user.id,
         settings=settings,
@@ -571,26 +588,6 @@ async def online_paginate(callback: CallbackQuery, settings: Settings, services:
         parsed = parse_online_page(callback.data)
     except ValueError:
         await callback.answer(t("admin_invalid_data", None), show_alert=True)
-        return
-
-    context = await services.access_service.get_admin_context(callback.from_user.id, settings)
-    if parsed.mode == "on" and parsed.panel_id == 0:
-        allowed_panel_ids = None
-        if context.is_delegated_admin:
-            access_rows = await services.admin_provisioning_service.list_visible_inbounds_for_actor(
-                actor_user_id=callback.from_user.id,
-                settings=settings,
-            )
-            allowed_panel_ids = {row.panel_id for row in access_rows}
-        clients = await load_online_clients_for_actor(
-            services,
-            owner_admin_user_id=callback.from_user.id if context.is_delegated_admin else None,
-            allowed_panel_ids=allowed_panel_ids,
-        )
-        text = t("admin_online_header", None, name="همه پنل‌ها", count=len(clients))
-        markup = online_clients_keyboard(0, clients, page=parsed.page)
-        await callback.message.edit_text(text, reply_markup=markup)
-        await callback.answer()
         return
 
     panel = await services.panel_service.get_panel(parsed.panel_id)

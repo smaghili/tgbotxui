@@ -27,7 +27,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "btn_inbounds_overview": {"fa": "📋 اطلاعات کلی ورودی‌ها", "en": "📋 Inbound Overview"},
     "btn_create_user": {"fa": "➕ ساخت کاربر", "en": "➕ Create User"},
     "btn_change_inbound_location": {"fa": "🌍 تغییر لوکیشن اینباند", "en": "🌍 Inbound location"},
-    "btn_manage_inbound": {"fa": "📡 مدیریت اوت‌باند", "en": "📡 Outbound manage"},
+    "btn_manage_inbound": {"fa": "📡 مدیریت اینباند", "en": "📡 Inbound manage"},
     "btn_edit_config": {"fa": "🛠 ویرایش کانفیگ", "en": "🛠 Edit Config"},
     "btn_manage_admins": {"fa": "👥 مدیریت ادمین‌ها", "en": "👥 Manage Admins"},
     "btn_cleanup_settings": {"fa": "⏱ تنظیم حذف خودکار", "en": "⏱ Auto cleanup"},
@@ -421,6 +421,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_ip_log": {"fa": "📋 لاگ آدرس‌های IP", "en": "📋 IP logs"},
     "admin_ip_limit": {"fa": "🔢 محدودیت IP", "en": "🔢 IP limit"},
     "admin_set_tg": {"fa": "👤 تنظیم کاربر تلگرام", "en": "👤 Set Telegram user"},
+    "admin_tg_id": {"fa": "🆔 آیدی تلگرام", "en": "🆔 Telegram ID"},
     "admin_confirm_reset": {"fa": "✅ تایید تنظیم مجدد ترافیک", "en": "✅ Confirm reset traffic"},
     "admin_cancel_reset": {"fa": "❌ لغو تنظیم مجدد", "en": "❌ Cancel reset"},
     "admin_cancel": {"fa": "❌ لغو", "en": "❌ Cancel"},
@@ -459,8 +460,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_offline": {"fa": "⚫️ آفلاین", "en": "⚫️ Offline"},
     "admin_unlimited_reset_value": {"fa": "♾️ نامحدود(ریست)", "en": "♾️ Unlimited (reset)"},
     "admin_detail": {
-        "fa": "📧 ایمیل: {email}\n🚨 وضعیت: {enabled}\n🌐 وضعیت اتصال: {online}\n💡 فعال: {enabled}\n📅 تاریخ‌انقضا: {expiry}\n\n🔼 آپلود↑: {up}\n🔽 دانلود↓: {down}\n🔄 کل: {used} / {total}\n\n📋🔄 تازه‌سازی شده در: {refreshed_at}",
-        "en": "📧 Email: {email}\n🚨 Status: {enabled}\n🌐 Connection: {online}\n💡 Active: {enabled}\n📅 Expiry: {expiry}\n\n🔼 Upload↑: {up}\n🔽 Download↓: {down}\n🔄 Total: {used} / {total}\n\n📋🔄 Refreshed at: {refreshed_at}",
+        "fa": "📧 ایمیل: {email}\n🆔 آیدی تلگرام: {tg_id}\n🚦 وضعیت اکانت: {status}\n🌐 اتصال لحظه‌ای: {online}\n🕘 آخرین آنلاین: {last_online}\n📅 تاریخ‌انقضا: {expiry}\n\n🔼 آپلود↑: {up}\n🔽 دانلود↓: {down}\n🔄 کل: {used} / {total}\n\n📋🔄 تازه‌سازی شده در: {refreshed_at}",
+        "en": "📧 Email: {email}\n🆔 Telegram ID: {tg_id}\n🚦 Account status: {status}\n🌐 Live connection: {online}\n🕘 Last online: {last_online}\n📅 Expiry: {expiry}\n\n🔼 Upload↑: {up}\n🔽 Download↓: {down}\n🔄 Total: {used} / {total}\n\n📋🔄 Refreshed at: {refreshed_at}",
     },
 
     "bind_usage": {
@@ -580,15 +581,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
 
     "panel_add_enter_name": {"fa": "یک نام برای پنل وارد کنید:", "en": "Enter panel name:"},
     "panel_add_name_empty": {"fa": "نام پنل نمی‌تواند خالی باشد.", "en": "Panel name cannot be empty."},
-    "panel_add_api_version_q": {"fa": "کدام نسخه پنل نصب است؟", "en": "Which panel version is installed?"},
-    "panel_add_api_v3": {"fa": "نسخه ۳", "en": "Version 3"},
-    "panel_add_api_legacy": {"fa": "قبل از ۳", "en": "Before 3"},
-    "panel_add_enter_login": {"fa": "لینک پنل یا لاگین را وارد کنید:\nhttp://HOST:PORT/WEBBASEPATH/login/", "en": "Enter panel or login URL:\nhttp://HOST:PORT/WEBBASEPATH/login/"},
-    "panel_add_enter_api_token": {
-        "fa": "توکن API نسخه ۳ را وارد کنید:\nSettings → Security → API Token",
-        "en": "Enter the v3 API token:\nSettings → Security → API Token",
-    },
-    "panel_add_api_token_empty": {"fa": "توکن API نمی‌تواند خالی باشد.", "en": "API token cannot be empty."},
+    "panel_add_enter_login": {"fa": "لینک لاگین را وارد کنید:\nhttp://HOST:PORT/WEBBASEPATH/login/", "en": "Enter login URL:\nhttp://HOST:PORT/WEBBASEPATH/login/"},
     "panel_add_enter_user": {"fa": "یوزرنیم پنل را وارد کنید:", "en": "Enter panel username:"},
     "panel_add_enter_pass": {"fa": "پسورد پنل را وارد کنید:", "en": "Enter panel password:"},
     "panel_add_twofa_q": {"fa": "آیا twoFactor فعال است؟", "en": "Is twoFactor enabled?"},
@@ -620,6 +613,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     },
     "panel_ob_link_invalid": {"fa": "لینک نامعتبر:\n{error}", "en": "Invalid link:\n{error}"},
     "panel_ob_link_failed": {"fa": "افزودن اوت‌باند ناموفق:\n{error}", "en": "Failed to add outbound:\n{error}"},
+    "panel_ob_added_ok": {"fa": "✅ اوت‌باند با تگ «{tag}» به پنل اضافه شد.", "en": "✅ Outbound added with tag «{tag}»."},
     "panel_ob_pick_delegate": {"fa": "نماینده را انتخاب کنید:", "en": "Pick a delegate:"},
     "panel_ob_delegate_no_panel": {
         "fa": "این نماینده به این پنل دسترسی ندارد.",
@@ -672,11 +666,6 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_delegated_status": {"fa": "وضعیت نماینده ⚙️", "en": "Delegate Status ⚙️"},
     "admin_delegated_price_gb": {"fa": "قیمت هر گیگ حجم 🧃", "en": "Per GB Price 🧃"},
     "admin_delegated_price_day": {"fa": "قیمت هر روز زمان 💰", "en": "Per Day Price 💰"},
-    "admin_delegated_panel_prices": {"fa": "قیمت پنل‌ها", "en": "Panel Prices"},
-    "admin_delegated_panel_prices_title": {"fa": "پنل موردنظر برای قیمت‌گذاری را انتخاب کنید:", "en": "Select a panel to configure pricing:"},
-    "admin_delegated_panel_price_enter_gb": {"fa": "قیمت هر گیگ برای این پنل را وارد کنید.\nبرای قیمت پلکانی: 200000,10=1700000", "en": "Enter per-GB price for this panel.\nFor tiers: 200000,10=1700000"},
-    "admin_delegated_panel_price_enter_day": {"fa": "قیمت هر روز برای این پنل را وارد کنید.", "en": "Enter per-day price for this panel."},
-    "admin_delegated_panel_prices_line": {"fa": "\n\nقیمت‌های پنلی:\n{lines}", "en": "\n\nPanel prices:\n{lines}"},
     "admin_delegated_min_traffic": {"fa": "حداقل خرید حجم 📉", "en": "Min Traffic 📉"},
     "admin_delegated_max_traffic": {"fa": "حداکثر خرید حجم 📈", "en": "Max Traffic 📈"},
     "admin_delegated_min_days": {"fa": "حداقل خرید زمان 🕘", "en": "Min Days 🕘"},
@@ -760,8 +749,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "\n\nPayable balance: {payable_amount} {currency}",
     },
     "admin_delegated_details_text": {
-        "fa": "📋 جزئیات نمایندگی\n\nنام کاربری: {title}\nپیشوند نام کاربری: {prefix}\n\nحداکثر کاربران قابل ساخت: {max_users}\nحداقل/حداکثر خرید حجم: {min_traffic}GB / {max_traffic}GB\nحداقل/حداکثر خرید زمان: {min_days} روز / {max_days} روز\n\nقیمت هر روز زمان: {price_day} {currency}\nقیمت هر گیگ حجم: {price_gb} {currency}{panel_prices}\nنوع فروش: {charge_basis}\nفروش کل: {total_sales} {currency}{extra_lines}\n\nتاریخ انقضای نماینده: {expires_at}\nوضعیت نماینده: {status}\nکاربران ساخته‌شده: {owned_clients}{balance_line}",
-        "en": "Delegated details\n\nUsername: {title}\nUsername prefix: {prefix}\n\nMax clients: {max_users}\nMin/Max traffic: {min_traffic}GB / {max_traffic}GB\nMin/Max days: {min_days} days / {max_days} days\n\nDay price: {price_day} {currency}\nGB price: {price_gb} {currency}{panel_prices}\nCharge basis: {charge_basis}\nTotal sales: {total_sales} {currency}{extra_lines}\n\nExpiry: {expires_at}\nDelegate status: {status}\nOwned clients: {owned_clients}{balance_line}",
+        "fa": "📋 جزئیات نمایندگی\n\nنام کاربری: {title}\nپیشوند نام کاربری: {prefix}\n\nحداکثر کاربران قابل ساخت: {max_users}\nحداقل/حداکثر خرید حجم: {min_traffic}GB / {max_traffic}GB\nحداقل/حداکثر خرید زمان: {min_days} روز / {max_days} روز\n\nقیمت هر روز زمان: {price_day} {currency}\nقیمت هر گیگ حجم: {price_gb} {currency}\nنوع فروش: {charge_basis}\nفروش کل: {total_sales} {currency}{extra_lines}\n\nتاریخ انقضای نماینده: {expires_at}\nوضعیت نماینده: {status}\nکاربران ساخته‌شده: {owned_clients}{balance_line}",
+        "en": "Delegated details\n\nUsername: {title}\nUsername prefix: {prefix}\n\nMax clients: {max_users}\nMin/Max traffic: {min_traffic}GB / {max_traffic}GB\nMin/Max days: {min_days} days / {max_days} days\n\nDay price: {price_day} {currency}\nGB price: {price_gb} {currency}\nCharge basis: {charge_basis}\nTotal sales: {total_sales} {currency}{extra_lines}\n\nExpiry: {expires_at}\nDelegate status: {status}\nOwned clients: {owned_clients}{balance_line}",
     },
     "admin_delegated_balance_line": {
         "fa": "\nموجودی: {balance} {currency}",
@@ -817,7 +806,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_bulk_actions": {"fa": "عملیات گروهی", "en": "Bulk Actions"},
     "admin_bulk_add_traffic": {"fa": "افزودن حجم به تمامی کاربران", "en": "Add traffic to all users"},
     "admin_bulk_add_days": {"fa": "افزودن روز به تمامی کاربران", "en": "Add days to all users"},
-    "admin_back_to_users": {"fa": "بازگشت به لیست کاربران", "en": "Back to users list"},
+    "admin_back_to_users_detail": {"fa": "بازگشت به لیست کاربران", "en": "Back to users list"},
     "admin_bulk_menu_text": {
         "fa": "عملیات گروهی برای کل پنل را انتخاب کنید:",
         "en": "Choose a bulk action for the whole panel:",
@@ -849,10 +838,6 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_create_user_pick_inbound": {
         "fa": "برای ساخت کاربر، اینباند مقصد را انتخاب کنید:",
         "en": "Select target inbound to create client:",
-    },
-    "admin_create_user_pick_panel": {
-        "fa": "برای ساخت کاربر، پنل را انتخاب کنید:",
-        "en": "Select a panel to create client:",
     },
     "admin_create_user_no_access": {
         "fa": "هیچ اینباند مجازی برای شما ثبت نشده است.",
@@ -962,10 +947,6 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "✅ ترافیک ریست شد و سقف روی {gb} گیگ تنظیم شد.",
         "en": "✅ Traffic was reset and the limit was set to {gb} GB.",
     },
-    "admin_edit_traffic_reset_done_unlimited": {
-        "fa": "✅ ترافیک ریست شد و حجم روی نامحدود تنظیم شد.",
-        "en": "✅ Traffic was reset and the limit was set to unlimited.",
-    },
     "admin_edit_add_days": {"fa": "➕ افزودن روز", "en": "➕ Add days"},
     "admin_edit_change_location": {"fa": "🌍 تغییر لوکیشن", "en": "🌍 Change location"},
     "admin_edit_location_none": {
@@ -982,10 +963,6 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_edit_enter_add_traffic": {
         "fa": "مقدار حجمی که باید اضافه شود را به گیگابایت وارد کنید (مثال: 0.5 یا 2.6):",
         "en": "Enter GB amount to add (example: 0.5 or 2.6):",
-    },
-    "admin_invalid_nonnegative_number": {
-        "fa": "لطفاً یک عدد معتبر بزرگ‌تر یا مساوی صفر وارد کنید.",
-        "en": "Please enter a valid number greater than or equal to zero.",
     },
     "admin_edit_enter_add_days": {
         "fa": "تعداد روزی که باید اضافه شود را وارد کنید:",
@@ -1146,8 +1123,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "User: days extended (default for all)",
     },
     "config_full_caption": {
-        "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>\n\nلینک ساب:\n{sub_url}",
-        "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>\n\nSubscription link:\n{sub_url}",
+        "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>\n\nلینک ساب:\n<code>{sub_url}</code>",
+        "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>\n\nSubscription link:\n<code>{sub_url}</code>",
     },
     "config_without_sub_caption": {
         "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>",

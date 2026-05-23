@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from aiogram import F, Router
+from aiogram.types import CallbackQuery
 from aiogram.types import Message
 
 from bot.config import Settings
@@ -26,7 +27,7 @@ from bot.handlers.admin_finance_helpers import (
 )
 
 from .admin_finance_ops import _can_access_today_finance
-from .admin_shared import reject_if_not_any_admin
+from .admin_shared import reject_callback_if_not_any_admin, reject_if_not_any_admin
 
 router = Router(name="admin_finance_today")
 
@@ -69,15 +70,6 @@ async def _format_today_sale_line(
             f"{t('admin_activity_action_create_client', lang)} {email}",
             t("finance_report_traffic_part", lang, value=traffic_label),
             t("finance_report_expiry_part", lang, value=expiry_label),
-            t("finance_report_actor_part", lang, value=actor_name),
-            t("finance_report_time_part", lang, value=created_at),
-            t("finance_report_amount_part", lang, value=amount_label),
-        ]
-        return f"{row_label}. " + " - ".join(parts)
-    if operation == "reset_client_traffic":
-        parts = [
-            f"{t('admin_activity_action_reset_traffic', lang)} {email}",
-            t("finance_report_traffic_part", lang, value=traffic_label),
             t("finance_report_actor_part", lang, value=actor_name),
             t("finance_report_time_part", lang, value=created_at),
             t("finance_report_amount_part", lang, value=amount_label),
@@ -227,7 +219,7 @@ async def _answer_today_sales(
     start_utc, end_utc = _today_utc_range_strings(settings.timezone)
     rows = await services.db.list_scope_wallet_transactions(
         owner_ids,
-        operation_names=["create_client", "add_client_traffic", "add_client_total_gb", "reset_client_traffic"],
+        operation_names=["create_client", "add_client_traffic", "add_client_total_gb"],
         kind="charge",
         created_at_from=start_utc,
         created_at_to=end_utc,
@@ -435,3 +427,4 @@ async def finance_today_sales_callback(callback: CallbackQuery, settings: Settin
         lang=lang,
     )
     await callback.answer()
+
