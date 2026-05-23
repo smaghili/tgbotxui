@@ -1140,56 +1140,16 @@ async def delegated_admin_panel_price_fields(
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    panel = await services.panel_service.get_panel(panel_id)
-    panel_name = str((panel or {}).get("name") or panel_id)
-    if mode in {"gb", "day"}:
-        await state.update_data(
-            delegated_panel_price_field=mode,
-            delegated_profile_target_user_id=delegate_id,
-            delegated_panel_price_panel_id=panel_id,
-        )
-        await state.set_state(DelegatedAdminStates.waiting_panel_pricing_field)
-        prompt = t("admin_delegated_panel_price_enter_gb", lang) if mode == "gb" else t("admin_delegated_panel_price_enter_day", lang)
-        await callback.message.answer(prompt)
-        await callback.answer()
-        return
-
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t("admin_delegated_panel_price_gb", lang), callback_data=f"dag:panel_field:gb:{delegate_id}:{panel_id}")],
-            [InlineKeyboardButton(text=t("admin_delegated_panel_price_day", lang), callback_data=f"dag:panel_field:day:{delegate_id}:{panel_id}")],
-            [InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:panel_prices:{delegate_id}:0:pick")],
-        ]
-    )
-    await callback.message.edit_text(
-        t("admin_delegated_panel_price_pick_field", lang, panel_name=panel_name),
-        reply_markup=markup,
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("dag:panel_field:"))
-async def delegated_admin_panel_price_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await _reject_callback_if_not_full_admin(callback, settings, services):
-        return
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    lang = await services.db.get_user_language(callback.from_user.id)
-    try:
-        _, _, field_kind, delegate_raw, panel_raw = callback.data.split(":", 4)
-        delegate_id = int(delegate_raw)
-        panel_id = int(panel_raw)
-    except (ValueError, IndexError):
+    if mode not in {"gb", "day"}:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
     await state.update_data(
-        delegated_panel_price_field=field_kind,
+        delegated_panel_price_field=mode,
         delegated_profile_target_user_id=delegate_id,
         delegated_panel_price_panel_id=panel_id,
     )
     await state.set_state(DelegatedAdminStates.waiting_panel_pricing_field)
-    prompt = t("admin_delegated_panel_price_enter_gb", lang) if field_kind == "gb" else t("admin_delegated_panel_price_enter_day", lang)
+    prompt = t("admin_delegated_panel_price_enter_gb", lang) if mode == "gb" else t("admin_delegated_panel_price_enter_day", lang)
     await callback.message.answer(prompt)
     await callback.answer()
 
