@@ -963,6 +963,7 @@ class PanelService:
             "email": email,
             "enabled": enabled,
             "online": online,
+            "last_online": last_online,
             "expiry": expiry,
             "up": int(traffic.get("up") or 0),
             "down": int(traffic.get("down") or 0),

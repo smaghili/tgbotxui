@@ -893,7 +893,13 @@ def format_datetime(epoch_seconds: int | None, tz_name: str, lang: str | None = 
 
 def format_client_detail(detail: dict, tz_name: str, lang: str | None = None) -> str:
     enabled_text = t("admin_yes", lang) if detail.get("enabled") else t("admin_no", lang)
+    status_text = t("admin_enabled", lang) if detail.get("enabled") else t("admin_disabled", lang)
     online_text = t("admin_online", lang) if detail.get("online") else t("admin_offline", lang)
+    if detail.get("online"):
+        last_online_text = "اکنون" if lang != "en" else "Now"
+    else:
+        last_online_raw = detail.get("last_online")
+        last_online_text = to_jalali_datetime(int(last_online_raw), tz_name) if last_online_raw else "-"
     expiry = detail.get("expiry")
     expiry_line = format_datetime(expiry, tz_name, lang)
     if expiry:
@@ -903,13 +909,17 @@ def format_client_detail(detail: dict, tz_name: str, lang: str | None = None) ->
     used = human_bytes(int(detail.get("used") or 0), lang)
     total_raw = int(detail.get("total") or 0)
     total_text = t("admin_unlimited_reset_value", lang) if total_raw <= 0 else human_bytes(total_raw, lang)
+    tg_id = str(detail.get("tg_id") or "").strip() or "-"
     refreshed_at = now_jalali_datetime(tz_name)
     return t(
         "admin_detail",
         lang,
         email=detail.get("email"),
+        tg_id=tg_id,
         enabled=enabled_text,
+        status=status_text,
         online=online_text,
+        last_online=last_online_text,
         expiry=expiry_line,
         up=up,
         down=down,

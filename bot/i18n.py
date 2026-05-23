@@ -459,8 +459,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_offline": {"fa": "⚫️ آفلاین", "en": "⚫️ Offline"},
     "admin_unlimited_reset_value": {"fa": "♾️ نامحدود(ریست)", "en": "♾️ Unlimited (reset)"},
     "admin_detail": {
-        "fa": "📧 ایمیل: {email}\n🚨 وضعیت: {enabled}\n🌐 وضعیت اتصال: {online}\n💡 فعال: {enabled}\n📅 تاریخ‌انقضا: {expiry}\n\n🔼 آپلود↑: {up}\n🔽 دانلود↓: {down}\n🔄 کل: {used} / {total}\n\n📋🔄 تازه‌سازی شده در: {refreshed_at}",
-        "en": "📧 Email: {email}\n🚨 Status: {enabled}\n🌐 Connection: {online}\n💡 Active: {enabled}\n📅 Expiry: {expiry}\n\n🔼 Upload↑: {up}\n🔽 Download↓: {down}\n🔄 Total: {used} / {total}\n\n📋🔄 Refreshed at: {refreshed_at}",
+        "fa": "📧 ایمیل: {email}\n🆔 آیدی تلگرام: {tg_id}\n🚦 وضعیت اکانت: {status}\n🌐 اتصال لحظه‌ای: {online}\n🕘 آخرین آنلاین: {last_online}\n📅 تاریخ‌انقضا: {expiry}\n\n🔼 آپلود↑: {up}\n🔽 دانلود↓: {down}\n🔄 کل: {used} / {total}\n\n📋🔄 تازه‌سازی شده در: {refreshed_at}",
+        "en": "📧 Email: {email}\n🆔 Telegram ID: {tg_id}\n🚦 Account status: {status}\n🌐 Live connection: {online}\n🕘 Last online: {last_online}\n📅 Expiry: {expiry}\n\n🔼 Upload↑: {up}\n🔽 Download↓: {down}\n🔄 Total: {used} / {total}\n\n📋🔄 Refreshed at: {refreshed_at}",
     },
 
     "bind_usage": {
