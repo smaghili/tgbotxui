@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 from io import BytesIO
 from typing import Any
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 import qrcode
 from aiogram.types import BufferedInputFile, Message
@@ -11,6 +12,24 @@ from bot.config import Settings
 from bot.i18n import t
 from bot.services.container import ServiceContainer
 from bot.utils import format_gb, to_local_date
+
+
+def _ensure_config_name_in_vless_uri(vless_uri: str, config_name: str) -> str:
+    raw = str(vless_uri).strip()
+    if not raw:
+        return raw
+    name = str(config_name).strip()
+    if not name:
+        return raw
+
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() != "vless":
+        return raw
+
+    fragment = unquote(parsed.fragment or "")
+    if name.lower() not in fragment.lower():
+        fragment = f"{fragment}-{name}" if fragment else name
+    return urlunparse(parsed._replace(fragment=quote(fragment, safe="")))
 
 
 async def send_config_bundle_card(
@@ -27,7 +46,7 @@ async def send_config_bundle_card(
     vless_items = [item.strip() for item in str(vless_uri).splitlines() if item.strip()]
     if not vless_items:
         vless_items = [str(vless_uri).strip()]
-    primary_vless = vless_items[0]
+    primary_vless = _ensure_config_name_in_vless_uri(vless_items[0], config_name)
     qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
     qr.add_data(primary_vless)
     qr.make(fit=True)
@@ -43,7 +62,7 @@ async def send_config_bundle_card(
         total=escape(total_label),
         expiry=escape(expiry_label),
         vless_uri=escape(primary_vless),
-        sub_url=escape(sub_url),
+        sub_url=escape(sub_url, quote=True),
     )
     await message.answer_photo(file, caption=caption, parse_mode="HTML")
 

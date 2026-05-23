@@ -1141,8 +1141,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "User: days extended (default for all)",
     },
     "config_full_caption": {
-        "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>\n\nلینک ساب:\n<code>{sub_url}</code>",
-        "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>\n\nSubscription link:\n<code>{sub_url}</code>",
+        "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>\n\nلینک ساب:\n{sub_url}",
+        "en": "Config QR\n\nConfig name: <code>{config_name}</code>\nTraffic: <code>{total}</code>\nExpiry: <code>{expiry}</code>\n\nVLESS config:\n<code>{vless_uri}</code>\n\nSubscription link:\n{sub_url}",
     },
     "config_without_sub_caption": {
         "fa": "QR کانفیگ\n\nنام کانفیگ: <code>{config_name}</code>\nحجم: <code>{total}</code>\nانقضا: <code>{expiry}</code>\n\nکانفیگ VLESS:\n<code>{vless_uri}</code>",

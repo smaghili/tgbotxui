@@ -1284,16 +1284,21 @@ class PanelService:
         if not host or parsed.port is None:
             return sub_url
 
-        panel_keys = {
-            str(panel.get("id") or "").strip().lower(),
-            str(panel.get("name") or "").strip().lower(),
-        }
+        panel_keys = self._panel_config_keys(panel)
+        # When a base override explicitly includes a port, keep it exactly as configured.
+        for panel_key in panel_keys:
+            override = self.sub_url_base_overrides.get(panel_key, "").strip()
+            if override and urlparse(override).port is not None:
+                return sub_url
+        wildcard_override = self.sub_url_base_overrides.get("*", "").strip()
+        if wildcard_override and urlparse(wildcard_override).port is not None:
+            return sub_url
+
         strip_hosts: set[str] = set()
         for panel_key in panel_keys:
-            if panel_key:
-                rule = self.sub_url_strip_port_rules.get(panel_key, "")
-                if rule:
-                    strip_hosts.add((urlparse(rule).hostname or "").strip().lower())
+            rule = self.sub_url_strip_port_rules.get(panel_key, "")
+            if rule:
+                strip_hosts.add((urlparse(rule).hostname or "").strip().lower())
         wildcard_rule = self.sub_url_strip_port_rules.get("*", "")
         if wildcard_rule:
             strip_hosts.add((urlparse(wildcard_rule).hostname or "").strip().lower())
