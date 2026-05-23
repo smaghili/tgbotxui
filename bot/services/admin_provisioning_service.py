@@ -1446,10 +1446,18 @@ class AdminProvisioningService:
             explicit_by_panel: dict[int, set[int]] = {}
             for access in access_rows:
                 explicit_by_panel.setdefault(int(access["panel_id"]), set()).add(int(access["inbound_id"]))
+            granted_panel_ids = {
+                int(row["panel_id"])
+                for row in await self.db.list_delegated_admin_panel_access_rows(actor_user_id)
+            }
             rows: dict[tuple[int, int], InboundAccess] = {}
             for panel in await self.panel_service.list_panels():
                 panel_id = int(panel["id"])
-                has_full_panel_access = int(panel.get("is_default") or 0) == 1 or int(panel.get("created_by") or 0) == actor_user_id
+                has_full_panel_access = (
+                    int(panel.get("is_default") or 0) == 1
+                    or int(panel.get("created_by") or 0) == actor_user_id
+                    or panel_id in granted_panel_ids
+                )
                 if has_full_panel_access:
                     for inbound in await self._list_panel_inbounds(
                         panel=panel,
