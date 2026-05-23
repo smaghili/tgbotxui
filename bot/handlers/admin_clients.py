@@ -54,25 +54,6 @@ router = Router(name="admin_clients")
 async def start_users_list(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    try:
-        panel_id = await services.panel_service.resolve_panel_id(None)
-    except ValueError:
-        panel_id = None
-    if panel_id is not None:
-        _, allowed_inbound_ids = await _actor_scope(
-            user_id=message.from_user.id,
-            settings=settings,
-            services=services,
-            panel_id=panel_id,
-        )
-        await show_users_inbounds_for_panel_message(
-            message,
-            services,
-            settings,
-            panel_id,
-            allowed_inbound_ids=allowed_inbound_ids,
-        )
-        return
     if await services.access_service.is_delegated_admin(message.from_user.id):
         access_rows = await services.admin_provisioning_service.list_visible_inbounds_for_actor(
             actor_user_id=message.from_user.id,
