@@ -517,7 +517,25 @@ def _format_panel_price_entry(row: dict, *, lang: str | None) -> str:
     panel_name = str(row.get("panel_name") or row.get("panel_id") or "-")
     gb = _format_amount(int(row.get("price_per_gb") or 0))
     day = _format_amount(int(row.get("price_per_day") or 0))
-    return f"- {panel_name}: {gb}/{day}"
+    tiers_text = ""
+    raw_tiers = str(row.get("allocated_pricing_tiers_json") or "[]")
+    try:
+        tiers = json.loads(raw_tiers)
+    except Exception:
+        tiers = []
+    if isinstance(tiers, list):
+        tier_parts: list[str] = []
+        for item in tiers:
+            if not isinstance(item, dict):
+                continue
+            traffic_gb = int(item.get("traffic_gb") or 0)
+            amount = int(item.get("amount") or 0)
+            if traffic_gb <= 0 or amount < 0:
+                continue
+            tier_parts.append(f"{traffic_gb}GB={_format_amount(amount)}")
+        if tier_parts:
+            tiers_text = f" ({', '.join(tier_parts)})"
+    return f"- {panel_name}: {gb}/{day}{tiers_text}"
 
 
 async def _panel_pricing_render(
