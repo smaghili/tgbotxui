@@ -44,6 +44,7 @@ class DelegatedAdminStates(StatesGroup):
     waiting_inbound_selection = State()
     waiting_profile_value = State()
     waiting_price_history_choice = State()
+    waiting_panel_pricing_field = State()
     waiting_finex_remain_bulk_tokens = State()
     waiting_finex_remain_bulk_confirm = State()
 

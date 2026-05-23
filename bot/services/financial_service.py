@@ -372,10 +372,23 @@ class FinancialService:
         self,
         telegram_user_id: int,
         *,
+        panel_id: int | None = None,
         traffic_gb: float = 0,
         expiry_days: int = 0,
     ) -> dict[str, Any]:
         pricing = await self.get_pricing(telegram_user_id)
+        if panel_id is not None:
+            panel_pricing = await self.db.get_delegate_panel_pricing(
+                telegram_user_id=telegram_user_id,
+                panel_id=int(panel_id),
+            )
+            if panel_pricing is not None:
+                pricing = {
+                    **pricing,
+                    "price_per_gb": int(panel_pricing.get("price_per_gb") or 0),
+                    "price_per_day": int(panel_pricing.get("price_per_day") or 0),
+                    "allocated_pricing_tiers_json": str(panel_pricing.get("allocated_pricing_tiers_json") or "[]"),
+                }
         gb_price = int(pricing["price_per_gb"] or 0)
         day_price = int(pricing["price_per_day"] or 0)
         traffic_amount = max(Decimal("0"), Decimal(str(traffic_gb)))
@@ -612,6 +625,7 @@ class FinancialService:
         actor_user_id: int,
         settings: Settings,
         operation: str,
+        panel_id: int | None = None,
         traffic_gb: float = 0,
         expiry_days: int = 0,
         details: str | None = None,
@@ -627,6 +641,7 @@ class FinancialService:
             return None
         charge = await self.calculate_charge(
             actor_user_id,
+            panel_id=panel_id,
             traffic_gb=traffic_gb,
             expiry_days=expiry_days,
         )
@@ -659,6 +674,7 @@ class FinancialService:
             for upstream_user_id in await self._upstream_charge_targets(actor_user_id=actor_user_id, settings=settings):
                 upstream_charge = await self.calculate_charge(
                     upstream_user_id,
+                    panel_id=panel_id,
                     traffic_gb=traffic_gb,
                     expiry_days=expiry_days,
                 )

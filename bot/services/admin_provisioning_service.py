@@ -454,6 +454,7 @@ class AdminProvisioningService:
                 actor_user_id=actor_user_id,
                 settings=settings,
                 operation=operation_name,
+                panel_id=ref.panel_id,
                 traffic_gb=add_gb,
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
             )
@@ -579,6 +580,7 @@ class AdminProvisioningService:
                 actor_user_id=actor_user_id,
                 settings=settings,
                 operation=operation_name,
+                panel_id=ref.panel_id,
                 expiry_days=add_days,
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
             )
@@ -836,6 +838,7 @@ class AdminProvisioningService:
                 actor_user_id=actor_user_id,
                 settings=settings,
                 operation="set_client_total_gb",
+                panel_id=ref.panel_id,
                 traffic_gb=0 if total_gb is None else max(0, total_gb - before_allocated_gb),
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
             )
@@ -918,6 +921,7 @@ class AdminProvisioningService:
                 actor_user_id=actor_user_id,
                 settings=settings,
                 operation="set_client_expiry_days",
+                panel_id=ref.panel_id,
                 expiry_days=0 if days is None else max(0, days - before_days),
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};client_uuid={ref.client_uuid}",
             )
@@ -994,6 +998,7 @@ class AdminProvisioningService:
                 actor_user_id=actor_user_id,
                 settings=settings,
                 operation="reset_client_traffic",
+                panel_id=ref.panel_id,
                 traffic_gb=0 if total_gb is None else total_gb,
                 details=f"panel={ref.panel_id};inbound={ref.inbound_id};email={email}",
             )
@@ -2033,6 +2038,7 @@ class AdminProvisioningService:
                 actor_user_id=actor_user_id,
                 settings=settings,
                 operation="create_client",
+                panel_id=panel_id,
                 traffic_gb=total_gb,
                 expiry_days=expiry_days,
                 details=f"panel={panel_id};inbound={inbound_id};email={client_email}",

@@ -434,6 +434,7 @@ def _delegated_detail_keyboard(
                     text=wallet_mode_label,
                     callback_data=f"dag:toggle_wallet_mode:{user_id}",
                 ),
+                InlineKeyboardButton(text=t("admin_delegated_panel_prices", lang), callback_data=f"dag:panel_prices:{user_id}:0"),
             ],
         ]
     )
@@ -511,6 +512,66 @@ def _format_wallet_entry(item: dict, *, settings: Settings, lang: str | None) ->
         parts.append(f"مقدار: {to_persian_digits(expiry_days) if lang == 'fa' else expiry_days} روز")
     parts.append(f"قیمت: {amount} {currency}")
     return "\n".join(parts)
+
+
+def _format_panel_price_entry(row: dict, *, lang: str | None) -> str:
+    panel_name = str(row.get("panel_name") or row.get("panel_id") or "-")
+    gb = _format_amount(int(row.get("price_per_gb") or 0))
+    day = _format_amount(int(row.get("price_per_day") or 0))
+    return f"- {panel_name}: {gb}/{day}"
+
+
+async def _panel_pricing_render(
+    callback: CallbackQuery,
+    *,
+    services: ServiceContainer,
+    settings: Settings,
+    delegate_id: int,
+    page: int,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    rows = await services.db.list_delegate_panel_pricing(telegram_user_id=delegate_id)
+    pricing_map = {int(row["panel_id"]): row for row in rows}
+    panels = await services.panel_service.list_panels()
+    panel_map = {int(panel["id"]): panel for panel in panels}
+    page_size = 8
+    start = max(0, page) * page_size
+    panel_ids = sorted(panel_map.keys())
+    chunk_ids = panel_ids[start : start + page_size]
+    buttons: list[list[InlineKeyboardButton]] = []
+    lines: list[str] = []
+    for panel_id in chunk_ids:
+        row = pricing_map.get(panel_id, {})
+        panel_name = str(panel_map.get(panel_id, {}).get("name") or row.get("panel_name") or panel_id)
+        gb = _format_amount(int(row.get("price_per_gb") or 0))
+        day = _format_amount(int(row.get("price_per_day") or 0))
+        lines.append(f"- {panel_name}: {gb}/{day}")
+        buttons.append(
+            [
+                InlineKeyboardButton(text=panel_name[:24], callback_data=f"dag:panel_price:{delegate_id}:{panel_id}"),
+                InlineKeyboardButton(text=f"{gb}/{day}", callback_data=f"dag:panel_price:{delegate_id}:{panel_id}"),
+            ]
+        )
+    if not panel_ids:
+        buttons.append([InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")])
+    nav: list[InlineKeyboardButton] = []
+    if start > 0:
+        nav.append(InlineKeyboardButton(text="◀", callback_data=f"dag:panel_prices:{delegate_id}:{page - 1}"))
+    if start + page_size < len(panel_ids):
+        nav.append(InlineKeyboardButton(text="▶", callback_data=f"dag:panel_prices:{delegate_id}:{page + 1}"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")])
+    text = t("admin_delegated_panel_prices_title", lang)
+    if panel_ids:
+        text = f"{text}\n\n" + "\n".join(lines)
+    else:
+        text = f"{text}\n\n{t('admin_delegated_panel_prices_empty', lang)}"
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
 
 
 def _format_activity_entry(item: dict, *, settings: Settings, lang: str | None) -> str | None:
@@ -616,6 +677,14 @@ async def _render_delegated_detail(
             payable_amount=_format_amount(payable_amount),
             currency=str(wallet.get("currency") or "تومان"),
         )
+    panel_rows = await services.db.list_delegate_panel_pricing(telegram_user_id=target_user_id)
+    panel_prices = ""
+    if panel_rows:
+        panel_prices = t(
+            "admin_delegated_panel_prices_line",
+            lang,
+            lines="\n".join(_format_panel_price_entry(row, lang=lang) for row in panel_rows),
+        )
     text = t(
         "admin_delegated_details_text",
         lang,
@@ -633,6 +702,7 @@ async def _render_delegated_detail(
         balance_line=balance_line,
         total_sales=_format_amount(total_sales_value),
         extra_lines=extra_lines,
+        panel_prices=panel_prices,
         expires_at=expires_text,
         status=status_text,
         owned_clients=int(overview["owned_clients_count"] or 0),
@@ -1008,6 +1078,97 @@ async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, se
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("dag:panel_prices:"))
+async def delegated_admin_panel_prices(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        _, _, delegate_raw, page_raw = callback.data.split(":", 3)
+        delegate_id = int(delegate_raw)
+        page = int(page_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=delegate_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    await _panel_pricing_render(callback, services=services, settings=settings, delegate_id=delegate_id, page=page)
+
+
+@router.callback_query(F.data.startswith("dag:panel_price:"))
+async def delegated_admin_panel_price_fields(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        _, _, delegate_raw, panel_raw = callback.data.split(":", 3)
+        delegate_id = int(delegate_raw)
+        panel_id = int(panel_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=callback.from_user.id,
+        target_user_id=delegate_id,
+        settings=settings,
+        services=services,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return
+    panel = await services.panel_service.get_panel(panel_id)
+    panel_name = str((panel or {}).get("name") or panel_id)
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("admin_delegated_panel_price_gb", lang), callback_data=f"dag:panel_field:gb:{delegate_id}:{panel_id}")],
+            [InlineKeyboardButton(text=t("admin_delegated_panel_price_day", lang), callback_data=f"dag:panel_field:day:{delegate_id}:{panel_id}")],
+            [InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:panel_prices:{delegate_id}:0")],
+        ]
+    )
+    await callback.message.edit_text(
+        t("admin_delegated_panel_price_pick_field", lang, panel_name=panel_name),
+        reply_markup=markup,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dag:panel_field:"))
+async def delegated_admin_panel_price_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        _, _, field_kind, delegate_raw, panel_raw = callback.data.split(":", 4)
+        delegate_id = int(delegate_raw)
+        panel_id = int(panel_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    await state.update_data(
+        delegated_panel_price_field=field_kind,
+        delegated_profile_target_user_id=delegate_id,
+        delegated_panel_price_panel_id=panel_id,
+    )
+    await state.set_state(DelegatedAdminStates.waiting_panel_pricing_field)
+    prompt = t("admin_delegated_panel_price_enter_gb", lang) if field_kind == "gb" else t("admin_delegated_panel_price_enter_day", lang)
+    await callback.message.answer(prompt)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("dag:subs:"))
 async def delegated_admin_subordinates(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
@@ -1303,6 +1464,67 @@ async def delegated_admin_profile_value(message: Message, state: FSMContext, set
             await services.db.update_delegated_admin_profile(
                 telegram_user_id=target_user_id,
                 **{field_name: number},
+            )
+    except ValueError:
+        await message.answer(t("finance_invalid_amount", lang))
+        return
+    await message.answer(t("admin_delegated_profile_saved", lang))
+    await _render_delegated_detail(
+        message,
+        services=services,
+        settings=settings,
+        target_user_id=target_user_id,
+        lang=lang,
+    )
+
+
+@router.message(DelegatedAdminStates.waiting_panel_pricing_field)
+async def delegated_admin_panel_pricing_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_if_not_full_admin(message, settings, services):
+        return
+    lang = await services.db.get_user_language(message.from_user.id)
+    data = await state.get_data()
+    field_kind = str(data.get("delegated_panel_price_field") or "")
+    target_user_id = int(data.get("delegated_profile_target_user_id") or 0)
+    panel_id = int(data.get("delegated_panel_price_panel_id") or 0)
+    raw = (message.text or "").strip()
+    if field_kind not in {"gb", "day"} or target_user_id <= 0 or panel_id <= 0:
+        await state.clear()
+        await message.answer(t("admin_invalid_data", lang))
+        return
+    if not await _can_manage_delegated_target(
+        actor_user_id=message.from_user.id,
+        target_user_id=target_user_id,
+        settings=settings,
+        services=services,
+    ):
+        await state.clear()
+        await message.answer(t("no_admin_access", None))
+        return
+    await state.clear()
+    try:
+        current = await services.db.get_delegate_panel_pricing(telegram_user_id=target_user_id, panel_id=panel_id) or {}
+        if field_kind == "gb":
+            amount, tiers_json = parse_price_per_gb_with_tiers(raw)
+            if amount < 0:
+                raise ValueError
+            await services.db.set_delegate_panel_pricing(
+                telegram_user_id=target_user_id,
+                panel_id=panel_id,
+                price_per_gb=amount,
+                price_per_day=int(current.get("price_per_day") or 0),
+                allocated_pricing_tiers_json=tiers_json or "[]",
+            )
+        else:
+            amount = int(raw.replace(",", ""))
+            if amount < 0:
+                raise ValueError
+            await services.db.set_delegate_panel_pricing(
+                telegram_user_id=target_user_id,
+                panel_id=panel_id,
+                price_per_gb=int(current.get("price_per_gb") or 0),
+                price_per_day=amount,
+                allocated_pricing_tiers_json=str(current.get("allocated_pricing_tiers_json") or "[]"),
             )
     except ValueError:
         await message.answer(t("finance_invalid_amount", lang))

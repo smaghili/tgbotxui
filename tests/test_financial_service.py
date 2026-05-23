@@ -205,3 +205,59 @@ async def test_consumed_basis_does_not_charge_wallet_on_operation() -> None:
     await db.close()
     if db_path.exists():
         db_path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_panel_specific_pricing_overrides_default_with_tier() -> None:
+    db_path = _db_path(".test-finance-panel-pricing.sqlite3")
+    db = Database(str(db_path))
+    await db.connect()
+    await db.init_schema()
+    await db.upsert_user(telegram_user_id=4001, full_name="Delegated Panel", username="delegated_panel", is_admin=False)
+
+    access_service = AccessService(db)
+    financial_service = FinancialService(db=db, access_service=access_service)
+
+    await financial_service.set_wallet_balance(actor_user_id=1, telegram_user_id=4001, amount=5_000_000)
+    await financial_service.set_pricing(
+        actor_user_id=1,
+        telegram_user_id=4001,
+        price_per_gb=220_000,
+        price_per_day=10_000,
+    )
+    await db.set_delegate_panel_pricing(
+        telegram_user_id=4001,
+        panel_id=3,
+        price_per_gb=200_000,
+        price_per_day=5_000,
+        allocated_pricing_tiers_json='[{"traffic_gb":10,"amount":1700000}]',
+    )
+
+    tx = await financial_service.charge_operation(
+        actor_user_id=4001,
+        settings=SimpleNamespace(admin_ids=[]),
+        operation="create_client",
+        panel_id=3,
+        traffic_gb=10,
+        expiry_days=1,
+    )
+
+    assert tx is not None
+    assert int(tx["amount"]) == -1_705_000
+    wallet = await financial_service.get_wallet(4001)
+    assert int(wallet["balance"]) == 3_295_000
+
+    tx_default = await financial_service.charge_operation(
+        actor_user_id=4001,
+        settings=SimpleNamespace(admin_ids=[]),
+        operation="create_client",
+        panel_id=2,
+        traffic_gb=1,
+        expiry_days=1,
+    )
+    assert tx_default is not None
+    assert int(tx_default["amount"]) == -230_000
+
+    await db.close()
+    if db_path.exists():
+        db_path.unlink()

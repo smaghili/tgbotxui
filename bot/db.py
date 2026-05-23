@@ -601,6 +601,64 @@ class Database:
         rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
+    async def get_delegate_panel_pricing(self, *, telegram_user_id: int, panel_id: int) -> Dict[str, Any] | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json, created_at, updated_at
+            FROM delegate_panel_pricing
+            WHERE telegram_user_id=? AND panel_id=?
+            LIMIT 1;
+            """,
+            (telegram_user_id, panel_id),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_delegate_panel_pricing(self, *, telegram_user_id: int) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT dpp.telegram_user_id, dpp.panel_id, p.name AS panel_name, dpp.price_per_gb, dpp.price_per_day, dpp.allocated_pricing_tiers_json, dpp.created_at, dpp.updated_at
+            FROM delegate_panel_pricing AS dpp
+            LEFT JOIN panels AS p ON p.id = dpp.panel_id
+            WHERE dpp.telegram_user_id=?
+            ORDER BY dpp.panel_id ASC;
+            """,
+            (telegram_user_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def set_delegate_panel_pricing(
+        self,
+        *,
+        telegram_user_id: int,
+        panel_id: int,
+        price_per_gb: int,
+        price_per_day: int,
+        allocated_pricing_tiers_json: str = "[]",
+    ) -> Dict[str, Any]:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO delegate_panel_pricing (
+                telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(telegram_user_id, panel_id) DO UPDATE SET
+                price_per_gb=excluded.price_per_gb,
+                price_per_day=excluded.price_per_day,
+                allocated_pricing_tiers_json=excluded.allocated_pricing_tiers_json,
+                updated_at=CURRENT_TIMESTAMP;
+            """,
+            (telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json),
+        )
+        await self.conn.commit()
+        row = await self.get_delegate_panel_pricing(telegram_user_id=telegram_user_id, panel_id=panel_id)
+        if row is None:
+            raise ValueError("failed to save delegate panel pricing.")
+        return row
+
     async def list_recent_actor_audit_logs(
         self,
         *,
