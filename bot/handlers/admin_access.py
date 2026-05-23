@@ -434,7 +434,6 @@ def _delegated_detail_keyboard(
                     text=wallet_mode_label,
                     callback_data=f"dag:toggle_wallet_mode:{user_id}",
                 ),
-                InlineKeyboardButton(text=t("admin_delegated_panel_prices", lang), callback_data=f"dag:panel_prices:{user_id}:0"),
             ],
         ]
     )
@@ -528,6 +527,7 @@ async def _panel_pricing_render(
     settings: Settings,
     delegate_id: int,
     page: int,
+    mode: str = "pick",
 ) -> None:
     if callback.message is None:
         await callback.answer()
@@ -551,17 +551,17 @@ async def _panel_pricing_render(
         lines.append(f"- {panel_name}: {gb}/{day}")
         buttons.append(
             [
-                InlineKeyboardButton(text=panel_name[:24], callback_data=f"dag:panel_price:{delegate_id}:{panel_id}"),
-                InlineKeyboardButton(text=f"{gb}/{day}", callback_data=f"dag:panel_price:{delegate_id}:{panel_id}"),
+                InlineKeyboardButton(text=panel_name[:24], callback_data=f"dag:panel_price:{mode}:{delegate_id}:{panel_id}"),
+                InlineKeyboardButton(text=f"{gb}/{day}", callback_data=f"dag:panel_price:{mode}:{delegate_id}:{panel_id}"),
             ]
         )
     if not panel_ids:
         buttons.append([InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")])
     nav: list[InlineKeyboardButton] = []
     if start > 0:
-        nav.append(InlineKeyboardButton(text="◀", callback_data=f"dag:panel_prices:{delegate_id}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text="◀", callback_data=f"dag:panel_prices:{delegate_id}:{page - 1}:{mode}"))
     if start + page_size < len(panel_ids):
-        nav.append(InlineKeyboardButton(text="▶", callback_data=f"dag:panel_prices:{delegate_id}:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="▶", callback_data=f"dag:panel_prices:{delegate_id}:{page + 1}:{mode}"))
     if nav:
         buttons.append(nav)
     buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{delegate_id}")])
@@ -1086,10 +1086,14 @@ async def delegated_admin_panel_prices(callback: CallbackQuery, settings: Settin
         await callback.answer()
         return
     lang = await services.db.get_user_language(callback.from_user.id)
+    mode = "pick"
     try:
-        _, _, delegate_raw, page_raw = callback.data.split(":", 3)
+        parts = callback.data.split(":")
+        _, _, delegate_raw, page_raw = parts[:4]
         delegate_id = int(delegate_raw)
         page = int(page_raw)
+        if len(parts) >= 5:
+            mode = str(parts[4] or "pick")
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
@@ -1101,11 +1105,20 @@ async def delegated_admin_panel_prices(callback: CallbackQuery, settings: Settin
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    await _panel_pricing_render(callback, services=services, settings=settings, delegate_id=delegate_id, page=page)
+    await _panel_pricing_render(
+        callback,
+        services=services,
+        settings=settings,
+        delegate_id=delegate_id,
+        page=page,
+        mode=mode,
+    )
 
 
 @router.callback_query(F.data.startswith("dag:panel_price:"))
-async def delegated_admin_panel_price_fields(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+async def delegated_admin_panel_price_fields(
+    callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer
+) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.data is None or callback.message is None:
@@ -1113,7 +1126,7 @@ async def delegated_admin_panel_price_fields(callback: CallbackQuery, settings: 
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     try:
-        _, _, delegate_raw, panel_raw = callback.data.split(":", 3)
+        _, _, mode, delegate_raw, panel_raw = callback.data.split(":", 4)
         delegate_id = int(delegate_raw)
         panel_id = int(panel_raw)
     except (ValueError, IndexError):
@@ -1129,11 +1142,23 @@ async def delegated_admin_panel_price_fields(callback: CallbackQuery, settings: 
         return
     panel = await services.panel_service.get_panel(panel_id)
     panel_name = str((panel or {}).get("name") or panel_id)
+    if mode in {"gb", "day"}:
+        await state.update_data(
+            delegated_panel_price_field=mode,
+            delegated_profile_target_user_id=delegate_id,
+            delegated_panel_price_panel_id=panel_id,
+        )
+        await state.set_state(DelegatedAdminStates.waiting_panel_pricing_field)
+        prompt = t("admin_delegated_panel_price_enter_gb", lang) if mode == "gb" else t("admin_delegated_panel_price_enter_day", lang)
+        await callback.message.answer(prompt)
+        await callback.answer()
+        return
+
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=t("admin_delegated_panel_price_gb", lang), callback_data=f"dag:panel_field:gb:{delegate_id}:{panel_id}")],
             [InlineKeyboardButton(text=t("admin_delegated_panel_price_day", lang), callback_data=f"dag:panel_field:day:{delegate_id}:{panel_id}")],
-            [InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:panel_prices:{delegate_id}:0")],
+            [InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:panel_prices:{delegate_id}:0:pick")],
         ]
     )
     await callback.message.edit_text(
@@ -1358,6 +1383,19 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
         "price_gb": t("finance_enter_price_per_gb", lang),
         "price_day": t("finance_enter_price_per_day", lang),
     }
+    if field_name in {"price_gb", "price_day"}:
+        mode = "gb" if field_name == "price_gb" else "day"
+        if callback.message is not None:
+            await callback.message.edit_text(t("admin_delegated_panel_prices_title", lang))
+        await _panel_pricing_render(
+            callback,
+            services=services,
+            settings=settings,
+            delegate_id=target_user_id,
+            page=0,
+            mode=mode,
+        )
+        return
     prompt = prompts.get(field_name)
     if prompt is None:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
