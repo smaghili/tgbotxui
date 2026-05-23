@@ -1372,17 +1372,6 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    prompts = {
-        "username_prefix": t("admin_delegated_enter_prefix", lang),
-        "max_clients": t("admin_delegated_enter_max_users", lang),
-        "min_traffic_gb": t("admin_delegated_enter_min_traffic", lang),
-        "max_traffic_gb": t("admin_delegated_enter_max_traffic", lang),
-        "min_expiry_days": t("admin_delegated_enter_min_days", lang),
-        "max_expiry_days": t("admin_delegated_enter_max_days", lang),
-        "expires_at": t("admin_delegated_enter_expiry", lang),
-        "price_gb": t("finance_enter_price_per_gb", lang),
-        "price_day": t("finance_enter_price_per_day", lang),
-    }
     panel_scoped_modes = {
         "price_gb": "gb",
         "price_day": "day",
@@ -1396,8 +1385,6 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
     }
     mode = panel_scoped_modes.get(field_name)
     if mode is not None:
-        if callback.message is not None:
-            await callback.message.edit_text(t("admin_delegated_panel_prices_title", lang))
         await _panel_pricing_render(
             callback,
             services=services,
@@ -1407,124 +1394,7 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
             mode=mode,
         )
         return
-    prompt = prompts.get(field_name)
-    if prompt is None:
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    await state.update_data(
-        delegated_profile_field=field_name,
-        delegated_profile_target_user_id=target_user_id,
-    )
-    await state.set_state(DelegatedAdminStates.waiting_profile_value)
-    await callback.message.answer(prompt)
-    await callback.answer()
-
-
-@router.message(DelegatedAdminStates.waiting_profile_value)
-async def delegated_admin_profile_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
-    if await _reject_if_not_full_admin(message, settings, services):
-        return
-    lang = await services.db.get_user_language(message.from_user.id)
-    data = await state.get_data()
-    field_name = str(data.get("delegated_profile_field") or "")
-    target_user_id = int(data.get("delegated_profile_target_user_id") or 0)
-    raw = (message.text or "").strip()
-    if not field_name or target_user_id <= 0:
-        await state.clear()
-        await message.answer(t("admin_invalid_data", lang))
-        return
-    if not await _can_manage_delegated_target(
-        actor_user_id=message.from_user.id,
-        target_user_id=target_user_id,
-        settings=settings,
-        services=services,
-    ):
-        await state.clear()
-        await message.answer(t("no_admin_access", None))
-        return
-    await state.clear()
-    try:
-        if field_name == "username_prefix":
-            value = None if raw in {"", "-"} else raw
-            await services.db.update_delegated_admin_profile(
-                telegram_user_id=target_user_id,
-                username_prefix=value,
-            )
-        elif field_name == "expires_at":
-            days = int(raw)
-            if days < 0:
-                raise ValueError
-            expires_at = None if days == 0 else int(time.time()) + (days * 86400)
-            await services.db.update_delegated_admin_profile(
-                telegram_user_id=target_user_id,
-                expires_at=expires_at,
-            )
-        elif field_name in {"price_gb", "price_day"}:
-            amount, tiers_json = parse_price_per_gb_with_tiers(raw) if field_name == "price_gb" else (int(raw.replace(",", "")), None)
-            if amount < 0:
-                raise ValueError
-            pricing = await services.financial_service.get_pricing(target_user_id)
-            new_price_gb = amount if field_name == "price_gb" else int(pricing["price_per_gb"] or 0)
-            new_price_day = amount if field_name == "price_day" else int(pricing["price_per_day"] or 0)
-            if field_name == "price_gb" and new_price_gb != int(pricing.get("price_per_gb") or 0):
-                await state.update_data(
-                    delegated_profile_target_user_id=target_user_id,
-                    delegated_profile_new_price_gb=new_price_gb,
-                    delegated_profile_new_price_day=new_price_day,
-                    delegated_profile_charge_basis=str(pricing.get("charge_basis") or "allocated"),
-                    delegated_profile_currency=str(pricing.get("currency") or "تومان"),
-                    delegated_profile_old_price_gb=int(pricing.get("price_per_gb") or 0),
-                    delegated_profile_allocated_tiers_json=tiers_json,
-                )
-                await state.set_state(DelegatedAdminStates.waiting_price_history_choice)
-                await message.answer(
-                    t(
-                        "finance_pricing_history_confirm",
-                        lang,
-                        old_price_gb=_format_amount(int(pricing.get("price_per_gb") or 0)),
-                        new_price_gb=_format_amount(new_price_gb),
-                        currency=str(pricing.get("currency") or "تومان"),
-                    ),
-                    reply_markup=_pricing_history_choice_keyboard(lang),
-                )
-                return
-            await services.financial_service.set_pricing(
-                actor_user_id=message.from_user.id,
-                telegram_user_id=target_user_id,
-                price_per_gb=new_price_gb,
-                price_per_day=new_price_day,
-                charge_basis=str(pricing.get("charge_basis") or "allocated"),
-                allocated_pricing_tiers_json=(
-                    tiers_json
-                    if field_name == "price_gb" and tiers_json is not None
-                    else str(pricing.get("allocated_pricing_tiers_json") or "[]")
-                ),
-            )
-        elif field_name in {"min_traffic_gb", "max_traffic_gb"}:
-            number = parse_gb_amount(raw)
-            await services.db.update_delegated_admin_profile(
-                telegram_user_id=target_user_id,
-                **{field_name: number},
-            )
-        else:
-            number = int(raw)
-            if number < 0:
-                raise ValueError
-            await services.db.update_delegated_admin_profile(
-                telegram_user_id=target_user_id,
-                **{field_name: number},
-            )
-    except ValueError:
-        await message.answer(t("finance_invalid_amount", lang))
-        return
-    await message.answer(t("admin_delegated_profile_saved", lang))
-    await _render_delegated_detail(
-        message,
-        services=services,
-        settings=settings,
-        target_user_id=target_user_id,
-        lang=lang,
-    )
+    await callback.answer(t("admin_invalid_data", lang), show_alert=True)
 
 
 @router.message(DelegatedAdminStates.waiting_panel_pricing_field)
