@@ -605,7 +605,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json, created_at, updated_at
+            SELECT telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json, username_prefix, max_clients, min_traffic_gb, max_traffic_gb, min_expiry_days, max_expiry_days, expires_at, created_at, updated_at
             FROM delegate_panel_pricing
             WHERE telegram_user_id=? AND panel_id=?
             LIMIT 1;
@@ -619,7 +619,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT dpp.telegram_user_id, dpp.panel_id, p.name AS panel_name, dpp.price_per_gb, dpp.price_per_day, dpp.allocated_pricing_tiers_json, dpp.created_at, dpp.updated_at
+            SELECT dpp.telegram_user_id, dpp.panel_id, p.name AS panel_name, dpp.price_per_gb, dpp.price_per_day, dpp.allocated_pricing_tiers_json, dpp.username_prefix, dpp.max_clients, dpp.min_traffic_gb, dpp.max_traffic_gb, dpp.min_expiry_days, dpp.max_expiry_days, dpp.expires_at, dpp.created_at, dpp.updated_at
             FROM delegate_panel_pricing AS dpp
             LEFT JOIN panels AS p ON p.id = dpp.panel_id
             WHERE dpp.telegram_user_id=?
@@ -638,20 +638,47 @@ class Database:
         price_per_gb: int,
         price_per_day: int,
         allocated_pricing_tiers_json: str = "[]",
+        username_prefix: str | None = None,
+        max_clients: int | None = None,
+        min_traffic_gb: float | None = None,
+        max_traffic_gb: float | None = None,
+        min_expiry_days: int | None = None,
+        max_expiry_days: int | None = None,
+        expires_at: int | None = None,
     ) -> Dict[str, Any]:
         assert self.conn is not None
         await self.conn.execute(
             """
             INSERT INTO delegate_panel_pricing (
-                telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json, username_prefix, max_clients, min_traffic_gb, max_traffic_gb, min_expiry_days, max_expiry_days, expires_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(telegram_user_id, panel_id) DO UPDATE SET
                 price_per_gb=excluded.price_per_gb,
                 price_per_day=excluded.price_per_day,
                 allocated_pricing_tiers_json=excluded.allocated_pricing_tiers_json,
+                username_prefix=excluded.username_prefix,
+                max_clients=excluded.max_clients,
+                min_traffic_gb=excluded.min_traffic_gb,
+                max_traffic_gb=excluded.max_traffic_gb,
+                min_expiry_days=excluded.min_expiry_days,
+                max_expiry_days=excluded.max_expiry_days,
+                expires_at=excluded.expires_at,
                 updated_at=CURRENT_TIMESTAMP;
             """,
-            (telegram_user_id, panel_id, price_per_gb, price_per_day, allocated_pricing_tiers_json),
+            (
+                telegram_user_id,
+                panel_id,
+                price_per_gb,
+                price_per_day,
+                allocated_pricing_tiers_json,
+                username_prefix,
+                max_clients,
+                min_traffic_gb,
+                max_traffic_gb,
+                min_expiry_days,
+                max_expiry_days,
+                expires_at,
+            ),
         )
         await self.conn.commit()
         row = await self.get_delegate_panel_pricing(telegram_user_id=telegram_user_id, panel_id=panel_id)

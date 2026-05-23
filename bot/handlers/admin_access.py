@@ -1158,7 +1158,18 @@ async def delegated_admin_panel_price_fields(
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    if mode not in {"gb", "day"}:
+    allowed_modes = {
+        "gb",
+        "day",
+        "username_prefix",
+        "max_clients",
+        "min_traffic_gb",
+        "max_traffic_gb",
+        "min_expiry_days",
+        "max_expiry_days",
+        "expires_at",
+    }
+    if mode not in allowed_modes:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
     await state.update_data(
@@ -1167,7 +1178,18 @@ async def delegated_admin_panel_price_fields(
         delegated_panel_price_panel_id=panel_id,
     )
     await state.set_state(DelegatedAdminStates.waiting_panel_pricing_field)
-    prompt = t("admin_delegated_panel_price_enter_gb", lang) if mode == "gb" else t("admin_delegated_panel_price_enter_day", lang)
+    prompt_map = {
+        "gb": t("admin_delegated_panel_price_enter_gb", lang),
+        "day": t("admin_delegated_panel_price_enter_day", lang),
+        "username_prefix": t("admin_delegated_enter_prefix", lang),
+        "max_clients": t("admin_delegated_enter_max_users", lang),
+        "min_traffic_gb": t("admin_delegated_enter_min_traffic", lang),
+        "max_traffic_gb": t("admin_delegated_enter_max_traffic", lang),
+        "min_expiry_days": t("admin_delegated_enter_min_days", lang),
+        "max_expiry_days": t("admin_delegated_enter_max_days", lang),
+        "expires_at": t("admin_delegated_enter_expiry", lang),
+    }
+    prompt = prompt_map.get(mode, t("admin_invalid_data", lang))
     await callback.message.answer(prompt)
     await callback.answer()
 
@@ -1361,8 +1383,19 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
         "price_gb": t("finance_enter_price_per_gb", lang),
         "price_day": t("finance_enter_price_per_day", lang),
     }
-    if field_name in {"price_gb", "price_day"}:
-        mode = "gb" if field_name == "price_gb" else "day"
+    panel_scoped_modes = {
+        "price_gb": "gb",
+        "price_day": "day",
+        "username_prefix": "username_prefix",
+        "max_clients": "max_clients",
+        "min_traffic_gb": "min_traffic_gb",
+        "max_traffic_gb": "max_traffic_gb",
+        "min_expiry_days": "min_expiry_days",
+        "max_expiry_days": "max_expiry_days",
+        "expires_at": "expires_at",
+    }
+    mode = panel_scoped_modes.get(field_name)
+    if mode is not None:
         if callback.message is not None:
             await callback.message.edit_text(t("admin_delegated_panel_prices_title", lang))
         await _panel_pricing_render(
@@ -1504,7 +1537,17 @@ async def delegated_admin_panel_pricing_value(message: Message, state: FSMContex
     target_user_id = int(data.get("delegated_profile_target_user_id") or 0)
     panel_id = int(data.get("delegated_panel_price_panel_id") or 0)
     raw = (message.text or "").strip()
-    if field_kind not in {"gb", "day"} or target_user_id <= 0 or panel_id <= 0:
+    if field_kind not in {
+        "gb",
+        "day",
+        "username_prefix",
+        "max_clients",
+        "min_traffic_gb",
+        "max_traffic_gb",
+        "min_expiry_days",
+        "max_expiry_days",
+        "expires_at",
+    } or target_user_id <= 0 or panel_id <= 0:
         await state.clear()
         await message.answer(t("admin_invalid_data", lang))
         return
@@ -1531,7 +1574,7 @@ async def delegated_admin_panel_pricing_value(message: Message, state: FSMContex
                 price_per_day=int(current.get("price_per_day") or 0),
                 allocated_pricing_tiers_json=tiers_json or "[]",
             )
-        else:
+        elif field_kind == "day":
             amount = int(raw.replace(",", ""))
             if amount < 0:
                 raise ValueError
@@ -1541,6 +1584,74 @@ async def delegated_admin_panel_pricing_value(message: Message, state: FSMContex
                 price_per_gb=int(current.get("price_per_gb") or 0),
                 price_per_day=amount,
                 allocated_pricing_tiers_json=str(current.get("allocated_pricing_tiers_json") or "[]"),
+            )
+        else:
+            profile = await services.db.get_delegated_admin_profile(target_user_id)
+            pricing = await services.financial_service.get_pricing(target_user_id)
+            payload: dict[str, object] = {
+                "telegram_user_id": target_user_id,
+                "panel_id": panel_id,
+                "price_per_gb": int(current.get("price_per_gb") or pricing.get("price_per_gb") or 0),
+                "price_per_day": int(current.get("price_per_day") or pricing.get("price_per_day") or 0),
+                "allocated_pricing_tiers_json": str(
+                    current.get("allocated_pricing_tiers_json") or pricing.get("allocated_pricing_tiers_json") or "[]"
+                ),
+                "username_prefix": current.get("username_prefix"),
+                "max_clients": current.get("max_clients"),
+                "min_traffic_gb": current.get("min_traffic_gb"),
+                "max_traffic_gb": current.get("max_traffic_gb"),
+                "min_expiry_days": current.get("min_expiry_days"),
+                "max_expiry_days": current.get("max_expiry_days"),
+                "expires_at": current.get("expires_at"),
+            }
+            if field_kind == "username_prefix":
+                payload["username_prefix"] = None if raw in {"", "-"} else raw
+            elif field_kind == "max_clients":
+                value = int(raw)
+                if value < 0:
+                    raise ValueError
+                payload["max_clients"] = value
+            elif field_kind in {"min_traffic_gb", "max_traffic_gb"}:
+                payload[field_kind] = parse_gb_amount(raw)
+            elif field_kind in {"min_expiry_days", "max_expiry_days"}:
+                value = int(raw)
+                if value < 0:
+                    raise ValueError
+                payload[field_kind] = value
+            elif field_kind == "expires_at":
+                days = int(raw)
+                if days < 0:
+                    raise ValueError
+                payload["expires_at"] = None if days == 0 else int(time.time()) + (days * 86400)
+
+            if payload["username_prefix"] is None:
+                payload["username_prefix"] = profile.get("username_prefix")
+            if payload["max_clients"] is None:
+                payload["max_clients"] = int(profile.get("max_clients") or 0)
+            if payload["min_traffic_gb"] is None:
+                payload["min_traffic_gb"] = float(profile.get("min_traffic_gb") or 0)
+            if payload["max_traffic_gb"] is None:
+                payload["max_traffic_gb"] = float(profile.get("max_traffic_gb") or 0)
+            if payload["min_expiry_days"] is None:
+                payload["min_expiry_days"] = int(profile.get("min_expiry_days") or 1)
+            if payload["max_expiry_days"] is None:
+                payload["max_expiry_days"] = int(profile.get("max_expiry_days") or 0)
+            if payload["expires_at"] is None:
+                payload["expires_at"] = int(profile.get("expires_at") or 0) or None
+
+            await services.db.set_delegate_panel_pricing(
+                telegram_user_id=int(payload["telegram_user_id"]),
+                panel_id=int(payload["panel_id"]),
+                price_per_gb=int(payload["price_per_gb"]),
+                price_per_day=int(payload["price_per_day"]),
+                allocated_pricing_tiers_json=str(payload["allocated_pricing_tiers_json"]),
+                username_prefix=(str(payload["username_prefix"]) if payload["username_prefix"] is not None else None),
+                max_clients=int(payload["max_clients"]) if payload["max_clients"] is not None else None,
+                min_traffic_gb=float(payload["min_traffic_gb"]) if payload["min_traffic_gb"] is not None else None,
+                max_traffic_gb=float(payload["max_traffic_gb"]) if payload["max_traffic_gb"] is not None else None,
+                min_expiry_days=int(payload["min_expiry_days"]) if payload["min_expiry_days"] is not None else None,
+                max_expiry_days=int(payload["max_expiry_days"]) if payload["max_expiry_days"] is not None else None,
+                expires_at=int(payload["expires_at"]) if payload["expires_at"] is not None else None,
             )
     except ValueError:
         await message.answer(t("finance_invalid_amount", lang))
