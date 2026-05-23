@@ -102,7 +102,7 @@ def _edit_panel_select_keyboard(panels: list[dict], lang: str | None = None) -> 
 
 
 def _edit_search_results_keyboard(
-    panel_id: int,
+    scope: str,
     clients: list[dict],
     *,
     query: str,
@@ -121,7 +121,7 @@ def _edit_search_results_keyboard(
         page_buttons.append(
             inline_button(
                 _truncate_button_text(f"{prefix} {email}"),
-                f"pecs:{panel_id}:{inbound_id}:{client_uuid}:{page}:{query}",
+                f"pecs:{int(client.get('panel_id') or 0)}:{inbound_id}:{client_uuid}:{scope}:{page}:{query}",
             )
         )
     rows = chunk_buttons(page_buttons, columns=2)
@@ -129,15 +129,15 @@ def _edit_search_results_keyboard(
         nav_row: list[InlineKeyboardButton] = []
         if page > 1:
             nav_row.append(
-                inline_button(t("admin_page_prev", lang), f"pecp:{panel_id}:{page - 1}:{query}")
+                inline_button(t("admin_page_prev", lang), f"pecp:{scope}:{page - 1}:{query}")
             )
         nav_row.append(inline_button(f"{page}/{total_pages}", NOOP))
         if page < total_pages:
             nav_row.append(
-                inline_button(t("admin_page_next", lang), f"pecp:{panel_id}:{page + 1}:{query}")
+                inline_button(t("admin_page_next", lang), f"pecp:{scope}:{page + 1}:{query}")
             )
         rows.append(nav_row)
-    rows.append([inline_button(t("admin_refresh_list", lang), f"pecsr:{panel_id}:{query}")])
+    rows.append([inline_button(t("admin_refresh_list", lang), f"pecsr:{scope}:{query}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -333,18 +333,6 @@ async def _resolve_panel_for_edit_search(
     services: ServiceContainer,
     lang: str | None,
 ) -> int | None:
-    try:
-        panel_id = await services.panel_service.resolve_panel_id(None)
-        allowed = await _visible_inbound_ids_for_actor(
-            actor_user_id=actor_user_id,
-            settings=settings,
-            services=services,
-            panel_id=panel_id,
-        )
-        if allowed is None or allowed:
-            return panel_id
-    except ValueError:
-        pass
     panels = await _visible_panels_for_actor(actor_user_id=actor_user_id, settings=settings, services=services)
     if not panels:
         await answer_with_admin_menu(
@@ -355,10 +343,18 @@ async def _resolve_panel_for_edit_search(
             lang=lang,
         )
         return None
-    await state.update_data(edit_search_query=query)
-    await state.set_state(ProvisioningStates.waiting_edit_search_panel)
-    await message.answer(t("admin_edit_search_pick_panel", lang), reply_markup=_edit_panel_select_keyboard(panels, lang))
-    return None
+    if len(panels) == 1:
+        panel_id = int(panels[0]["id"])
+        allowed = await _visible_inbound_ids_for_actor(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            services=services,
+            panel_id=panel_id,
+        )
+        if allowed is None or allowed:
+            return panel_id
+        return None
+    return 0
 
 
 async def _show_edit_search_results(
@@ -372,27 +368,53 @@ async def _show_edit_search_results(
     lang: str | None,
     page: int = 1,
 ) -> None:
-    panel = await services.panel_service.get_panel(panel_id)
-    if panel is None:
-        target = message.message if isinstance(message, CallbackQuery) else message
-        if target is not None:
-            await target.answer(t("admin_panel_not_found", lang))
-        return
     owner_filter = await services.access_service.owner_filter_for_user(user_id=actor_user_id, settings=settings)
-    allowed_inbound_ids = await _visible_inbound_ids_for_actor(
-        actor_user_id=actor_user_id,
-        settings=settings,
-        services=services,
-        panel_id=panel_id,
-    )
-    clients = await services.panel_service.search_clients_by_email(
-        panel_id,
-        query,
-        owner_admin_user_id=owner_filter,
-        allowed_inbound_ids=allowed_inbound_ids,
-    )
-    target_text = t("admin_edit_search_result_header", lang, query=query, panel=panel["name"], count=len(clients))
-    markup = _edit_search_results_keyboard(panel_id, clients, query=query, lang=lang, page=page)
+    clients: list[dict] = []
+    scope = str(panel_id)
+    panel_label = "-"
+    if panel_id == 0:
+        scope = "all"
+        panel_label = "همه پنل‌ها"
+        panels = await _visible_panels_for_actor(actor_user_id=actor_user_id, settings=settings, services=services)
+        for panel in panels:
+            current_panel_id = int(panel["id"])
+            allowed_inbound_ids = await _visible_inbound_ids_for_actor(
+                actor_user_id=actor_user_id,
+                settings=settings,
+                services=services,
+                panel_id=current_panel_id,
+            )
+            panel_clients = await services.panel_service.search_clients_by_email(
+                current_panel_id,
+                query,
+                owner_admin_user_id=owner_filter,
+                allowed_inbound_ids=allowed_inbound_ids,
+            )
+            for client in panel_clients:
+                clients.append({**client, "panel_id": current_panel_id})
+    else:
+        panel = await services.panel_service.get_panel(panel_id)
+        if panel is None:
+            target = message.message if isinstance(message, CallbackQuery) else message
+            if target is not None:
+                await target.answer(t("admin_panel_not_found", lang))
+            return
+        panel_label = panel["name"]
+        allowed_inbound_ids = await _visible_inbound_ids_for_actor(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            services=services,
+            panel_id=panel_id,
+        )
+        clients = await services.panel_service.search_clients_by_email(
+            panel_id,
+            query,
+            owner_admin_user_id=owner_filter,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
+        clients = [{**client, "panel_id": panel_id} for client in clients]
+    target_text = t("admin_edit_search_result_header", lang, query=query, panel=panel_label, count=len(clients))
+    markup = _edit_search_results_keyboard(scope, clients, query=query, lang=lang, page=page)
     if not clients:
         target_text = t("admin_search_empty", lang, query=query, panel=panel["name"])
         markup = None
@@ -445,10 +467,23 @@ async def start_create_user(
         await message.answer(t("admin_create_user_no_access", lang))
         return
     grouped_rows = _group_inbound_rows_by_panel(rows)
-    default_panel = await services.panel_service.get_default_panel()
-    default_panel_id = int(default_panel["id"]) if default_panel is not None else None
-    if default_panel_id is not None and len(grouped_rows) == 1 and default_panel_id in grouped_rows:
-        rows = grouped_rows[default_panel_id]
+    if len(grouped_rows) > 1:
+        panel_map = {int(panel["id"]): panel for panel in await services.panel_service.list_panels()}
+        candidate_panel_ids = sorted(grouped_rows.keys())
+        panels = [panel_map[panel_id] for panel_id in candidate_panel_ids if panel_id in panel_map]
+        await state.set_state(ProvisioningStates.waiting_create_panel_select)
+        await message.answer(
+            t("admin_create_user_pick_panel", lang),
+            reply_markup=panel_select_keyboard(panels, "pcu:pick_panel"),
+        )
+        return
+    if len(grouped_rows) == 1:
+        rows = next(iter(grouped_rows.values()))
+    else:
+        default_panel = await services.panel_service.get_default_panel()
+        default_panel_id = int(default_panel["id"]) if default_panel is not None else None
+        if default_panel_id is not None and default_panel_id in grouped_rows:
+            rows = grouped_rows[default_panel_id]
     if len(rows) == 1:
         selected = rows[0]
         await state.update_data(create_panel_id=selected.panel_id, create_inbound_id=selected.inbound_id)
@@ -459,6 +494,34 @@ async def start_create_user(
         t("admin_create_user_pick_inbound", lang),
         reply_markup=_inbound_access_keyboard(rows, "pcu:pick", include_panel_name=len(grouped_rows) > 1),
     )
+
+
+@router.callback_query(ProvisioningStates.waiting_create_panel_select, F.data.startswith("pcu:pick_panel:"))
+async def pick_create_user_panel(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    try:
+        panel_id = int(callback.data.split(":", 2)[2])
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    rows = await services.admin_provisioning_service.list_accessible_inbounds_for_actor(
+        actor_user_id=callback.from_user.id,
+        settings=settings,
+    )
+    rows = [row for row in rows if int(row.panel_id) == panel_id]
+    if not rows:
+        await callback.answer(t("admin_create_user_no_access", lang), show_alert=True)
+        return
+    await callback.message.edit_text(
+        t("admin_create_user_pick_inbound", lang),
+        reply_markup=_inbound_access_keyboard(rows, "pcu:pick", include_panel_name=False),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("pcu:pick:"))
@@ -766,8 +829,8 @@ async def paginate_edit_search_results(
         await callback.answer()
         return
     try:
-        _, panel_raw, page_raw, query = callback.data.split(":", 3)
-        panel_id = int(panel_raw)
+        _, scope, page_raw, query = callback.data.split(":", 3)
+        panel_id = 0 if scope == "all" else int(scope)
         page = int(page_raw)
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
@@ -802,8 +865,8 @@ async def refresh_edit_search_results(
         await callback.answer()
         return
     try:
-        _, panel_raw, query = callback.data.split(":", 2)
-        panel_id = int(panel_raw)
+        _, scope, query = callback.data.split(":", 2)
+        panel_id = 0 if scope == "all" else int(scope)
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
@@ -837,7 +900,7 @@ async def select_edit_search_result(
         await callback.answer()
         return
     try:
-        _, panel_raw, inbound_raw, client_uuid, page_raw, query = callback.data.split(":", 5)
+        _, panel_raw, inbound_raw, client_uuid, scope, page_raw, query = callback.data.split(":", 6)
         panel_id = int(panel_raw)
         inbound_id = int(inbound_raw)
         page = int(page_raw)
@@ -863,7 +926,7 @@ async def select_edit_search_result(
             settings=settings,
             services=services,
             lang=lang,
-            back_callback=f"pecp:{panel_id}:{page}:{query}",
+            back_callback=f"pecp:{scope}:{page}:{query}",
             back_text=t("admin_back", lang),
         )
     except Exception as exc:

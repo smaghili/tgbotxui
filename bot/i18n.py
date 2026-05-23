@@ -845,6 +845,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "برای ساخت کاربر، اینباند مقصد را انتخاب کنید:",
         "en": "Select target inbound to create client:",
     },
+    "admin_create_user_pick_panel": {
+        "fa": "برای ساخت کاربر، پنل را انتخاب کنید:",
+        "en": "Select a panel to create client:",
+    },
     "admin_create_user_no_access": {
         "fa": "هیچ اینباند مجازی برای شما ثبت نشده است.",
         "en": "No allowed inbound is registered for you.",

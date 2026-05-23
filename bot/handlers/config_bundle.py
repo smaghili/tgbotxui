@@ -42,6 +42,10 @@ async def send_config_bundle_card(
         sub_url=escape(sub_url),
     )
     await message.answer_photo(file, caption=caption, parse_mode="HTML")
+    # Send links in monospace code format to make copy action reliable across Telegram clients.
+    await message.answer(f"<code>{escape(vless_uri)}</code>", parse_mode="HTML")
+    if sub_url.strip():
+        await message.answer(f"<code>{escape(sub_url)}</code>", parse_mode="HTML")
 
 
 def existing_bundle_labels(

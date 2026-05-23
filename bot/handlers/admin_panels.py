@@ -464,8 +464,13 @@ async def panel_actions(callback: CallbackQuery, settings: Settings, services: S
             [InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data="panel_actions_back")],
         ]
     )
-    connection_label = "وضعیت اتصال" if (lang or "fa").startswith("fa") else "Connection status"
-    await callback.message.edit_text(f"{panel['name']}\n{connection_label}: {status}", reply_markup=kb)
+    is_fa = (lang or "fa").startswith("fa")
+    connection_label = "وضعیت اتصال" if is_fa else "Connection status"
+    panel_id_label = "شناسه پنل" if is_fa else "Panel ID"
+    await callback.message.edit_text(
+        f"{panel['name']}\n{panel_id_label}: {panel_id}\n{connection_label}: {status}",
+        reply_markup=kb,
+    )
     await callback.answer()
 
 

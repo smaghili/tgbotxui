@@ -64,6 +64,7 @@ class OutboundGrantStates(StatesGroup):
 
 
 class ProvisioningStates(StatesGroup):
+    waiting_create_panel_select = State()
     waiting_create_email = State()
     waiting_create_traffic_gb = State()
     waiting_create_expiry_days = State()
