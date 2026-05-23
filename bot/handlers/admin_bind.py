@@ -14,6 +14,7 @@ from bot.states import BindServiceStates
 
 from .admin_shared import (
     answer_with_admin_menu,
+    admin_keyboard_for_user,
     bind_panel_select_keyboard,
     bind_usage_text,
     parse_bind_command_args,
@@ -110,7 +111,7 @@ async def bind_get_email(message: Message, state: FSMContext, services: ServiceC
 
 
 @router.message(BindServiceStates.waiting_service_name)
-async def bind_finalize(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+async def bind_finalize(message: Message, state: FSMContext, services: ServiceContainer) -> None:
     lang = await services.db.get_user_language(message.from_user.id)
     data = await state.get_data()
     await state.clear()

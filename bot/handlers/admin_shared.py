@@ -296,8 +296,7 @@ def panels_glass_keyboard(panels: list[dict], lang: str | None = None) -> Inline
         rows.append(
             [
                 inline_button(_panel_button_text(p), f"panel_default_toggle:{p['id']}"),
-                inline_button("🔑", f"panel_access_ask:{p['id']}"),
-                inline_button("🗑️", f"panel_delete_ask:{p['id']}"),
+                inline_button("⚙️", f"panel_actions:{p['id']}"),
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -442,7 +441,8 @@ def client_list_keyboard(
         else:
             text = _truncate_button_text(f"⚫ {email}")
         detail_prefix = "uodl" if mode == "ds" else "uolr" if mode == "lr" else "uol"
-        page_buttons.append(inline_button(text, f"{detail_prefix}:{panel_id}:{inbound_id}:{uuid}"))
+        target_panel_id = int(client.get("panel_id") or panel_id)
+        page_buttons.append(inline_button(text, f"{detail_prefix}:{target_panel_id}:{inbound_id}:{uuid}"))
     rows = chunk_buttons(page_buttons, columns=2)
     nav_row = _pagination_nav_row(
         page=page,
@@ -501,19 +501,6 @@ def edit_config_actions_keyboard(
     if back_callback:
         rows.append([inline_button(back_text or t("admin_back", lang), back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def edit_config_reset_traffic_confirm_keyboard(
-    panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None
-) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                inline_button(t("btn_yes", lang), f"pec:traffic_reset_do:{panel_id}:{inbound_id}:{client_uuid}"),
-                inline_button(t("admin_cancel", lang), f"pec:traffic_reset_cancel:{panel_id}:{inbound_id}:{client_uuid}"),
-            ],
-        ]
-    )
 
 
 def edit_config_location_outbound_keyboard(
@@ -906,13 +893,7 @@ def format_datetime(epoch_seconds: int | None, tz_name: str, lang: str | None = 
 
 def format_client_detail(detail: dict, tz_name: str, lang: str | None = None) -> str:
     enabled_text = t("admin_yes", lang) if detail.get("enabled") else t("admin_no", lang)
-    status_text = t("admin_enabled", lang) if detail.get("enabled") else t("admin_disabled", lang)
     online_text = t("admin_online", lang) if detail.get("online") else t("admin_offline", lang)
-    if detail.get("online"):
-        last_online_text = "اکنون" if lang != "en" else "Now"
-    else:
-        last_online_raw = detail.get("last_online")
-        last_online_text = to_jalali_datetime(int(last_online_raw), tz_name) if last_online_raw else "-"
     expiry = detail.get("expiry")
     expiry_line = format_datetime(expiry, tz_name, lang)
     if expiry:
@@ -922,17 +903,13 @@ def format_client_detail(detail: dict, tz_name: str, lang: str | None = None) ->
     used = human_bytes(int(detail.get("used") or 0), lang)
     total_raw = int(detail.get("total") or 0)
     total_text = t("admin_unlimited_reset_value", lang) if total_raw <= 0 else human_bytes(total_raw, lang)
-    tg_id = str(detail.get("tg_id") or "").strip() or "-"
     refreshed_at = now_jalali_datetime(tz_name)
     return t(
         "admin_detail",
         lang,
         email=detail.get("email"),
-        tg_id=tg_id,
         enabled=enabled_text,
-        status=status_text,
         online=online_text,
-        last_online=last_online_text,
         expiry=expiry_line,
         up=up,
         down=down,
@@ -1203,6 +1180,56 @@ async def show_online_clients_for_panel_callback(
     await callback.message.edit_text(
         t("admin_online_header", None, name=panel["name"], count=len(clients)),
         reply_markup=online_clients_keyboard(panel_id, clients),
+    )
+
+
+async def load_online_clients_for_actor(
+    services: ServiceContainer,
+    *,
+    owner_admin_user_id: int | None = None,
+    allowed_panel_ids: set[int] | None = None,
+) -> list[dict]:
+    panels = await services.panel_service.list_panels()
+    if allowed_panel_ids is not None:
+        panels = [panel for panel in panels if int(panel["id"]) in allowed_panel_ids]
+    collected: list[dict] = []
+    for panel in panels:
+        panel_id = int(panel["id"])
+        try:
+            panel_clients = await services.panel_service.list_online_clients(
+                panel_id,
+                owner_admin_user_id=owner_admin_user_id,
+            )
+        except Exception:
+            continue
+        collected.extend({**client, "panel_id": panel_id} for client in panel_clients)
+    collected.sort(key=lambda item: (int(item.get("panel_id") or 0), item["email"].lower(), int(item.get("inbound_id") or 0), item["uuid"]))
+    return collected
+
+
+async def show_online_clients_for_actor_message(
+    message: Message,
+    services: ServiceContainer,
+    settings: Settings,
+    *,
+    owner_admin_user_id: int | None = None,
+    allowed_panel_ids: set[int] | None = None,
+) -> None:
+    await message.answer(t("admin_fetching_online", None))
+    clients = await load_online_clients_for_actor(
+        services,
+        owner_admin_user_id=owner_admin_user_id,
+        allowed_panel_ids=allowed_panel_ids,
+    )
+    if not clients:
+        await message.answer(
+            t("admin_no_online", None, name=t("admin_none", None)),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+        )
+        return
+    await message.answer(
+        t("admin_online_header", None, name="همه پنل‌ها", count=len(clients)),
+        reply_markup=online_clients_keyboard(0, clients),
     )
 
 

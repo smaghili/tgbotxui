@@ -8,6 +8,7 @@ from bot.services.container import ServiceContainer
 from .admin_shared import (
     action_panel_select_keyboard,
     answer_with_admin_menu,
+    client_list_keyboard,
     ensure_client_access,
     inbound_display_name,
     panel_bulk_actions_keyboard,
