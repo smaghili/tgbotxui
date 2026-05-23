@@ -41,6 +41,8 @@ class AdminPanelService:
         username: str,
         password: str,
         two_factor_code: str | None,
+        api_version: str = "legacy",
+        api_token: str | None = None,
     ) -> AddPanelResult:
         try:
             panel = await self.panel_service.add_panel(
@@ -49,6 +51,8 @@ class AdminPanelService:
                 username=username,
                 password=password,
                 two_factor_code=two_factor_code,
+                api_version=api_version,
+                api_token=api_token,
                 created_by=actor_user_id,
             )
         except XUIAuthError:

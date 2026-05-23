@@ -3,7 +3,9 @@ from aiogram.fsm.state import State, StatesGroup
 
 class AddPanelStates(StatesGroup):
     waiting_name = State()
+    waiting_api_version = State()
     waiting_login_url = State()
+    waiting_api_token = State()
     waiting_username = State()
     waiting_password = State()
     waiting_two_factor_choice = State()

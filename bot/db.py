@@ -1002,14 +1002,17 @@ class Database:
         username_enc: str,
         password_enc: str,
         two_factor_enc: str | None,
+        api_version: str,
+        api_token_enc: str | None,
         created_by: int,
     ) -> int:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
             INSERT INTO panels (
-                name, base_url, web_base_path, login_path, username_enc, password_enc, two_factor_enc, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                name, base_url, web_base_path, login_path, username_enc, password_enc,
+                two_factor_enc, api_version, api_token_enc, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 name,
@@ -1019,6 +1022,8 @@ class Database:
                 username_enc,
                 password_enc,
                 two_factor_enc,
+                api_version,
+                api_token_enc,
                 created_by,
             ),
         )
@@ -1035,7 +1040,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT id, name, base_url, web_base_path, login_path, created_by, is_default, last_login_ok, last_error, updated_at
+            SELECT id, name, base_url, web_base_path, login_path, api_version, created_by, is_default, last_login_ok, last_error, updated_at
             FROM panels ORDER BY id DESC;
             """
         )
@@ -1046,7 +1051,7 @@ class Database:
         assert self.conn is not None
         cur = await self.conn.execute(
             """
-            SELECT id, name, base_url, web_base_path, login_path, created_by, is_default, last_login_ok, last_error, updated_at
+            SELECT id, name, base_url, web_base_path, login_path, api_version, created_by, is_default, last_login_ok, last_error, updated_at
             FROM panels
             WHERE is_default=1
             LIMIT 1;

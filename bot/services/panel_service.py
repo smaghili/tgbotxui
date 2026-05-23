@@ -49,6 +49,8 @@ class PanelService:
             username=self.crypto.decrypt(panel["username_enc"]) or "",
             password=self.crypto.decrypt(panel["password_enc"]) or "",
             two_factor=self.crypto.decrypt(panel["two_factor_enc"]),
+            api_version=str(panel.get("api_version") or "legacy"),
+            api_token=self.crypto.decrypt(panel.get("api_token_enc")),
         )
 
     async def add_panel(
@@ -60,8 +62,11 @@ class PanelService:
         password: str,
         two_factor_code: str | None,
         created_by: int,
+        api_version: str = "legacy",
+        api_token: str | None = None,
     ) -> Dict[str, Any]:
         base_url, web_base_path, login_path = parse_login_url(login_url)
+        normalized_api_version = "v3" if api_version == "v3" else "legacy"
         conn = PanelConnection(
             base_url=base_url,
             web_base_path=web_base_path,
@@ -69,8 +74,15 @@ class PanelService:
             username=username,
             password=password,
             two_factor=two_factor_code or None,
+            api_version=normalized_api_version,
+            api_token=api_token,
         )
-        cookies = await self.xui.login(conn)
+        if normalized_api_version == "v3":
+            raw, cookies = await self.xui.get_inbounds_list(conn, None)
+            if not isinstance(raw, dict):
+                raise XUIError("invalid response from 3x-ui v3 API.")
+        else:
+            cookies = await self.xui.login(conn)
         panel_id = await self.db.add_panel(
             name=name.strip(),
             base_url=base_url,
@@ -79,9 +91,12 @@ class PanelService:
             username_enc=self.crypto.encrypt(username) or "",
             password_enc=self.crypto.encrypt(password) or "",
             two_factor_enc=self.crypto.encrypt(two_factor_code),
+            api_version=normalized_api_version,
+            api_token_enc=self.crypto.encrypt(api_token),
             created_by=created_by,
         )
-        await self.db.save_panel_session(panel_id, cookies)
+        if cookies:
+            await self.db.save_panel_session(panel_id, cookies)
         await self.db.set_panel_login_status(panel_id, ok=True, last_error=None)
         panel = await self.db.get_panel(panel_id)
         if not panel:
@@ -129,6 +144,8 @@ class PanelService:
         try:
             body, response_cookies = await request_fn(conn, cookies)
         except XUIAuthError:
+            if conn.uses_bearer_token:
+                raise
             cookies = await self.xui.login(conn)
             await self.db.save_panel_session(panel_id, cookies)
             body, response_cookies = await request_fn(conn, cookies)
@@ -150,8 +167,11 @@ class PanelService:
     async def reconnect_panel(self, panel_id: int) -> None:
         conn = await self._build_conn(panel_id)
         try:
-            cookies = await self.xui.login(conn)
-            await self.db.save_panel_session(panel_id, cookies)
+            if conn.uses_bearer_token:
+                await self.xui.get_inbounds_list(conn, None)
+            else:
+                cookies = await self.xui.login(conn)
+                await self.db.save_panel_session(panel_id, cookies)
             await self.db.set_panel_login_status(panel_id, ok=True, last_error=None)
         except XUIError as exc:
             await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
@@ -1552,6 +1572,21 @@ class PanelService:
         target_inbound, target_client = await self._find_client_on_panel(panel_id, inbound_id, client_email)
         if target_inbound is None or target_client is None:
             raise ValueError("client not found on inbound.")
+        panel = await self.db.get_panel(panel_id)
+        if str((panel or {}).get("api_version") or "legacy") == "v3":
+            target_inbound_id = int(target_inbound.get("id") or 0)
+            raw, _ = await self._with_auth_request(
+                panel_id,
+                lambda conn, cookies: self.xui.get_client_links(
+                    conn,
+                    cookies,
+                    inbound_id=target_inbound_id,
+                    email=client_email,
+                ),
+            )
+            obj = raw.get("obj") if isinstance(raw, dict) else None
+            if isinstance(obj, list) and obj:
+                return "\n".join(str(item) for item in obj if str(item).strip())
         return await self._build_client_vless_uri(panel_id, target_inbound, target_client, client_email)
 
     async def _build_client_subscription_url(self, panel_id: int, target_client: Dict[str, Any]) -> str:

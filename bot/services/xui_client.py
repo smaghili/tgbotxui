@@ -39,6 +39,12 @@ class PanelConnection:
     username: str
     password: str
     two_factor: str | None
+    api_version: str = "legacy"
+    api_token: str | None = None
+
+    @property
+    def uses_bearer_token(self) -> bool:
+        return self.api_version == "v3" and bool((self.api_token or "").strip())
 
 
 def parse_login_url(raw_login_url: str) -> tuple[str, str, str]:
@@ -109,6 +115,8 @@ class XUIClient:
         return XUIClient._api_path(web_base_path, endpoint)
 
     async def login(self, conn: PanelConnection) -> Dict[str, str]:
+        if conn.uses_bearer_token:
+            return {}
         payload = {"username": conn.username, "password": conn.password}
         if conn.two_factor:
             payload["twoFactorCode"] = conn.two_factor
@@ -173,6 +181,9 @@ class XUIClient:
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
         url = f"{conn.base_url}{self._url_for_endpoint(conn.web_base_path, endpoint, under_panel=under_panel)}"
         headers: Dict[str, str] = {}
+        if conn.uses_bearer_token:
+            headers["Authorization"] = f"Bearer {conn.api_token.strip()}"
+            headers["Accept"] = "application/json"
         cookie_header = self._cookie_header(cookies)
         if cookie_header:
             headers["Cookie"] = cookie_header
@@ -241,6 +252,9 @@ class XUIClient:
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
         url = f"{conn.base_url}{self._url_for_endpoint(conn.web_base_path, endpoint, under_panel=under_panel)}"
         headers: Dict[str, str] = {}
+        if conn.uses_bearer_token:
+            headers["Authorization"] = f"Bearer {conn.api_token.strip()}"
+            headers["Accept"] = "application/json"
         cookie_header = self._cookie_header(cookies)
         if cookie_header:
             headers["Cookie"] = cookie_header
@@ -302,6 +316,14 @@ class XUIClient:
     async def get_xray_setting(
         self, conn: PanelConnection, cookies: Dict[str, str] | None
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        if conn.api_version == "v3":
+            return await self.request(
+                conn=conn,
+                method="GET",
+                endpoint="/server/getConfigJson",
+                cookies=cookies,
+                payload=None,
+            )
         for under_panel in (True, False):
             try:
                 return await self.request(
@@ -434,6 +456,18 @@ class XUIClient:
         self, conn: PanelConnection, cookies: Dict[str, str] | None, client_uuid: str
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
         endpoint = f"/inbounds/getClientTrafficsById/{quote(client_uuid, safe='')}"
+        return await self.request(
+            conn=conn,
+            method="GET",
+            endpoint=endpoint,
+            cookies=cookies,
+            payload=None,
+        )
+
+    async def get_client_links(
+        self, conn: PanelConnection, cookies: Dict[str, str] | None, *, inbound_id: int, email: str
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        endpoint = f"/inbounds/getClientLinks/{inbound_id}/{quote(email, safe='')}"
         return await self.request(
             conn=conn,
             method="GET",

@@ -76,6 +76,15 @@ def _panel_access_admins_keyboard(panel_id: int, admins: list[dict], lang: str |
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _panel_api_version_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t("panel_add_api_v3", lang), callback_data="panel_api_version:v3")],
+            [InlineKeyboardButton(text=t("panel_add_api_legacy", lang), callback_data="panel_api_version:legacy")],
+        ]
+    )
+
+
 async def _reject_if_not_full_admin(message: Message, settings: Settings, services: ServiceContainer) -> bool:
     if await services.access_service.can_manage_panels(user_id=message.from_user.id, settings=settings):
         return False
@@ -160,15 +169,49 @@ async def add_panel_get_name(message: Message, state: FSMContext) -> None:
         await message.answer(t("panel_add_name_empty", None))
         return
     await state.update_data(panel_name=panel_name)
+    await state.set_state(AddPanelStates.waiting_api_version)
+    await message.answer(t("panel_add_api_version_q", None), reply_markup=_panel_api_version_keyboard())
+
+
+@router.callback_query(AddPanelStates.waiting_api_version, F.data.startswith("panel_api_version:"))
+async def add_panel_get_api_version(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    api_version = (callback.data or "").split(":", 1)[1]
+    if api_version not in {"legacy", "v3"}:
+        return
+    await state.update_data(api_version=api_version)
     await state.set_state(AddPanelStates.waiting_login_url)
-    await answer_with_cancel(message, t("panel_add_enter_login", None))
+    if callback.message is not None:
+        await answer_with_cancel(callback.message, t("panel_add_enter_login", None))
 
 
 @router.message(AddPanelStates.waiting_login_url)
 async def add_panel_get_url(message: Message, state: FSMContext) -> None:
     await state.update_data(login_url=(message.text or "").strip())
+    payload = await state.get_data()
+    if payload.get("api_version") == "v3":
+        await state.set_state(AddPanelStates.waiting_api_token)
+        await answer_with_cancel(message, t("panel_add_enter_api_token", None))
+        return
     await state.set_state(AddPanelStates.waiting_username)
     await answer_with_cancel(message, t("panel_add_enter_user", None))
+
+
+@router.message(AddPanelStates.waiting_api_token)
+async def add_panel_get_api_token(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    api_token = (message.text or "").strip()
+    if not api_token:
+        await message.answer(t("panel_add_api_token_empty", None))
+        return
+    await state.update_data(api_token=api_token, username="", password="")
+    await _finalize_add_panel(
+        origin_message=message,
+        actor_user_id=message.from_user.id,
+        state=state,
+        settings=settings,
+        services=services,
+        two_factor=None,
+    )
 
 
 @router.message(AddPanelStates.waiting_username)
@@ -201,9 +244,11 @@ async def _finalize_add_panel(
         actor_user_id=actor_user_id,
         name=payload["panel_name"],
         login_url=payload["login_url"],
-        username=payload["username"],
-        password=payload["password"],
+        username=payload.get("username") or "",
+        password=payload.get("password") or "",
         two_factor_code=two_factor,
+        api_version=payload.get("api_version") or "legacy",
+        api_token=payload.get("api_token"),
     )
     if result.status == "invalid_credentials":
         await answer_with_admin_menu(origin_message, t("panel_add_invalid_credentials", None), settings=settings, services=services)

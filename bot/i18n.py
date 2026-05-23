@@ -580,7 +580,15 @@ TEXTS: dict[str, dict[Lang, str]] = {
 
     "panel_add_enter_name": {"fa": "یک نام برای پنل وارد کنید:", "en": "Enter panel name:"},
     "panel_add_name_empty": {"fa": "نام پنل نمی‌تواند خالی باشد.", "en": "Panel name cannot be empty."},
-    "panel_add_enter_login": {"fa": "لینک لاگین را وارد کنید:\nhttp://HOST:PORT/WEBBASEPATH/login/", "en": "Enter login URL:\nhttp://HOST:PORT/WEBBASEPATH/login/"},
+    "panel_add_api_version_q": {"fa": "کدام نسخه پنل نصب است؟", "en": "Which panel version is installed?"},
+    "panel_add_api_v3": {"fa": "نسخه ۳", "en": "Version 3"},
+    "panel_add_api_legacy": {"fa": "قبل از ۳", "en": "Before 3"},
+    "panel_add_enter_login": {"fa": "لینک پنل یا لاگین را وارد کنید:\nhttp://HOST:PORT/WEBBASEPATH/login/", "en": "Enter panel or login URL:\nhttp://HOST:PORT/WEBBASEPATH/login/"},
+    "panel_add_enter_api_token": {
+        "fa": "توکن API نسخه ۳ را وارد کنید:\nSettings → Security → API Token",
+        "en": "Enter the v3 API token:\nSettings → Security → API Token",
+    },
+    "panel_add_api_token_empty": {"fa": "توکن API نمی‌تواند خالی باشد.", "en": "API token cannot be empty."},
     "panel_add_enter_user": {"fa": "یوزرنیم پنل را وارد کنید:", "en": "Enter panel username:"},
     "panel_add_enter_pass": {"fa": "پسورد پنل را وارد کنید:", "en": "Enter panel password:"},
     "panel_add_twofa_q": {"fa": "آیا twoFactor فعال است؟", "en": "Is twoFactor enabled?"},
