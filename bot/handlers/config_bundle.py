@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import Any
 
 import qrcode
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import BufferedInputFile, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.config import Settings
 from bot.i18n import t
@@ -24,8 +24,12 @@ async def send_config_bundle_card(
     lang: str | None,
     filename: str = "config_qr.png",
 ) -> None:
+    vless_items = [item.strip() for item in str(vless_uri).splitlines() if item.strip()]
+    if not vless_items:
+        vless_items = [str(vless_uri).strip()]
+    primary_vless = vless_items[0]
     qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
-    qr.add_data(vless_uri)
+    qr.add_data(primary_vless)
     qr.make(fit=True)
     img = qr.make_image(fill_color="#0B5ED7", back_color="#F7F7E8")
     buf = BytesIO()
@@ -38,14 +42,42 @@ async def send_config_bundle_card(
         config_name=escape(config_name),
         total=escape(total_label),
         expiry=escape(expiry_label),
-        vless_uri=escape(vless_uri),
+        vless_uri=escape(primary_vless),
         sub_url=escape(sub_url),
     )
     await message.answer_photo(file, caption=caption, parse_mode="HTML")
-    # Send links in monospace code format to make copy action reliable across Telegram clients.
-    await message.answer(f"<code>{escape(vless_uri)}</code>", parse_mode="HTML")
+
+    # Send each config separately with native Telegram copy button.
+    for idx, config_line in enumerate(vless_items, start=1):
+        await message.answer(
+            f"<code>{escape(config_line)}</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=(f"📋 کپی کانفیگ {idx}" if (lang or "fa").startswith("fa") else f"📋 Copy Config {idx}"),
+                            copy_text=CopyTextButton(text=config_line),
+                        )
+                    ]
+                ]
+            ),
+        )
     if sub_url.strip():
-        await message.answer(f"<code>{escape(sub_url)}</code>", parse_mode="HTML")
+        await message.answer(
+            f"<code>{escape(sub_url)}</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=("📋 کپی لینک ساب" if (lang or "fa").startswith("fa") else "📋 Copy Subscription"),
+                            copy_text=CopyTextButton(text=sub_url),
+                        )
+                    ]
+                ]
+            ),
+        )
 
 
 def existing_bundle_labels(
