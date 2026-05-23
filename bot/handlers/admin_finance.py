@@ -7,12 +7,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
-from bot.keyboards import (
-    finance_limited_delegated_keyboard,
-    finance_primary_delegated_keyboard,
-    finance_root_delegated_keyboard,
-    main_keyboard,
-)
+from bot.keyboards import finance_root_delegated_keyboard
 from bot.services.container import ServiceContainer
 from bot.states import FinanceStates
 
@@ -21,12 +16,7 @@ from bot.handlers.admin_finance_pricing import router as pricing_router
 from bot.handlers.admin_finance_today import router as today_router
 from bot.handlers.admin_finance_wallet import router as wallet_router
 
-from .admin_finance_keyboards import (
-    _finance_delegated_keyboard,
-    _finance_delegates_keyboard,
-    _finance_root_keyboard,
-    _wallet_action_keyboard,
-)
+from .admin_finance_keyboards import _finance_delegates_keyboard
 from .admin_finance_ops import (
     _answer_sales_report,
     _finance_menu_text_and_keyboard,

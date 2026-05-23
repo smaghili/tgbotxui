@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from aiogram import F, Router
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
@@ -26,7 +26,7 @@ from bot.handlers.admin_finance_helpers import (
 )
 
 from .admin_finance_ops import _can_access_today_finance
-from .admin_shared import reject_if_not_any_admin
+from .admin_shared import reject_callback_if_not_any_admin, reject_if_not_any_admin
 
 router = Router(name="admin_finance_today")
 

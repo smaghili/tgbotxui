@@ -817,7 +817,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_bulk_actions": {"fa": "عملیات گروهی", "en": "Bulk Actions"},
     "admin_bulk_add_traffic": {"fa": "افزودن حجم به تمامی کاربران", "en": "Add traffic to all users"},
     "admin_bulk_add_days": {"fa": "افزودن روز به تمامی کاربران", "en": "Add days to all users"},
-    "admin_back_to_users": {"fa": "بازگشت به لیست کاربران", "en": "Back to users list"},
+    "admin_back_to_users_detail": {"fa": "بازگشت به لیست کاربران", "en": "Back to users list"},
     "admin_bulk_menu_text": {
         "fa": "عملیات گروهی برای کل پنل را انتخاب کنید:",
         "en": "Choose a bulk action for the whole panel:",
