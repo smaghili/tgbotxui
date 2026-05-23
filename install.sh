@@ -219,7 +219,17 @@ backup_existing_state() {
 
   if [[ -d "${APP_DIR}/data" ]]; then
     mkdir -p "${BACKUP_DIR}/data"
-    rsync -a "${APP_DIR}/data/" "${BACKUP_DIR}/data/"
+    set +e
+    rsync -a \
+      --exclude "*.db-journal" \
+      --exclude "*.db-wal" \
+      --exclude "*.db-shm" \
+      "${APP_DIR}/data/" "${BACKUP_DIR}/data/"
+    local rsync_code=$?
+    set -e
+    if [[ "${rsync_code}" -ne 0 && "${rsync_code}" -ne 24 ]]; then
+      exit "${rsync_code}"
+    fi
   fi
 }
 
