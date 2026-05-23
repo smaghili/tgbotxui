@@ -1317,15 +1317,15 @@ class PanelService:
 
     def _subscription_base_override(self, panel: Dict[str, Any]) -> str:
         for panel_key in self._panel_config_keys(panel):
-            rule = self.sub_url_strip_port_rules.get(panel_key)
-            if rule:
-                return rule.rstrip("/")
             override = self.sub_url_base_overrides.get(panel_key)
             if override:
                 return override.rstrip("/")
+            rule = self.sub_url_strip_port_rules.get(panel_key)
+            if rule:
+                return rule.rstrip("/")
         return (
-            self.sub_url_strip_port_rules.get("*", "")
-            or self.sub_url_base_overrides.get("*", "")
+            self.sub_url_base_overrides.get("*", "")
+            or self.sub_url_strip_port_rules.get("*", "")
         ).rstrip("/")
 
     def is_subscription_enabled_for_panel(self, panel: Dict[str, Any]) -> bool:

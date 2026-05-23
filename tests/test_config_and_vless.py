@@ -183,6 +183,19 @@ class PanelServiceVlessTests(unittest.IsolatedAsyncioTestCase):
             "http://sub.goldoonam.shop:2569/subnist",
         )
 
+    def test_subscription_base_override_takes_precedence_over_strip_port_rule(self) -> None:
+        service = PanelService(
+            None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            sub_url_strip_port_rules={"3": "http://sub.hamshahrih.ir/sub"},
+            sub_url_base_overrides={"3": "https://sub.hamshahrih.ir:2096/sub/ss"},
+        )
+        self.assertEqual(
+            service._subscription_base_override({"id": 3, "name": "panel-v3"}),
+            "https://sub.hamshahrih.ir:2096/sub/ss",
+        )
+
     def test_subscription_is_disabled_without_panel_env_rule(self) -> None:
         service = PanelService(
             None,  # type: ignore[arg-type]

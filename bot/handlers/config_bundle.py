@@ -47,12 +47,6 @@ async def send_config_bundle_card(
     )
     await message.answer_photo(file, caption=caption, parse_mode="HTML")
 
-    # Send each config separately as raw text links so Telegram native link tap/copy behavior works.
-    for idx, config_line in enumerate(vless_items, start=1):
-        await message.answer(config_line)
-    if sub_url.strip():
-        await message.answer(sub_url)
-
 
 def existing_bundle_labels(
     *,
