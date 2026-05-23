@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import Any
 
 import qrcode
-from aiogram.types import BufferedInputFile, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, Message
 
 from bot.config import Settings
 from bot.i18n import t
@@ -47,37 +47,11 @@ async def send_config_bundle_card(
     )
     await message.answer_photo(file, caption=caption, parse_mode="HTML")
 
-    # Send each config separately with native Telegram copy button.
+    # Send each config separately as raw text links so Telegram native link tap/copy behavior works.
     for idx, config_line in enumerate(vless_items, start=1):
-        await message.answer(
-            f"<code>{escape(config_line)}</code>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=(f"📋 کپی کانفیگ {idx}" if (lang or "fa").startswith("fa") else f"📋 Copy Config {idx}"),
-                            copy_text=CopyTextButton(text=config_line),
-                        )
-                    ]
-                ]
-            ),
-        )
+        await message.answer(config_line)
     if sub_url.strip():
-        await message.answer(
-            f"<code>{escape(sub_url)}</code>",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=("📋 کپی لینک ساب" if (lang or "fa").startswith("fa") else "📋 Copy Subscription"),
-                            copy_text=CopyTextButton(text=sub_url),
-                        )
-                    ]
-                ]
-            ),
-        )
+        await message.answer(sub_url)
 
 
 def existing_bundle_labels(
