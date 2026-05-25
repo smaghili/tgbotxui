@@ -18,12 +18,18 @@ from bot.metrics import create_metrics_app
 from bot.middlewares.rate_limit import AdminRateLimitMiddleware
 from bot.observability import configure_logging
 from bot.services.access_service import AccessService
+from bot.repositories.delegated_admin_repository import DelegatedAdminRepository
+from bot.services.admin_access_handler_service import AdminAccessHandlerService
 from bot.services.admin_panel_service import AdminPanelService
 from bot.services.admin_provisioning_service import AdminProvisioningService
+from bot.services.common_handler_service import CommonHandlerService
 from bot.services.container import ServiceContainer
 from bot.services.crypto import CryptoService
 from bot.services.financial_service import FinancialService
+from bot.services.handler_context_service import HandlerContextService
+from bot.services.operation_guard_service import OperationGuardService
 from bot.services.panel_service import PanelService
+from bot.services.payment_service import PaymentService
 from bot.services.telegram_runtime import create_bot_with_failover
 from bot.services.usage_service import UsageService
 from bot.services.xui_client import XUIClient
@@ -49,9 +55,20 @@ async def run(settings: Settings) -> None:
     )
     admin_panel_service = AdminPanelService(db=db, panel_service=panel_service)
     access_service = AccessService(db=db)
+    operation_guard_service = OperationGuardService()
     financial_service = FinancialService(
         db=db,
         access_service=access_service,
+        operation_guard=operation_guard_service,
+    )
+    payment_service = PaymentService(financial_service=financial_service)
+    handler_context_service = HandlerContextService(db=db)
+    common_handler_service = CommonHandlerService(db=db)
+    delegated_admin_repository = DelegatedAdminRepository(db=db)
+    admin_access_handler_service = AdminAccessHandlerService(
+        db=db,
+        delegated_admin_repository=delegated_admin_repository,
+        handler_context_service=handler_context_service,
     )
     usage_service = UsageService(
         db=db,
@@ -72,8 +89,13 @@ async def run(settings: Settings) -> None:
         panel_service=panel_service,
         admin_panel_service=admin_panel_service,
         access_service=access_service,
+        admin_access_handler_service=admin_access_handler_service,
         admin_provisioning_service=admin_provisioning_service,
+        common_handler_service=common_handler_service,
         financial_service=financial_service,
+        handler_context_service=handler_context_service,
+        operation_guard_service=operation_guard_service,
+        payment_service=payment_service,
         usage_service=usage_service,
     )
 

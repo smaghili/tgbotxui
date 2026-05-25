@@ -14,89 +14,33 @@ from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
 from bot.states import DelegatedAdminStates
+from .admin_access_support import (
+    delegated_access_list_keyboard as _delegated_access_list_keyboard,
+    delegated_inbound_select_keyboard as _delegated_inbound_select_keyboard,
+    delegated_self_readonly_keyboard as _delegated_self_readonly_keyboard,
+    delegated_subordinates_keyboard as _delegated_subordinates_keyboard,
+    format_activity_entry as _format_activity_entry,
+    format_amount as _format_amount,
+    format_db_timestamp as _format_db_timestamp,
+    format_gb_exact as _format_gb_exact,
+    format_panel_price_entry as _format_panel_price_entry,
+    format_wallet_entry as _format_wallet_entry,
+    manage_admins_keyboard as _manage_admins_keyboard,
+    parse_detail_pairs_text as _parse_detail_pairs,
+    parse_finex_name_tokens as _parse_finex_name_tokens,
+    pricing_history_choice_keyboard as _pricing_history_choice_keyboard,
+    safe_edit_menu_message as _safe_edit_menu_message,
+    search_clients_by_email_tokens as _search_clients_by_email_tokens,
+    value_or_unlimited as _value_or_unlimited,
+)
 from .admin_shared import reject_if_not_any_admin
 
-from bot.utils import (
-    format_db_timestamp as shared_format_db_timestamp,
-    format_gb_exact as shared_format_gb_exact,
-    parse_gb_amount,
-    parse_price_per_gb_with_tiers,
-    parse_detail_pairs,
-    relative_remaining_time,
-    to_local_date,
-    to_persian_digits,
-)
+from bot.utils import parse_gb_amount, parse_price_per_gb_with_tiers, relative_remaining_time, to_local_date
 from .admin_finance_helpers import consumed_basis_payable_remainder, payable_from_wallet
 
 router = Router(name="admin_access")
 
 _FINEX_IB_PAGE = 8
-
-
-def _parse_finex_name_tokens(raw: str) -> list[str]:
-    parts: list[str] = []
-    for chunk in raw.replace("\n", ",").split(","):
-        s = chunk.strip()
-        if s:
-            parts.append(s)
-    return parts
-
-
-def _match_email_token(email: str, token: str) -> bool:
-    t = token.strip().lower()
-    e = email.strip().lower()
-    if not t or not e:
-        return False
-    local, _, _ = e.partition("@")
-    if local == t:
-        return True
-    return t in e
-
-
-async def _search_clients_by_email_tokens(
-    services: ServiceContainer, tokens: list[str]
-) -> list[dict[str, Any]]:
-    if not tokens:
-        return []
-    seen: set[tuple[int, int, str]] = set()
-    out: list[dict[str, Any]] = []
-    for panel in await services.panel_service.list_panels():
-        pid = int(panel["id"])
-        try:
-            rows = await services.panel_service.list_clients(pid)
-        except Exception:
-            continue
-        for row in rows:
-            email = str(row.get("email") or "").strip()
-            if not email:
-                continue
-            if not any(_match_email_token(email, tok) for tok in tokens):
-                continue
-            uid = str(row.get("uuid") or "").strip()
-            ib = int(row.get("inbound_id") or 0)
-            if not uid or ib <= 0:
-                continue
-            key = (pid, ib, uid)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append({"panel_id": pid, "inbound_id": ib, "uuid": uid, "email": email})
-    return out
-
-
-async def _safe_edit_menu_message(
-    message: Message,
-    *,
-    text: str,
-    reply_markup: InlineKeyboardMarkup,
-) -> None:
-    try:
-        await message.edit_text(text, reply_markup=reply_markup)
-    except TelegramBadRequest as exc:
-        err = str(exc).lower()
-        if "message is not modified" in err or "message_not_modified" in err:
-            return
-        raise
 
 
 async def _delegated_finex_inbounds_render(
@@ -111,8 +55,8 @@ async def _delegated_finex_inbounds_render(
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
-    excluded = await services.db.list_delegate_finance_excluded_inbounds(delegate_id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
+    excluded = await services.admin_access_handler_service.list_delegate_finance_excluded_inbounds(delegate_id)
     all_rows = await services.admin_provisioning_service.list_all_inbounds()
     total = len(all_rows)
     if total <= 0:
@@ -178,7 +122,7 @@ async def _delegated_finex_remain_render(
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     await _safe_edit_menu_message(
         callback.message,
         text=t("admin_delegated_finex_clients_title", lang),
@@ -198,19 +142,6 @@ async def _delegated_finex_remain_render(
         await callback.answer(answer_notify)
     else:
         await callback.answer()
-
-
-def _format_gb_exact(value: float | int) -> str:
-    return shared_format_gb_exact(value)
-
-
-def _format_db_timestamp(raw: str | None, *, settings: Settings, lang: str | None) -> str:
-    return shared_format_db_timestamp(raw, tz_name=settings.timezone, lang=lang)
-
-
-def _parse_detail_pairs(raw: str | None) -> dict[str, str]:
-    return parse_detail_pairs(raw)
-
 
 async def _reject_if_not_full_admin(message: Message, settings: Settings, services: ServiceContainer) -> bool:
     if await services.access_service.can_manage_admins(user_id=message.from_user.id, settings=settings):
@@ -238,120 +169,14 @@ async def _can_manage_delegated_target(
     context = await services.access_service.get_admin_context(actor_user_id, settings)
     if not (context.is_delegated_admin and context.delegated_scope == "full"):
         return False
-    scope_fn = getattr(services.db, "get_delegated_admin_financial_scope_user_ids", None)
     subtree_ids = set(
-        await scope_fn(manager_user_id=actor_user_id, include_self=True)
-        if scope_fn is not None
-        else await services.db.get_delegated_admin_subtree_user_ids(
+        await services.admin_access_handler_service.get_subtree_user_ids(
             manager_user_id=actor_user_id,
             include_self=True,
         )
     )
     return target_user_id in subtree_ids
 
-
-def _manage_admins_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t("admin_add_delegated", lang), callback_data="dag:add")],
-            [InlineKeyboardButton(text=t("admin_list_delegated", lang), callback_data="dag:list")],
-        ]
-    )
-
-
-def _delegated_inbound_select_keyboard(
-    rows: list,
-    selected: set[tuple[int, int]],
-    lang: str | None = None,
-) -> InlineKeyboardMarkup:
-    buttons: list[list[InlineKeyboardButton]] = []
-    for row in rows:
-        mark = "✅ " if (row.panel_id, row.inbound_id) in selected else ""
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{mark}{row.panel_name} | {row.inbound_name}",
-                    callback_data=f"dag:toggle:{row.panel_id}:{row.inbound_id}",
-                )
-            ]
-        )
-    buttons.append(
-        [
-            InlineKeyboardButton(text=t("btn_confirm", lang), callback_data="dag:confirm"),
-            InlineKeyboardButton(text=t("btn_cancel", lang), callback_data="dag:cancel"),
-        ]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def _delegated_access_list_keyboard(rows: list[dict], lang: str | None = None) -> InlineKeyboardMarkup:
-    buttons: list[list[InlineKeyboardButton]] = []
-    seen_users: set[int] = set()
-    for row in rows:
-        user_id = int(row["telegram_user_id"])
-        if user_id in seen_users:
-            continue
-        seen_users.add(user_id)
-        title = str(row.get("title") or row.get("full_name") or row.get("username") or user_id)
-        buttons.append(
-            [
-                InlineKeyboardButton(text=title[:42], callback_data=f"dag:detail:{user_id}"),
-                InlineKeyboardButton(text="⚙️", callback_data=f"dag:detail:{user_id}"),
-                InlineKeyboardButton(text="🗑️", callback_data=f"dag:remove_user:{user_id}"),
-            ]
-        )
-    if not buttons:
-        buttons = [[InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def _delegated_subordinates_keyboard(
-    parent_user_id: int,
-    rows: list[dict],
-    lang: str | None = None,
-) -> InlineKeyboardMarkup:
-    buttons: list[list[InlineKeyboardButton]] = []
-    seen_users: set[int] = set()
-    for row in rows:
-        child_user_id = int(row["telegram_user_id"])
-        if child_user_id == parent_user_id or child_user_id in seen_users:
-            continue
-        seen_users.add(child_user_id)
-        title = str(row.get("title") or row.get("full_name") or row.get("username") or child_user_id)
-        current_parent_user_id = int(row.get("parent_user_id") or 0) or None
-        is_attached = current_parent_user_id == parent_user_id
-        action_label = (
-            t("admin_delegated_subordinate_remove", lang)
-            if is_attached else
-            t("admin_delegated_subordinate_add", lang)
-        )
-        buttons.append(
-            [
-                InlineKeyboardButton(text=title[:34], callback_data=f"dag:detail:{child_user_id}"),
-                InlineKeyboardButton(text=action_label, callback_data=f"dag:subtoggle:{parent_user_id}:{child_user_id}"),
-            ]
-        )
-    if not buttons:
-        buttons = [[InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")]]
-    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"dag:detail:{parent_user_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def _pricing_history_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=t("btn_yes", lang), callback_data="dag:pricing:history:apply"),
-                InlineKeyboardButton(text=t("btn_no", lang), callback_data="dag:pricing:history:keep"),
-            ]
-        ]
-    )
-
-
-def _delegated_self_readonly_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=t("btn_back", lang), callback_data="fin:delegated:back")]]
-    )
 
 
 def _delegated_detail_keyboard(
@@ -550,8 +375,8 @@ async def _panel_pricing_render(
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
-    rows = await services.db.list_delegate_panel_pricing(telegram_user_id=delegate_id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
+    rows = await services.admin_access_handler_service.list_delegate_panel_pricing(user_id=delegate_id)
     pricing_map = {int(row["panel_id"]): row for row in rows}
     panels = await services.panel_service.list_panels()
     panel_map = {int(panel["id"]): panel for panel in panels}
@@ -695,7 +520,7 @@ async def _render_delegated_detail(
             payable_amount=_format_amount(payable_amount),
             currency=str(wallet.get("currency") or "تومان"),
         )
-    panel_rows = await services.db.list_delegate_panel_pricing(telegram_user_id=target_user_id)
+    panel_rows = await services.admin_access_handler_service.list_delegate_panel_pricing(user_id=target_user_id)
     panel_prices = ""
     if panel_rows:
         panel_prices = t(
@@ -790,7 +615,7 @@ async def delegated_limited_self_detail_message(message: Message, settings: Sett
     context = await services.access_service.get_admin_context(message.from_user.id, settings)
     if not context.is_delegated_admin or str(context.delegated_scope or "limited") != "limited":
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(message.from_user.id)
     await _render_delegated_detail(
         message,
         services=services,
@@ -805,7 +630,7 @@ async def delegated_limited_self_detail_message(message: Message, settings: Sett
 async def manage_admins_menu(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_if_not_full_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(message.from_user.id)
     await message.answer(
         t("admin_manage_admins_title", lang),
         reply_markup=_manage_admins_keyboard(lang),
@@ -816,7 +641,7 @@ async def manage_admins_menu(message: Message, settings: Settings, services: Ser
 async def delegated_admin_add_start(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     await state.set_state(DelegatedAdminStates.waiting_target)
     if callback.message is not None:
         await callback.message.answer(t("admin_enter_delegated_target", lang))
@@ -827,7 +652,7 @@ async def delegated_admin_add_start(callback: CallbackQuery, state: FSMContext, 
 async def delegated_admin_target_input(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_if_not_full_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(message.from_user.id)
     target_raw = (message.text or "").strip()
     try:
         target_user_id, resolved_title = await services.admin_provisioning_service.resolve_admin_target(target_raw)
@@ -850,7 +675,7 @@ async def delegated_admin_target_input(message: Message, state: FSMContext, sett
 async def delegated_admin_title_input(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_if_not_full_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(message.from_user.id)
     title_raw = (message.text or "").strip()
     title = None if title_raw in {"", "-"} else title_raw
     data = await state.get_data()
@@ -880,7 +705,7 @@ async def delegated_admin_toggle_inbound(callback: CallbackQuery, state: FSMCont
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         _, _, panel_raw, inbound_raw = callback.data.split(":", 3)
         panel_id = int(panel_raw)
@@ -917,7 +742,7 @@ async def delegated_admin_cancel_inbound_selection(
         await state.clear()
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     data = await state.get_data()
     await state.clear()
     mode = str(data.get("delegated_mode") or "create")
@@ -946,7 +771,7 @@ async def delegated_admin_confirm_inbound_selection(callback: CallbackQuery, sta
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     data = await state.get_data()
     selected = [tuple(item) for item in data.get("delegated_selected_inbounds", [])]
     if not selected:
@@ -1000,7 +825,7 @@ async def delegated_admin_edit(callback: CallbackQuery, state: FSMContext, setti
     if callback.message is None or callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1014,8 +839,8 @@ async def delegated_admin_edit(callback: CallbackQuery, state: FSMContext, setti
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    access_rows = await services.db.list_admin_access_rows_for_user(target_user_id)
-    delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
+    access_rows = await services.admin_access_handler_service.list_admin_access_rows_for_user(target_user_id)
+    delegated = await services.admin_access_handler_service.delegated_admin(target_user_id)
     if delegated is None:
         await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
         return
@@ -1049,7 +874,7 @@ async def delegated_admin_list(callback: CallbackQuery, settings: Settings, serv
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
         manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
     )
@@ -1063,7 +888,7 @@ async def delegated_admin_detail(callback: CallbackQuery, settings: Settings, se
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1103,7 +928,7 @@ async def delegated_admin_panel_prices(callback: CallbackQuery, settings: Settin
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     mode = "pick"
     try:
         parts = callback.data.split(":")
@@ -1142,7 +967,7 @@ async def delegated_admin_panel_price_fields(
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         _, _, mode, delegate_raw, panel_raw = callback.data.split(":", 4)
         delegate_id = int(delegate_raw)
@@ -1201,7 +1026,7 @@ async def delegated_admin_subordinates(callback: CallbackQuery, settings: Settin
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         parent_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1215,7 +1040,7 @@ async def delegated_admin_subordinates(callback: CallbackQuery, settings: Settin
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    parent = await services.db.get_delegated_admin_by_user_id(parent_user_id)
+    parent = await services.admin_access_handler_service.delegated_admin(parent_user_id)
     if parent is None:
         await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
         return
@@ -1237,7 +1062,7 @@ async def delegated_admin_subordinate_toggle(callback: CallbackQuery, settings: 
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         _, _, parent_raw, child_raw = callback.data.split(":", 3)
         parent_user_id = int(parent_raw)
@@ -1258,8 +1083,8 @@ async def delegated_admin_subordinate_toggle(callback: CallbackQuery, settings: 
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    parent = await services.db.get_delegated_admin_by_user_id(parent_user_id)
-    child = await services.db.get_delegated_admin_by_user_id(child_user_id)
+    parent = await services.admin_access_handler_service.delegated_admin(parent_user_id)
+    child = await services.admin_access_handler_service.delegated_admin(child_user_id)
     if parent is None or child is None:
         await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
         return
@@ -1295,7 +1120,7 @@ async def delegated_admin_set_root_parent(callback: CallbackQuery, settings: Set
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1309,18 +1134,18 @@ async def delegated_admin_set_root_parent(callback: CallbackQuery, settings: Set
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
+    delegated = await services.admin_access_handler_service.delegated_admin(target_user_id)
     if delegated is None:
         await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
         return
     current_parent_user_id = int(delegated.get("parent_user_id") or 0) or None
     new_parent_user_id: int | None = None
     if current_parent_user_id is None:
-        last_event = await services.db.get_last_delegated_admin_parent_event(target_user_id)
+        last_event = await services.admin_access_handler_service.get_last_parent_event(target_user_id)
         candidate_parent = int((last_event or {}).get("old_parent_user_id") or 0) or None
         if candidate_parent == target_user_id:
             candidate_parent = None
-        if candidate_parent is not None and await services.db.get_delegated_admin_by_user_id(candidate_parent) is None:
+        if candidate_parent is not None and await services.admin_access_handler_service.delegated_admin(candidate_parent) is None:
             candidate_parent = None
         if candidate_parent is None:
             await callback.answer(t("admin_delegated_parent_toggle_no_alt", lang), show_alert=True)
@@ -1357,7 +1182,7 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         _, _, field_name, target_raw = callback.data.split(":", 3)
         target_user_id = int(target_raw)
@@ -1401,7 +1226,7 @@ async def delegated_admin_field_prompt(callback: CallbackQuery, state: FSMContex
 async def delegated_admin_panel_pricing_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_if_not_full_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(message.from_user.id)
     data = await state.get_data()
     field_kind = str(data.get("delegated_panel_price_field") or "")
     target_user_id = int(data.get("delegated_profile_target_user_id") or 0)
@@ -1432,12 +1257,21 @@ async def delegated_admin_panel_pricing_value(message: Message, state: FSMContex
         return
     await state.clear()
     try:
-        current = await services.db.get_delegate_panel_pricing(telegram_user_id=target_user_id, panel_id=panel_id) or {}
+        current = await services.admin_access_handler_service.get_delegate_panel_pricing(
+            user_id=target_user_id,
+            panel_id=panel_id,
+        ) or {}
         if field_kind == "gb":
             amount, tiers_json = parse_price_per_gb_with_tiers(raw)
             if amount < 0:
                 raise ValueError
-            await services.db.set_delegate_panel_pricing(
+            await services.admin_access_handler_service.set_delegate_panel_pricing(
+                user_id=target_user_id,
+                panel_id=panel_id,
+                price_per_gb=amount,
+                price_per_day=int(current.get("price_per_day") or 0),
+            )
+            await services.admin_access_handler_service.set_delegate_panel_pricing_payload(
                 telegram_user_id=target_user_id,
                 panel_id=panel_id,
                 price_per_gb=amount,
@@ -1448,7 +1282,7 @@ async def delegated_admin_panel_pricing_value(message: Message, state: FSMContex
             amount = int(raw.replace(",", ""))
             if amount < 0:
                 raise ValueError
-            await services.db.set_delegate_panel_pricing(
+            await services.admin_access_handler_service.set_delegate_panel_pricing_payload(
                 telegram_user_id=target_user_id,
                 panel_id=panel_id,
                 price_per_gb=int(current.get("price_per_gb") or 0),
@@ -1456,7 +1290,7 @@ async def delegated_admin_panel_pricing_value(message: Message, state: FSMContex
                 allocated_pricing_tiers_json=str(current.get("allocated_pricing_tiers_json") or "[]"),
             )
         else:
-            profile = await services.db.get_delegated_admin_profile(target_user_id)
+            profile = await services.admin_access_handler_service.delegated_profile(target_user_id)
             pricing = await services.financial_service.get_pricing(target_user_id)
             payload: dict[str, object] = {
                 "telegram_user_id": target_user_id,
@@ -1509,7 +1343,7 @@ async def delegated_admin_panel_pricing_value(message: Message, state: FSMContex
             if payload["expires_at"] is None:
                 payload["expires_at"] = int(profile.get("expires_at") or 0) or None
 
-            await services.db.set_delegate_panel_pricing(
+            await services.admin_access_handler_service.set_delegate_panel_pricing_payload(
                 telegram_user_id=int(payload["telegram_user_id"]),
                 panel_id=int(payload["panel_id"]),
                 price_per_gb=int(payload["price_per_gb"]),
@@ -1545,7 +1379,7 @@ async def delegated_admin_price_history_apply(
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     data = await state.get_data()
     await state.clear()
     target_user_id = int(data["delegated_profile_target_user_id"])
@@ -1586,7 +1420,7 @@ async def delegated_admin_price_history_keep(
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     data = await state.get_data()
     await state.clear()
     target_user_id = int(data["delegated_profile_target_user_id"])
@@ -1630,7 +1464,7 @@ async def delegated_admin_toggle_status(callback: CallbackQuery, settings: Setti
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1644,10 +1478,10 @@ async def delegated_admin_toggle_status(callback: CallbackQuery, settings: Setti
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    profile = await services.db.get_delegated_admin_profile(target_user_id)
+    profile = await services.admin_access_handler_service.delegated_profile(target_user_id)
     new_status = 0 if int(profile.get("is_active") or 0) == 1 else 1
-    await services.db.update_delegated_admin_profile(
-        telegram_user_id=target_user_id,
+    await services.admin_access_handler_service.update_delegated_profile(
+        target_user_id,
         is_active=new_status,
     )
     await _render_delegated_detail(
@@ -1667,7 +1501,7 @@ async def delegated_admin_toggle_scope(callback: CallbackQuery, settings: Settin
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1681,12 +1515,12 @@ async def delegated_admin_toggle_scope(callback: CallbackQuery, settings: Settin
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    delegated = await services.db.get_delegated_admin_by_user_id(target_user_id)
+    delegated = await services.admin_access_handler_service.delegated_admin(target_user_id)
     if delegated is None:
         await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
         return
     next_scope = "full" if str(delegated.get("admin_scope") or "limited") == "limited" else "limited"
-    await services.db.set_delegated_admin_scope(
+    await services.admin_access_handler_service.set_delegated_scope(
         telegram_user_id=target_user_id,
         admin_scope=next_scope,
     )
@@ -1707,7 +1541,7 @@ async def delegated_admin_toggle_basis(callback: CallbackQuery, settings: Settin
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1731,8 +1565,8 @@ async def delegated_admin_toggle_basis(callback: CallbackQuery, settings: Settin
         charge_basis=next_basis,
         allocated_pricing_tiers_json=str(pricing.get("allocated_pricing_tiers_json") or "[]"),
     )
-    await services.db.update_delegated_admin_profile(
-        telegram_user_id=target_user_id,
+    await services.admin_access_handler_service.update_delegated_profile(
+        target_user_id,
         charge_basis=next_basis,
     )
     await _render_delegated_detail(
@@ -1754,7 +1588,7 @@ async def delegated_admin_toggle_wallet_mode(
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1768,10 +1602,10 @@ async def delegated_admin_toggle_wallet_mode(
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    profile = await services.db.get_delegated_admin_profile(target_user_id)
+    profile = await services.admin_access_handler_service.delegated_profile(target_user_id)
     next_value = 0 if int(profile.get("allow_negative_wallet") or 0) == 1 else 1
-    await services.db.update_delegated_admin_profile(
-        telegram_user_id=target_user_id,
+    await services.admin_access_handler_service.update_delegated_profile(
+        target_user_id,
         allow_negative_wallet=next_value,
     )
     await _render_delegated_detail(
@@ -1791,7 +1625,7 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
@@ -1816,10 +1650,10 @@ async def delegated_admin_report(callback: CallbackQuery, settings: Settings, se
     report = {"wallet": summary["wallet"]}
     wallet_lines = [
         _format_wallet_entry(item, settings=settings, lang=lang)
-        for item in await services.db.list_recent_wallet_transactions(telegram_user_id=target_user_id, limit=10)
+        for item in await services.admin_access_handler_service.list_recent_wallet_transactions(user_id=target_user_id, limit=10)
     ]
     activity_lines: list[str] = []
-    for item in await services.db.list_recent_actor_audit_logs(actor_user_id=target_user_id, limit=20):
+    for item in await services.admin_access_handler_service.list_recent_actor_audit_logs(actor_user_id=target_user_id, limit=20):
         formatted = _format_activity_entry(item, settings=settings, lang=lang)
         if formatted is not None:
             activity_lines.append(formatted)
@@ -1877,7 +1711,7 @@ async def delegated_finex_inbounds_menu(
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     parts = callback.data.split(":")
     if len(parts) < 4:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
@@ -1896,7 +1730,7 @@ async def delegated_finex_inbounds_menu(
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    delegated = await services.db.get_delegated_admin_by_user_id(delegate_id)
+    delegated = await services.admin_access_handler_service.delegated_admin(delegate_id)
     if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
         await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
         return
@@ -1917,7 +1751,7 @@ async def delegated_finex_inbound_toggle(callback: CallbackQuery, settings: Sett
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         _, _, delegate_s, panel_s, inbound_s = callback.data.split(":", 4)
         delegate_id = int(delegate_s)
@@ -1934,20 +1768,20 @@ async def delegated_finex_inbound_toggle(callback: CallbackQuery, settings: Sett
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    delegated = await services.db.get_delegated_admin_by_user_id(delegate_id)
+    delegated = await services.admin_access_handler_service.delegated_admin(delegate_id)
     if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
         await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
         return
     key = (panel_id, inbound_id)
     try:
-        excluded = await services.db.list_delegate_finance_excluded_inbounds(delegate_id)
+        excluded = await services.admin_access_handler_service.list_delegate_finance_excluded_inbounds(delegate_id)
         if key in excluded:
-            await services.db.remove_delegate_finance_excluded_inbound(
-                delegate_user_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
+            await services.admin_access_handler_service.remove_delegate_finance_excluded_inbound(
+                delegate_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
             )
         else:
-            await services.db.add_delegate_finance_excluded_inbound(
-                delegate_user_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
+            await services.admin_access_handler_service.add_delegate_finance_excluded_inbound(
+                delegate_id=delegate_id, panel_id=panel_id, inbound_id=inbound_id
             )
     except Exception:
         await callback.answer(t("admin_delegated_finex_db_error", lang), show_alert=True)
@@ -1975,7 +1809,7 @@ async def delegated_finex_remain_menu(
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     parts = callback.data.split(":")
     if len(parts) < 3:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
@@ -1993,7 +1827,7 @@ async def delegated_finex_remain_menu(
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    delegated = await services.db.get_delegated_admin_by_user_id(delegate_id)
+    delegated = await services.admin_access_handler_service.delegated_admin(delegate_id)
     if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
         await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
         return
@@ -2018,7 +1852,7 @@ async def delegated_finex_remain_bulk_start(
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         delegate_id = int(callback.data.split(":", 2)[2])
     except (ValueError, IndexError):
@@ -2032,7 +1866,7 @@ async def delegated_finex_remain_bulk_start(
     ):
         await callback.answer(t("no_admin_access", None), show_alert=True)
         return
-    delegated = await services.db.get_delegated_admin_by_user_id(delegate_id)
+    delegated = await services.admin_access_handler_service.delegated_admin(delegate_id)
     if delegated is None or int(delegated.get("parent_user_id") or 0) != 0:
         await callback.answer(t("admin_delegated_finex_primary_only", lang), show_alert=True)
         return
@@ -2051,7 +1885,7 @@ async def delegated_finex_remain_bulk_receive(
 ) -> None:
     if await _reject_if_not_full_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(message.from_user.id)
     data = await state.get_data()
     delegate_id = int(data.get("finex_remain_bulk_delegate_id") or 0)
     if delegate_id <= 0:
@@ -2105,7 +1939,7 @@ async def delegated_finex_remain_bulk_yes(
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         delegate_cb = int(callback.data.split(":", 2)[2])
     except (ValueError, IndexError):
@@ -2119,8 +1953,8 @@ async def delegated_finex_remain_bulk_yes(
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
     for item in hits:
-        await services.db.add_delegate_finance_exclude_client_remaining(
-            delegate_user_id=delegate_id,
+        await services.admin_access_handler_service.add_delegate_finance_exclude_client_remaining(
+            delegate_id=delegate_id,
             panel_id=int(item["panel_id"]),
             inbound_id=int(item["inbound_id"]),
             client_uuid=str(item["uuid"]),
@@ -2143,7 +1977,7 @@ async def delegated_finex_remain_bulk_no(
     if callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     await state.clear()
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(t("admin_delegated_finex_bulk_cancelled", lang))
@@ -2157,19 +1991,19 @@ async def delegated_admin_remove_user(callback: CallbackQuery, settings: Setting
     if callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     try:
         target_user_id = int(callback.data.split(":", 2)[2])
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
-    access_rows = await services.db.list_admin_access_rows_for_user(target_user_id)
+    access_rows = await services.admin_access_handler_service.list_admin_access_rows_for_user(target_user_id)
     for row in access_rows:
         await services.admin_provisioning_service.revoke_delegated_admin_access(
             actor_user_id=callback.from_user.id,
             access_id=int(row["access_id"]),
         )
-    await services.db.deactivate_delegated_admin(target_user_id)
+    await services.admin_access_handler_service.deactivate_delegated_admin(target_user_id)
     if callback.message is not None:
         rows = await services.admin_provisioning_service.list_delegated_admin_accesses(
             manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
@@ -2183,7 +2017,7 @@ async def delegated_admin_remove_user(callback: CallbackQuery, settings: Setting
 async def delegated_admin_revoke(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.admin_access_handler_service.user_lang(callback.from_user.id)
     if callback.data is None:
         await callback.answer()
         return

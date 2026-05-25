@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import secrets
 import time
 from typing import Any, Dict, Awaitable, Callable
@@ -9,6 +10,8 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 from bot.config import Settings
 from bot.db import Database
+from bot.repositories.audit_repository import AuditRepository
+from bot.repositories.panel_repository import PanelRepository
 from bot.services.access_service import AccessService
 from bot.utils import inbound_display_name
 from bot.services.crypto import CryptoService
@@ -20,6 +23,8 @@ from bot.services.xui_client import (
     parse_login_url,
 )
 from bot.utils import gb_to_bytes, parse_epoch
+
+logger = logging.getLogger(__name__)
 
 
 class PanelService:
@@ -34,6 +39,8 @@ class PanelService:
         self.db = db
         self.crypto = crypto
         self.xui = xui
+        self.panel_repo = PanelRepository(db=db)
+        self.audit_repo = AuditRepository(db=db)
         self.sub_url_strip_port_rules = sub_url_strip_port_rules or {}
         self.sub_url_base_overrides = sub_url_base_overrides or {}
         self._disabled_cache: dict[tuple[int, int | None, tuple[int, ...] | None], tuple[float, list[Dict[str, Any]]]] = {}
@@ -83,7 +90,7 @@ class PanelService:
                 raise XUIError("invalid response from 3x-ui v3 API.")
         else:
             cookies = await self.xui.login(conn)
-        panel_id = await self.db.add_panel(
+        panel_id = await self.panel_repo.add_panel(
             name=name.strip(),
             base_url=base_url,
             web_base_path=web_base_path,
@@ -96,43 +103,44 @@ class PanelService:
             created_by=created_by,
         )
         if cookies:
-            await self.db.save_panel_session(panel_id, cookies)
-        await self.db.set_panel_login_status(panel_id, ok=True, last_error=None)
-        panel = await self.db.get_panel(panel_id)
+            await self.panel_repo.save_panel_session(panel_id, cookies)
+        await self.panel_repo.set_panel_login_status(panel_id, ok=True, last_error=None)
+        panel = await self.panel_repo.get_panel(panel_id)
         if not panel:
             raise ValueError("failed to save panel")
         return panel
 
     async def list_panels(self) -> list[Dict[str, Any]]:
-        return await self.db.list_panels()
+        return await self.panel_repo.list_panels()
 
     async def get_panel(self, panel_id: int) -> Dict[str, Any] | None:
-        return await self.db.get_panel(panel_id)
+        return await self.panel_repo.get_panel(panel_id)
 
     async def get_default_panel(self) -> Dict[str, Any] | None:
-        return await self.db.get_default_panel()
+        return await self.panel_repo.get_default_panel()
 
     async def resolve_panel_id(self, panel_id: int | None) -> int:
         if panel_id is not None:
             panel = await self.db.get_panel(panel_id)
+            
             if not panel:
                 raise ValueError("selected panel not found.")
             return panel_id
-        default_panel = await self.db.get_default_panel()
+        default_panel = await self.panel_repo.get_default_panel()
         if not default_panel:
             raise ValueError("default panel is not selected.")
         return int(default_panel["id"])
 
     async def toggle_default_panel(self, panel_id: int) -> tuple[bool, bool]:
-        current = await self.db.get_default_panel()
+        current = await self.panel_repo.get_default_panel()
         if current and int(current["id"]) == panel_id:
-            await self.db.clear_default_panel()
+            await self.panel_repo.clear_default_panel()
             return True, False
-        changed = await self.db.set_default_panel(panel_id)
+        changed = await self.panel_repo.set_default_panel(panel_id)
         return changed, True
 
     async def delete_panel(self, panel_id: int) -> bool:
-        return await self.db.delete_panel(panel_id)
+        return await self.panel_repo.delete_panel(panel_id)
 
     async def _with_auth_request(
         self,
@@ -140,20 +148,20 @@ class PanelService:
         request_fn: Callable[[PanelConnection, Dict[str, str] | None], Awaitable[tuple[Dict[str, Any], Dict[str, str]]]],
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         conn = await self._build_conn(panel_id)
-        cookies = await self.db.get_panel_session(panel_id)
+        cookies = await self.panel_repo.get_panel_session(panel_id)
         try:
             body, response_cookies = await request_fn(conn, cookies)
         except XUIAuthError:
             if conn.uses_bearer_token:
                 raise
             cookies = await self.xui.login(conn)
-            await self.db.save_panel_session(panel_id, cookies)
+            await self.panel_repo.save_panel_session(panel_id, cookies)
             body, response_cookies = await request_fn(conn, cookies)
         merged = dict(cookies or {})
         merged.update(response_cookies or {})
         if merged:
-            await self.db.save_panel_session(panel_id, merged)
-        await self.db.set_panel_login_status(panel_id, ok=True, last_error=None)
+            await self.panel_repo.save_panel_session(panel_id, merged)
+        await self.panel_repo.set_panel_login_status(panel_id, ok=True, last_error=None)
         return body, merged
 
     async def _with_auth_get_traffic(
@@ -171,10 +179,10 @@ class PanelService:
                 await self.xui.get_inbounds_list(conn, None)
             else:
                 cookies = await self.xui.login(conn)
-                await self.db.save_panel_session(panel_id, cookies)
-            await self.db.set_panel_login_status(panel_id, ok=True, last_error=None)
+                await self.panel_repo.save_panel_session(panel_id, cookies)
+            await self.panel_repo.set_panel_login_status(panel_id, ok=True, last_error=None)
         except XUIError as exc:
-            await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
+            await self.panel_repo.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
             raise
 
     async def list_inbounds(self, panel_id: int) -> list[Dict[str, Any]]:
@@ -184,7 +192,7 @@ class PanelService:
                 lambda conn, cookies: self.xui.get_inbounds_list(conn, cookies),
             )
         except XUIError as exc:
-            await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
+            await self.panel_repo.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
             raise
         obj = raw.get("obj", [])
         if isinstance(obj, list):
@@ -659,7 +667,10 @@ class PanelService:
                     if rows:
                         return rows
             except json.JSONDecodeError:
-                pass
+                logger.warning(
+                    "failed to decode inbound client settings json",
+                    extra={"panel_id": panel_id, "inbound_id": inbound.get("id")},
+                )
 
         client_stats = inbound.get("clientStats")
         if isinstance(client_stats, list):

@@ -16,7 +16,7 @@ from bot.handlers.admin_finance_pricing import router as pricing_router
 from bot.handlers.admin_finance_today import router as today_router
 from bot.handlers.admin_finance_wallet import router as wallet_router
 
-from .admin_finance_keyboards import _finance_delegates_keyboard
+from .admin_finance_keyboards import _finance_delegated_keyboard, _finance_delegates_keyboard
 from .admin_finance_ops import (
     _answer_sales_report,
     _finance_menu_text_and_keyboard,
@@ -272,5 +272,4 @@ async def finance_my_sales_report(callback: CallbackQuery, settings: Settings, s
         lang=lang,
     )
     await callback.answer()
-
 

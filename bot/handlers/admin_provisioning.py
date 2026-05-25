@@ -13,6 +13,17 @@ from bot.pagination import chunk_buttons, paginate_window
 from bot.services.container import ServiceContainer
 from bot.states import ProvisioningStates
 from bot.utils import build_admin_activity_notice, format_gb, gb_to_bytes, parse_gb_amount
+from .admin_provisioning_support import (
+    candidate_owner_rows as _candidate_owner_rows,
+    create_tg_id_choice_keyboard as _create_tg_id_choice_keyboard,
+    delete_confirm_keyboard as _delete_confirm_keyboard,
+    edit_panel_select_keyboard as _edit_panel_select_keyboard,
+    edit_search_results_keyboard as _edit_search_results_keyboard,
+    inbound_access_keyboard as _inbound_access_keyboard,
+    owner_pick_keyboard as _owner_pick_keyboard,
+    send_config_bundle as _send_config_bundle,
+    truncate_button_text as _truncate_button_text,
+)
 
 from .admin_shared import (
     actor_display_name,
@@ -39,6 +50,21 @@ router = Router(name="admin_provisioning")
 EDIT_SEARCH_RESULTS_PER_PAGE = 20
 
 
+async def _lang_for(source: Message | CallbackQuery, services: ServiceContainer) -> str | None:
+    return await services.handler_context_service.user_lang(source.from_user.id)
+
+
+async def _delegated_profile_for(
+    source: Message | CallbackQuery,
+    *,
+    services: ServiceContainer,
+    is_delegated_admin: bool,
+) -> dict | None:
+    if not is_delegated_admin:
+        return None
+    return await services.handler_context_service.delegated_profile(source.from_user.id)
+
+
 def _delegated_profile_error_text(exc: Exception, lang: str | None) -> str | None:
     text = str(exc).lower()
     mapping = [
@@ -55,22 +81,6 @@ def _delegated_profile_error_text(exc: Exception, lang: str | None) -> str | Non
         if needle in text:
             return t(key, lang)
     return None
-
-
-def _inbound_access_keyboard(rows: list, prefix: str, *, include_panel_name: bool = True) -> InlineKeyboardMarkup:
-    buttons = []
-    for row in rows:
-        text = f"{row.panel_name} | {row.inbound_name}" if include_panel_name else row.inbound_name
-        buttons.append(
-            [
-                inline_button(text, f"{prefix}:{row.panel_id}:{row.inbound_id}")
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def _create_tg_id_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
-    return yes_no_inline_keyboard("pcu:tg_choice:yes", "pcu:tg_choice:no", lang)
 
 
 def _edit_actions_keyboard(
@@ -92,117 +102,6 @@ def _edit_actions_keyboard(
         back_text=back_text,
     )
 
-
-def _truncate_button_text(text: str, max_len: int = 60) -> str:
-    return text if len(text) <= max_len else text[: max_len - 3] + "..."
-
-
-def _edit_panel_select_keyboard(panels: list[dict], lang: str | None = None) -> InlineKeyboardMarkup:
-    return panel_select_keyboard(panels, "pecsp")
-
-
-def _edit_search_results_keyboard(
-    scope: str,
-    clients: list[dict],
-    *,
-    query: str,
-    lang: str | None = None,
-    page: int = 1,
-) -> InlineKeyboardMarkup:
-    page, total_pages, start, end = paginate_window(len(clients), page, EDIT_SEARCH_RESULTS_PER_PAGE)
-    page_buttons: list[InlineKeyboardButton] = []
-    for client in clients[start:end]:
-        email = str(client.get("email") or "").strip()
-        inbound_id = int(client.get("inbound_id") or 0)
-        client_uuid = str(client.get("uuid") or "").strip()
-        if not email or inbound_id <= 0 or not client_uuid:
-            continue
-        prefix = "🟢" if bool(client.get("enabled", True)) else "⚫"
-        page_buttons.append(
-            inline_button(
-                _truncate_button_text(f"{prefix} {email}"),
-                f"pecs:{int(client.get('panel_id') or 0)}:{inbound_id}:{client_uuid}:{scope}:{page}:{query}",
-            )
-        )
-    rows = chunk_buttons(page_buttons, columns=2)
-    if total_pages > 1:
-        nav_row: list[InlineKeyboardButton] = []
-        if page > 1:
-            nav_row.append(
-                inline_button(t("admin_page_prev", lang), f"pecp:{scope}:{page - 1}:{query}")
-            )
-        nav_row.append(inline_button(f"{page}/{total_pages}", NOOP))
-        if page < total_pages:
-            nav_row.append(
-                inline_button(t("admin_page_next", lang), f"pecp:{scope}:{page + 1}:{query}")
-            )
-        rows.append(nav_row)
-    rows.append([inline_button(t("admin_refresh_list", lang), f"pecsr:{scope}:{query}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _delete_confirm_keyboard(panel_id: int, inbound_id: int, client_uuid: str, lang: str | None = None) -> InlineKeyboardMarkup:
-    return yes_no_inline_keyboard(
-        f"pec:delete_yes:{panel_id}:{inbound_id}:{client_uuid}",
-        f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}",
-        lang,
-    )
-
-
-def _owner_pick_keyboard(
-    *,
-    panel_id: int,
-    inbound_id: int,
-    client_uuid: str,
-    owner_rows: list[dict],
-    lang: str | None,
-) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for row in owner_rows:
-        user_id = int(row["telegram_user_id"])
-        title = str(row.get("title") or "").strip()
-        full_name = str(row.get("full_name") or "").strip()
-        username = str(row.get("username") or "").strip()
-        label = title or full_name or (f"@{username}" if username else str(user_id))
-        rows.append([inline_button(_truncate_button_text(label), f"pec:owner_set:{user_id}")])
-    rows.append([inline_button(t("admin_back", lang), f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-async def _candidate_owner_rows(settings: Settings, services: ServiceContainer, lang: str | None) -> list[dict]:
-    delegated_rows = [row for row in await services.db.list_delegated_admins() if int(row.get("is_active") or 0) == 1]
-    root_rows = [
-        {
-            "telegram_user_id": rid,
-            "title": t("admin_root_label", lang),
-            "full_name": t("admin_root_label", lang),
-            "username": "",
-        }
-        for rid in sorted(settings.admin_ids)
-    ]
-    return root_rows + delegated_rows
-
-
-async def _send_config_bundle(
-    message: Message,
-    *,
-    config_name: str,
-    total_gb: float,
-    expiry_days: int,
-    vless_uri: str,
-    sub_url: str,
-    lang: str | None,
-) -> None:
-    await send_config_bundle_card(
-        message,
-        config_name=config_name,
-        total_label=format_gb(gb_to_bytes(total_gb), lang or "fa"),
-        expiry_label=f"{expiry_days} {t('unit_day', lang)}",
-        vless_uri=vless_uri,
-        sub_url=sub_url,
-        lang=lang,
-        filename="client_config_qr.png",
-    )
 
 
 async def _ensure_inbound_access(
@@ -492,7 +391,7 @@ async def start_create_user(
 ) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     panels = await _visible_panels_for_actor(
         actor_user_id=message.from_user.id,
         settings=settings,
@@ -520,6 +419,7 @@ async def start_create_user(
     if not rows:
         await message.answer(t("admin_create_user_no_access", lang))
         return
+    grouped_rows = _group_inbound_rows_by_panel(rows)
     if len(rows) == 1:
         selected = rows[0]
         await state.update_data(create_panel_id=selected.panel_id, create_inbound_id=selected.inbound_id)
@@ -539,7 +439,7 @@ async def pick_create_user_panel(callback: CallbackQuery, state: FSMContext, set
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     try:
         panel_id = int(callback.data.split(":", 2)[2])
     except (ValueError, IndexError):
@@ -567,7 +467,7 @@ async def pick_create_user_inbound(callback: CallbackQuery, state: FSMContext, s
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     try:
         _, _, panel_raw, inbound_raw = callback.data.split(":", 3)
         panel_id = int(panel_raw)
@@ -585,7 +485,7 @@ async def pick_create_user_inbound(callback: CallbackQuery, state: FSMContext, s
 async def create_user_email(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     email = (message.text or "").strip()
     if not email:
         await answer_with_cancel(message, t("bind_config_id_empty", lang), lang=lang)
@@ -599,7 +499,7 @@ async def create_user_email(message: Message, state: FSMContext, settings: Setti
 async def create_user_traffic(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     try:
         gb = parse_gb_amount(message.text or "")
         if gb <= 0:
@@ -608,7 +508,7 @@ async def create_user_traffic(message: Message, state: FSMContext, settings: Set
         await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
         return
     is_delegated_admin = await services.access_service.is_delegated_admin(message.from_user.id)
-    profile = await services.db.get_delegated_admin_profile(message.from_user.id) if is_delegated_admin else None
+    profile = await _delegated_profile_for(message, services=services, is_delegated_admin=is_delegated_admin)
     delegated_limit_error = _delegated_min_create_error(
         is_delegated_admin=is_delegated_admin,
         profile=profile,
@@ -627,7 +527,7 @@ async def create_user_traffic(message: Message, state: FSMContext, settings: Set
 async def create_user_days(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     try:
         days = int((message.text or "").strip())
         if days <= 0:
@@ -636,7 +536,7 @@ async def create_user_days(message: Message, state: FSMContext, settings: Settin
         await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
         return
     is_delegated_admin = await services.access_service.is_delegated_admin(message.from_user.id)
-    profile = await services.db.get_delegated_admin_profile(message.from_user.id) if is_delegated_admin else None
+    profile = await _delegated_profile_for(message, services=services, is_delegated_admin=is_delegated_admin)
     delegated_limit_error = _delegated_min_create_error(
         is_delegated_admin=is_delegated_admin,
         profile=profile,
@@ -658,7 +558,7 @@ async def create_user_days(message: Message, state: FSMContext, settings: Settin
 async def create_user_tg_choice_no(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=None)
         await _finish_create_user(callback.message, state, settings, services, lang, actor_user_id=callback.from_user.id)
@@ -669,7 +569,7 @@ async def create_user_tg_choice_no(callback: CallbackQuery, state: FSMContext, s
 async def create_user_tg_choice_yes(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     await state.set_state(ProvisioningStates.waiting_create_tg_id)
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -681,7 +581,7 @@ async def create_user_tg_choice_yes(callback: CallbackQuery, state: FSMContext, 
 async def create_user_tg_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     normalized = normalize_tg_id((message.text or "").strip())
     if normalized is None:
         await answer_with_cancel(message, t("admin_tgid_invalid", lang), lang=lang)
@@ -738,7 +638,7 @@ async def _finish_create_user(
 async def start_edit_config(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     await state.set_state(ProvisioningStates.waiting_vless_config)
     await answer_with_cancel(message, t("admin_edit_config_prompt", lang), lang=lang)
 
@@ -747,7 +647,7 @@ async def start_edit_config(message: Message, state: FSMContext, settings: Setti
 async def resolve_vless_config(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     raw = (message.text or "").strip()
     if not raw:
         await answer_with_cancel(message, t("admin_edit_config_prompt", lang), lang=lang)
@@ -819,7 +719,7 @@ async def pick_panel_for_edit_search(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -860,7 +760,7 @@ async def paginate_edit_search_results(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -896,7 +796,7 @@ async def refresh_edit_search_results(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -931,7 +831,7 @@ async def select_edit_search_result(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -975,7 +875,7 @@ async def select_edit_search_result(
 async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -1026,7 +926,7 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
 async def edit_config_get_config(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1083,7 +983,7 @@ def _rotate_confirm_keyboard(panel_id: int, inbound_id: int, client_uuid: str, l
 async def edit_config_rotate_ask(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1115,7 +1015,7 @@ async def edit_config_rotate_ask(callback: CallbackQuery, settings: Settings, se
 async def edit_config_rotate_yes(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1196,7 +1096,7 @@ async def edit_config_rotate_yes(callback: CallbackQuery, settings: Settings, se
 async def edit_config_set_tg_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1232,7 +1132,7 @@ async def edit_config_owner_pick(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1280,7 +1180,7 @@ async def edit_config_owner_set(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -1335,7 +1235,7 @@ async def edit_config_owner_set(
 async def edit_config_set_tg_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     raw = (message.text or "").strip()
     tg_id = normalize_tg_id(raw)
     if tg_id is None:
@@ -1381,7 +1281,7 @@ async def edit_config_set_tg_value(message: Message, state: FSMContext, settings
 async def edit_config_show_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -1416,7 +1316,7 @@ async def edit_config_show_detail(callback: CallbackQuery, settings: Settings, s
 async def edit_config_add_traffic_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1449,7 +1349,7 @@ async def edit_config_reset_traffic_ask(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1480,7 +1380,7 @@ async def edit_config_reset_traffic_ask(
 async def edit_config_reset_traffic_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     try:
         gb = parse_gb_amount(message.text or "")
         if gb < 0:
@@ -1540,7 +1440,7 @@ async def edit_config_reset_traffic_value(message: Message, state: FSMContext, s
 async def edit_config_location_menu(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1584,7 +1484,7 @@ async def edit_config_location_menu(callback: CallbackQuery, settings: Settings,
 async def edit_config_location_pick(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None:
         await callback.answer()
         return
@@ -1649,7 +1549,7 @@ async def edit_config_location_pick(callback: CallbackQuery, settings: Settings,
 async def edit_config_add_traffic_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     try:
         gb = parse_gb_amount(message.text or "")
         if gb <= 0:
@@ -1713,7 +1613,7 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
 async def edit_config_add_days_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1744,7 +1644,7 @@ async def edit_config_add_days_prompt(callback: CallbackQuery, state: FSMContext
 async def edit_config_add_days_value(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
+    lang = await _lang_for(message, services)
     try:
         days = int((message.text or "").strip())
         if days <= 0:
@@ -1805,7 +1705,7 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
 async def edit_config_delete_ask(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return
@@ -1834,7 +1734,7 @@ async def edit_config_delete_ask(callback: CallbackQuery, settings: Settings, se
 async def edit_config_delete_yes(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await _lang_for(callback, services)
     if callback.data is None or callback.message is None:
         await callback.answer()
         return

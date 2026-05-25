@@ -36,7 +36,7 @@ def _status_autobind_cache_key(user_id: int) -> str:
 
 
 async def _user_lang(services: ServiceContainer, user_id: int) -> str:
-    return await services.db.get_user_language(user_id)
+    return await services.handler_context_service.user_lang(user_id)
 
 
 async def _is_any_admin(user_id: int, settings: Settings, services: ServiceContainer) -> bool:
@@ -123,12 +123,12 @@ async def _render_status_for_service_row(
         )
         card = format_client_detail(detail, settings.timezone, lang)
     except Exception:
-        pass
+        logger.exception("failed to render live service status card", extra={"service_id": row.get("id")})
 
     if card is None:
         try:
             status_messages = await services.usage_service.get_user_status_messages(int(row["telegram_user_id"]), force_refresh=False)
-            service_rows = await services.db.get_user_services(int(row["telegram_user_id"]))
+            service_rows = await services.common_handler_service.get_user_services(int(row["telegram_user_id"]))
             for idx, service_row in enumerate(service_rows):
                 if int(service_row["id"]) == int(row["id"]) and idx < len(status_messages):
                     card = status_messages[idx]
@@ -155,16 +155,16 @@ async def _send_service_status(
     skipped_autobind_due_to_cooldown = False
     if message.from_user is not None and message.from_user.id == user_id:
         # Keep user identity fresh and try auto-bind on demand, so users do not need /start again.
-        await services.db.upsert_user(
+        await services.common_handler_service.upsert_user(
             telegram_user_id=message.from_user.id,
             full_name=message.from_user.full_name,
             username=message.from_user.username,
             is_admin=_is_admin(message.from_user.id, settings),
         )
-        existing_services = await services.db.get_user_services(user_id)
+        existing_services = await services.common_handler_service.get_user_services(user_id)
         should_autobind = not existing_services
         if not should_autobind:
-            last_run_raw = await services.db.get_app_setting(_status_autobind_cache_key(user_id), "0")
+            last_run_raw = await services.common_handler_service.get_app_setting(_status_autobind_cache_key(user_id), "0")
             try:
                 last_run_ts = int(last_run_raw or "0")
             except ValueError:
@@ -180,13 +180,13 @@ async def _send_service_status(
             except Exception:
                 logger.exception("auto-bind by telegram identity failed", extra={"telegram_user_id": user_id})
             else:
-                await services.db.set_app_setting(_status_autobind_cache_key(user_id), str(int(time.time())))
+                await services.common_handler_service.set_app_setting(_status_autobind_cache_key(user_id), str(int(time.time())))
     try:
         status_messages = await services.usage_service.get_user_status_messages(user_id, force_refresh=force_refresh)
-        service_rows = await services.db.get_user_services(user_id)
+        service_rows = await services.common_handler_service.get_user_services(user_id)
     except Exception as exc:
         logger.exception("failed to fetch status", extra={"telegram_user_id": user_id})
-        await services.db.add_audit_log(
+        await services.common_handler_service.add_audit_log(
             actor_user_id=user_id,
             action="view_status",
             target_type="user_service",
@@ -219,10 +219,10 @@ async def _send_service_status(
         else:
             if rebound > 0:
                 status_messages = await services.usage_service.get_user_status_messages(user_id, force_refresh=force_refresh)
-                service_rows = await services.db.get_user_services(user_id)
+                service_rows = await services.common_handler_service.get_user_services(user_id)
 
     if not status_messages:
-        await services.db.add_audit_log(
+        await services.common_handler_service.add_audit_log(
             actor_user_id=user_id,
             action="view_status",
             target_type="user_service",
@@ -239,7 +239,7 @@ async def _send_service_status(
         )
         return
 
-    await services.db.add_audit_log(
+    await services.common_handler_service.add_audit_log(
         actor_user_id=user_id,
         action="view_status",
         target_type="user_service",
@@ -263,7 +263,7 @@ async def _send_service_status(
 @router.message(CommandStart())
 async def handle_start(message: Message, settings: Settings, services: ServiceContainer) -> None:
     user = message.from_user
-    await services.db.upsert_user(
+    await services.common_handler_service.upsert_user(
         telegram_user_id=user.id,
         full_name=user.full_name,
         username=user.username,
@@ -335,7 +335,7 @@ async def set_language(callback: CallbackQuery, settings: Settings, services: Se
     if lang not in {"fa", "en"}:
         await callback.answer("Invalid language", show_alert=True)
         return
-    await services.db.set_user_language(callback.from_user.id, lang)
+    await services.common_handler_service.set_user_language(callback.from_user.id, lang)
     text_key = "language_changed_fa" if lang == "fa" else "language_changed_en"
     await callback.answer()
     if callback.message is not None:
@@ -379,7 +379,7 @@ async def show_status_service(callback: CallbackQuery, settings: Settings, servi
     except ValueError:
         await callback.answer(t("status_invalid_id", lang), show_alert=True)
         return
-    row = await services.db.get_user_service_by_id(service_id)
+    row = await services.common_handler_service.get_user_service_by_id(service_id)
     if row is None:
         await callback.answer(t("status_not_found", lang), show_alert=True)
         return
@@ -416,7 +416,7 @@ async def rotate_uuid_confirm(callback: CallbackQuery, settings: Settings, servi
     except ValueError:
         await callback.answer(t("status_invalid_id", lang), show_alert=True)
         return
-    row = await services.db.get_user_service_by_id(service_id)
+    row = await services.common_handler_service.get_user_service_by_id(service_id)
     if row is None:
         await callback.answer(t("status_not_found", lang), show_alert=True)
         return
@@ -426,7 +426,7 @@ async def rotate_uuid_confirm(callback: CallbackQuery, settings: Settings, servi
     await callback.answer(t("status_rotating", lang))
     try:
         if callback.message is not None:
-            fresh = await services.db.get_user_service_by_id(service_id) or row
+            fresh = await services.common_handler_service.get_user_service_by_id(service_id) or row
             await callback.message.answer(
                 f"{t('status_rotate_done_bundle', lang)}\n{settings.config_rotate_apply_delay_seconds} {t('unit_second', lang)}"
             )
@@ -481,7 +481,7 @@ async def get_config_from_status(callback: CallbackQuery, settings: Settings, se
     except ValueError:
         await callback.answer(t("status_invalid_id", lang), show_alert=True)
         return
-    row = await services.db.get_user_service_by_id(service_id)
+    row = await services.common_handler_service.get_user_service_by_id(service_id)
     if row is None:
         await callback.answer(t("status_not_found", lang), show_alert=True)
         return

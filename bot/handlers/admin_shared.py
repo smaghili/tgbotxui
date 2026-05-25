@@ -296,6 +296,8 @@ def panels_glass_keyboard(panels: list[dict], lang: str | None = None) -> Inline
         rows.append(
             [
                 inline_button(_panel_button_text(p), f"panel_default_toggle:{p['id']}"),
+                inline_button("🔑", f"panel_access_ask:{p['id']}"),
+                inline_button("🗑", f"panel_delete_ask:{p['id']}"),
                 inline_button("⚙️", f"panel_actions:{p['id']}"),
             ]
         )

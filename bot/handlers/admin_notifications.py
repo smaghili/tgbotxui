@@ -11,11 +11,13 @@ from bot.notification_kinds import (
     ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS,
     visible_notification_kinds,
 )
+from bot.repositories.settings_repository import SettingsRepository
 from bot.services.container import ServiceContainer
 
 from .admin_shared import reject_if_not_any_admin, reject_callback_if_not_any_admin
 
 router = Router(name="admin_notifications")
+settings_repo = SettingsRepository
 
 
 def _trim_btn(text: str, max_len: int = 58) -> str:
@@ -72,8 +74,9 @@ async def open_bot_notification_settings(
 ) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    lang = await services.db.get_user_language(message.from_user.id)
-    disabled = await services.db.get_user_notification_disabled_kinds(message.from_user.id)
+    lang = await services.handler_context_service.user_lang(message.from_user.id)
+    repo = settings_repo(db=services.db)
+    disabled = await repo.get_user_notification_disabled_kinds(message.from_user.id)
     is_root, _, base_visible = await _notification_actor_context(
         telegram_user_id=message.from_user.id,
         settings=settings,
@@ -82,7 +85,7 @@ async def open_bot_notification_settings(
     visible = _merged_visible_notification_kinds(is_root=is_root, base_visible=base_visible)
     root_defaults_disabled: set[str] = set()
     if is_root:
-        root_defaults_disabled = await services.db.get_root_default_enduser_service_alert_disabled_kinds()
+        root_defaults_disabled = await repo.get_root_default_enduser_service_alert_disabled_kinds()
         body = f"{t('notif_menu_title', lang)}\n\n{t('notif_root_enduser_service_defaults_hint', lang)}"
     else:
         body = t("notif_menu_title", lang)
@@ -107,7 +110,7 @@ async def toggle_bot_notification_kind(callback: CallbackQuery, settings: Settin
     if callback.data is None or callback.message is None or callback.from_user is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
+    lang = await services.handler_context_service.user_lang(callback.from_user.id)
     try:
         idx = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
@@ -123,20 +126,21 @@ async def toggle_bot_notification_kind(callback: CallbackQuery, settings: Settin
         await callback.answer(t("notif_toggle_denied", lang), show_alert=True)
         return
     kind = visible[idx]
-    personal_disabled = await services.db.get_user_notification_disabled_kinds(callback.from_user.id)
-    root_defaults_disabled = await services.db.get_root_default_enduser_service_alert_disabled_kinds()
+    repo = settings_repo(db=services.db)
+    personal_disabled = await repo.get_user_notification_disabled_kinds(callback.from_user.id)
+    root_defaults_disabled = await repo.get_root_default_enduser_service_alert_disabled_kinds()
     if is_root and kind in ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS:
         if kind in root_defaults_disabled:
             root_defaults_disabled.discard(kind)
         else:
             root_defaults_disabled.add(kind)
-        await services.db.set_root_default_enduser_service_alert_disabled_kinds(root_defaults_disabled)
+        await repo.set_root_default_enduser_service_alert_disabled_kinds(root_defaults_disabled)
     else:
         if kind in personal_disabled:
             personal_disabled.discard(kind)
         else:
             personal_disabled.add(kind)
-        await services.db.set_user_notification_disabled_kinds(callback.from_user.id, personal_disabled)
+        await repo.set_user_notification_disabled_kinds(callback.from_user.id, personal_disabled)
     await callback.message.edit_reply_markup(
         reply_markup=_notification_prefs_keyboard(
             visible_kinds=visible,

@@ -7,7 +7,10 @@ from typing import Any
 
 from bot.config import Settings
 from bot.db import Database
+from bot.repositories.finance_repository import FinanceRepository
+from bot.repositories.user_repository import UserRepository
 from bot.services.access_service import AccessService
+from bot.services.operation_guard_service import OperationGuardService
 from bot.utils import parse_detail_pairs
 
 
@@ -150,41 +153,32 @@ class FinancialService:
         *,
         db: Database,
         access_service: AccessService,
+        operation_guard: OperationGuardService | None = None,
     ) -> None:
         self.db = db
         self.access_service = access_service
+        self.operation_guard = operation_guard or OperationGuardService()
+        self.finance_repo = FinanceRepository(db=db)
+        self.user_repo = UserRepository(db=db)
+
+    @staticmethod
+    def _wallet_key(user_id: int) -> str:
+        return f"wallet:{int(user_id)}"
+
+    @staticmethod
+    def _pricing_key(user_id: int) -> str:
+        return f"pricing:{int(user_id)}"
 
     async def _default_currency(self) -> str:
         return await self.db.get_app_setting("wallet_currency_label", "تومان") or "تومان"
 
     async def ensure_wallet(self, telegram_user_id: int, *, currency: str | None = None) -> None:
-        assert self.db.conn is not None
         wallet_currency = currency or await self._default_currency()
-        await self.db.conn.execute(
-            """
-            INSERT INTO user_wallets (telegram_user_id, balance, currency, updated_at)
-            VALUES (?, 0, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(telegram_user_id) DO UPDATE SET
-                currency=COALESCE(user_wallets.currency, excluded.currency),
-                updated_at=CURRENT_TIMESTAMP;
-            """,
-            (telegram_user_id, wallet_currency),
-        )
-        await self.db.conn.commit()
+        await self.finance_repo.ensure_wallet(telegram_user_id, currency=wallet_currency)
 
     async def get_wallet(self, telegram_user_id: int) -> dict[str, Any]:
-        assert self.db.conn is not None
         await self.ensure_wallet(telegram_user_id)
-        cur = await self.db.conn.execute(
-            """
-            SELECT telegram_user_id, balance, currency, created_at, updated_at
-            FROM user_wallets
-            WHERE telegram_user_id=?
-            LIMIT 1;
-            """,
-            (telegram_user_id,),
-        )
-        row = await cur.fetchone()
+        row = await self.finance_repo.get_wallet(telegram_user_id)
         return dict(row) if row else {
             "telegram_user_id": telegram_user_id,
             "balance": 0,
@@ -192,29 +186,9 @@ class FinancialService:
         }
 
     async def get_pricing(self, telegram_user_id: int) -> dict[str, Any]:
-        assert self.db.conn is not None
         default_currency = await self._default_currency()
-        profile = await self.db.get_delegated_admin_profile(telegram_user_id)
-        cur = await self.db.conn.execute(
-            """
-            SELECT
-                telegram_user_id,
-                price_per_gb,
-                price_per_day,
-                currency,
-                charge_basis,
-                apply_price_to_past_reports,
-                allocated_pricing_tiers_json,
-                consumed_pricing_tiers_json,
-                created_at,
-                updated_at
-            FROM user_pricing
-            WHERE telegram_user_id=?
-            LIMIT 1;
-            """,
-            (telegram_user_id,),
-        )
-        row = await cur.fetchone()
+        profile = await self.user_repo.get_delegated_profile(telegram_user_id)
+        row = await self.finance_repo.get_pricing(telegram_user_id)
         if row:
             return dict(row)
         return {
@@ -250,74 +224,52 @@ class FinancialService:
         consumed_bytes_snapshot: int | None = None,
         allocated_pricing_tiers_json: str | None = None,
     ) -> dict[str, Any]:
-        assert self.db.conn is not None
-        if price_per_gb < 0 or price_per_day < 0:
-            raise ValueError("pricing values must be zero or positive.")
-        pricing_currency = currency or await self._default_currency()
-        current_pricing = await self.get_pricing(telegram_user_id)
-        apply_to_past = (
-            int(current_pricing.get("apply_price_to_past_reports") or 1)
-            if apply_price_to_past_reports is None
-            else int(bool(apply_price_to_past_reports))
-        )
-        tiers_json = _next_consumed_pricing_tiers_json(
-            current=current_pricing,
-            price_per_gb=price_per_gb,
-            charge_basis=charge_basis,
-            apply_to_past=apply_to_past,
-            consumed_bytes_snapshot=consumed_bytes_snapshot,
-        )
-        allocated_tiers_json = allocated_pricing_tiers_json
-        if allocated_tiers_json is None:
-            allocated_tiers_json = str(current_pricing.get("allocated_pricing_tiers_json") or "[]")
-        await self.db.conn.execute(
-            """
-            INSERT INTO user_pricing (
-                telegram_user_id,
-                price_per_gb,
-                price_per_day,
-                currency,
-                charge_basis,
-                apply_price_to_past_reports,
-                allocated_pricing_tiers_json,
-                consumed_pricing_tiers_json,
-                updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(telegram_user_id) DO UPDATE SET
-                price_per_gb=excluded.price_per_gb,
-                price_per_day=excluded.price_per_day,
-                currency=excluded.currency,
-                charge_basis=excluded.charge_basis,
-                apply_price_to_past_reports=excluded.apply_price_to_past_reports,
-                allocated_pricing_tiers_json=excluded.allocated_pricing_tiers_json,
-                consumed_pricing_tiers_json=excluded.consumed_pricing_tiers_json,
-                updated_at=CURRENT_TIMESTAMP;
-            """,
-            (
-                telegram_user_id,
-                price_per_gb,
-                price_per_day,
-                pricing_currency,
-                charge_basis,
-                apply_to_past,
-                allocated_tiers_json,
-                tiers_json,
-            ),
-        )
-        await self.db.conn.commit()
-        await self.db.add_audit_log(
-            actor_user_id=actor_user_id,
-            action="set_user_pricing",
-            target_type="user_pricing",
-            target_id=str(telegram_user_id),
-            success=True,
-            details=(
-                f"gb={price_per_gb};day={price_per_day};currency={pricing_currency};"
-                f"basis={charge_basis};apply_to_past={apply_to_past};"
-                f"allocated_tiers={str(allocated_tiers_json)[:200]};consumed_tiers={tiers_json[:200]}"
-            ),
-        )
-        return await self.get_pricing(telegram_user_id)
+        async def _apply() -> dict[str, Any]:
+            assert self.db.conn is not None
+            if price_per_gb < 0 or price_per_day < 0:
+                raise ValueError("pricing values must be zero or positive.")
+            pricing_currency = currency or await self._default_currency()
+            current_pricing = await self.get_pricing(telegram_user_id)
+            apply_to_past = (
+                int(current_pricing.get("apply_price_to_past_reports") or 1)
+                if apply_price_to_past_reports is None
+                else int(bool(apply_price_to_past_reports))
+            )
+            tiers_json = _next_consumed_pricing_tiers_json(
+                current=current_pricing,
+                price_per_gb=price_per_gb,
+                charge_basis=charge_basis,
+                apply_to_past=apply_to_past,
+                consumed_bytes_snapshot=consumed_bytes_snapshot,
+            )
+            allocated_tiers_json = allocated_pricing_tiers_json
+            if allocated_tiers_json is None:
+                allocated_tiers_json = str(current_pricing.get("allocated_pricing_tiers_json") or "[]")
+            await self.finance_repo.upsert_pricing(
+                telegram_user_id=telegram_user_id,
+                price_per_gb=price_per_gb,
+                price_per_day=price_per_day,
+                currency=pricing_currency,
+                charge_basis=charge_basis,
+                apply_price_to_past_reports=apply_to_past,
+                allocated_pricing_tiers_json=allocated_tiers_json,
+                consumed_pricing_tiers_json=tiers_json,
+            )
+            await self.db.add_audit_log(
+                actor_user_id=actor_user_id,
+                action="set_user_pricing",
+                target_type="user_pricing",
+                target_id=str(telegram_user_id),
+                success=True,
+                details=(
+                    f"gb={price_per_gb};day={price_per_day};currency={pricing_currency};"
+                    f"basis={charge_basis};apply_to_past={apply_to_past};"
+                    f"allocated_tiers={str(allocated_tiers_json)[:200]};consumed_tiers={tiers_json[:200]}"
+                ),
+            )
+            return await self.get_pricing(telegram_user_id)
+
+        return await self.operation_guard.run(self._pricing_key(telegram_user_id), _apply)
 
     async def get_scope_sales_totals(
         self,
@@ -447,70 +399,18 @@ class FinancialService:
         reference_transaction_id: int | None = None,
         allow_negative_balance: bool = False,
     ) -> dict[str, Any]:
-        assert self.db.conn is not None
-        await self.ensure_wallet(telegram_user_id)
-        await self.db.conn.execute("BEGIN IMMEDIATE;")
-        try:
-            cur = await self.db.conn.execute(
-                """
-                SELECT balance, currency
-                FROM user_wallets
-                WHERE telegram_user_id=?
-                LIMIT 1;
-                """,
-                (telegram_user_id,),
-            )
-            wallet = await cur.fetchone()
-            if wallet is None:
-                raise ValueError("wallet was not found.")
-            current_balance = int(wallet["balance"] or 0)
-            currency = str(wallet["currency"] or await self._default_currency())
-            new_balance = current_balance + delta
-            if new_balance < 0 and not allow_negative_balance:
-                raise ValueError("insufficient wallet balance.")
-            await self.db.conn.execute(
-                """
-                UPDATE user_wallets
-                SET balance=?, updated_at=CURRENT_TIMESTAMP
-                WHERE telegram_user_id=?;
-                """,
-                (new_balance, telegram_user_id),
-            )
-            cur = await self.db.conn.execute(
-                """
-                INSERT INTO wallet_transactions (
-                    telegram_user_id, actor_user_id, amount, balance_after, currency,
-                    kind, operation, status, reference_transaction_id, details, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?);
-                """,
-                (
-                    telegram_user_id,
-                    actor_user_id,
-                    delta,
-                    new_balance,
-                    currency,
-                    kind,
-                    operation,
-                    reference_transaction_id,
-                    details,
-                    json.dumps(metadata or {}, ensure_ascii=False),
-                ),
-            )
-            transaction_id = int(cur.lastrowid)
-            await self.db.conn.commit()
-        except Exception:
-            await self.db.conn.rollback()
-            raise
-        return {
-            "id": transaction_id,
-            "telegram_user_id": telegram_user_id,
-            "amount": delta,
-            "balance_after": new_balance,
-            "currency": currency,
-            "kind": kind,
-            "operation": operation,
-            "details": details,
-        }
+        return await self.finance_repo.apply_balance_change(
+            telegram_user_id=telegram_user_id,
+            actor_user_id=actor_user_id,
+            delta=delta,
+            kind=kind,
+            operation=operation,
+            details=details,
+            metadata=metadata,
+            reference_transaction_id=reference_transaction_id,
+            allow_negative_balance=allow_negative_balance,
+            default_currency=await self._default_currency(),
+        )
 
     async def set_wallet_balance(
         self,
@@ -519,17 +419,20 @@ class FinancialService:
         telegram_user_id: int,
         amount: int,
     ) -> dict[str, Any]:
-        wallet = await self.get_wallet(telegram_user_id)
-        delta = amount - int(wallet["balance"] or 0)
-        return await self._apply_balance_change(
-            telegram_user_id=telegram_user_id,
-            actor_user_id=actor_user_id,
-            delta=delta,
-            kind="manual_set",
-            operation="wallet_set_balance",
-            details=f"set_balance={amount}",
-            allow_negative_balance=True,
-        )
+        async def _apply() -> dict[str, Any]:
+            wallet = await self.get_wallet(telegram_user_id)
+            delta = amount - int(wallet["balance"] or 0)
+            return await self._apply_balance_change(
+                telegram_user_id=telegram_user_id,
+                actor_user_id=actor_user_id,
+                delta=delta,
+                kind="manual_set",
+                operation="wallet_set_balance",
+                details=f"set_balance={amount}",
+                allow_negative_balance=True,
+            )
+
+        return await self.operation_guard.run(self._wallet_key(telegram_user_id), _apply)
 
     async def adjust_wallet_balance(
         self,
@@ -538,18 +441,25 @@ class FinancialService:
         telegram_user_id: int,
         delta: int,
         details: str | None = None,
+        allow_negative_balance: bool = True,
+        operation: str = "wallet_adjust_balance",
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if delta == 0:
-            raise ValueError("wallet change amount cannot be zero.")
-        return await self._apply_balance_change(
-            telegram_user_id=telegram_user_id,
-            actor_user_id=actor_user_id,
-            delta=delta,
-            kind="manual_adjust",
-            operation="wallet_adjust_balance",
-            details=details or f"delta={delta}",
-            allow_negative_balance=True,
-        )
+        async def _apply() -> dict[str, Any]:
+            if delta == 0:
+                raise ValueError("wallet change amount cannot be zero.")
+            return await self._apply_balance_change(
+                telegram_user_id=telegram_user_id,
+                actor_user_id=actor_user_id,
+                delta=delta,
+                kind="manual_adjust",
+                operation=operation,
+                details=details or f"delta={delta}",
+                metadata=metadata,
+                allow_negative_balance=allow_negative_balance,
+            )
+
+        return await self.operation_guard.run(self._wallet_key(telegram_user_id), _apply)
 
     async def ensure_delegated_actor_active(
         self,
@@ -631,94 +541,98 @@ class FinancialService:
         details: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        profile = await self.validate_operation_limits(
-            actor_user_id=actor_user_id,
-            settings=settings,
-            traffic_gb=traffic_gb,
-            expiry_days=expiry_days,
-        )
-        if profile is None:
-            return None
-        charge = await self.calculate_charge(
-            actor_user_id,
-            panel_id=panel_id,
-            traffic_gb=traffic_gb,
-            expiry_days=expiry_days,
-        )
-        # For consumed-basis delegates, billing is computed from real usage reports,
-        # so operation-time wallet deductions must be skipped.
-        if str(charge.get("charge_basis") or "allocated") == "consumed":
-            return None
-        amount = int(charge["amount"] or 0)
-        if amount <= 0:
-            return None
-        allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
-        actor_tx = await self._apply_balance_change(
-            telegram_user_id=actor_user_id,
-            actor_user_id=actor_user_id,
-            delta=-amount,
-            kind="charge",
-            operation=operation,
-            details=details or f"traffic_gb={traffic_gb};expiry_days={expiry_days}",
-            metadata={
-                **(metadata or {}),
-                "traffic_gb": max(0.0, float(traffic_gb)),
-                "expiry_days": max(0, expiry_days),
-                "price_per_gb": int(charge["price_per_gb"] or 0),
-                "price_per_day": int(charge["price_per_day"] or 0),
-            },
-            allow_negative_balance=allow_negative_wallet,
-        )
-        related_transaction_ids: list[int] = []
-        try:
-            for upstream_user_id in await self._upstream_charge_targets(actor_user_id=actor_user_id, settings=settings):
-                upstream_charge = await self.calculate_charge(
-                    upstream_user_id,
-                    panel_id=panel_id,
-                    traffic_gb=traffic_gb,
-                    expiry_days=expiry_days,
-                )
-                if str(upstream_charge.get("charge_basis") or "allocated") == "consumed":
-                    continue
-                upstream_amount = int(upstream_charge.get("amount") or 0)
-                if upstream_amount <= 0:
-                    continue
-                upstream_profile = await self.db.get_delegated_admin_profile(upstream_user_id)
-                allow_negative_upstream = (
-                    True
-                    if self.access_service.is_root_admin(upstream_user_id, settings)
-                    else int(upstream_profile.get("allow_negative_wallet") or 0) == 1
-                )
-                upstream_tx = await self._apply_balance_change(
-                    telegram_user_id=upstream_user_id,
-                    actor_user_id=actor_user_id,
-                    delta=-upstream_amount,
-                    kind="charge",
-                    operation=f"wholesale_{operation}",
-                    details=(
-                        f"source_actor={actor_user_id};traffic_gb={traffic_gb};"
-                        f"expiry_days={expiry_days}"
-                    ),
-                    metadata={
-                        "source_actor_user_id": actor_user_id,
-                        "traffic_gb": max(0.0, float(traffic_gb)),
-                        "expiry_days": max(0, expiry_days),
-                        "price_per_gb": int(upstream_charge.get("price_per_gb") or 0),
-                        "price_per_day": int(upstream_charge.get("price_per_day") or 0),
-                    },
-                    allow_negative_balance=allow_negative_upstream,
-                )
-                related_transaction_ids.append(int(upstream_tx["id"]))
-        except Exception:
-            await self.refund_transaction(
+        async def _apply() -> dict[str, Any] | None:
+            profile = await self.validate_operation_limits(
                 actor_user_id=actor_user_id,
-                transaction_id=int(actor_tx["id"]),
-                reason=f"refund:upstream_charge_failed:{operation}",
+                settings=settings,
+                traffic_gb=traffic_gb,
+                expiry_days=expiry_days,
             )
-            raise
-        if related_transaction_ids:
-            actor_tx["related_transaction_ids"] = related_transaction_ids
-        return actor_tx
+            if profile is None:
+                return None
+            charge = await self.calculate_charge(
+                actor_user_id,
+                panel_id=panel_id,
+                traffic_gb=traffic_gb,
+                expiry_days=expiry_days,
+            )
+            if str(charge.get("charge_basis") or "allocated") == "consumed":
+                return None
+            amount = int(charge["amount"] or 0)
+            if amount <= 0:
+                return None
+            allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
+            actor_tx = await self._apply_balance_change(
+                telegram_user_id=actor_user_id,
+                actor_user_id=actor_user_id,
+                delta=-amount,
+                kind="charge",
+                operation=operation,
+                details=details or f"traffic_gb={traffic_gb};expiry_days={expiry_days}",
+                metadata={
+                    **(metadata or {}),
+                    "traffic_gb": max(0.0, float(traffic_gb)),
+                    "expiry_days": max(0, expiry_days),
+                    "price_per_gb": int(charge["price_per_gb"] or 0),
+                    "price_per_day": int(charge["price_per_day"] or 0),
+                },
+                allow_negative_balance=allow_negative_wallet,
+            )
+            related_transaction_ids: list[int] = []
+            try:
+                for upstream_user_id in await self._upstream_charge_targets(actor_user_id=actor_user_id, settings=settings):
+                    upstream_charge = await self.calculate_charge(
+                        upstream_user_id,
+                        panel_id=panel_id,
+                        traffic_gb=traffic_gb,
+                        expiry_days=expiry_days,
+                    )
+                    if str(upstream_charge.get("charge_basis") or "allocated") == "consumed":
+                        continue
+                    upstream_amount = int(upstream_charge.get("amount") or 0)
+                    if upstream_amount <= 0:
+                        continue
+                    upstream_profile = await self.db.get_delegated_admin_profile(upstream_user_id)
+                    allow_negative_upstream = (
+                        True
+                        if self.access_service.is_root_admin(upstream_user_id, settings)
+                        else int(upstream_profile.get("allow_negative_wallet") or 0) == 1
+                    )
+                    upstream_tx = await self._apply_balance_change(
+                        telegram_user_id=upstream_user_id,
+                        actor_user_id=actor_user_id,
+                        delta=-upstream_amount,
+                        kind="charge",
+                        operation=f"wholesale_{operation}",
+                        details=(
+                            f"source_actor={actor_user_id};traffic_gb={traffic_gb};"
+                            f"expiry_days={expiry_days}"
+                        ),
+                        metadata={
+                            "source_actor_user_id": actor_user_id,
+                            "traffic_gb": max(0.0, float(traffic_gb)),
+                            "expiry_days": max(0, expiry_days),
+                            "price_per_gb": int(upstream_charge.get("price_per_gb") or 0),
+                            "price_per_day": int(upstream_charge.get("price_per_day") or 0),
+                        },
+                        allow_negative_balance=allow_negative_upstream,
+                    )
+                    related_transaction_ids.append(int(upstream_tx["id"]))
+            except Exception:
+                await self.refund_transaction(
+                    actor_user_id=actor_user_id,
+                    transaction_id=int(actor_tx["id"]),
+                    reason=f"refund:upstream_charge_failed:{operation}",
+                )
+                raise
+            if related_transaction_ids:
+                actor_tx["related_transaction_ids"] = related_transaction_ids
+            return actor_tx
+
+        lock_keys = [self._wallet_key(actor_user_id)]
+        for upstream_user_id in await self._upstream_charge_targets(actor_user_id=actor_user_id, settings=settings):
+            lock_keys.append(self._wallet_key(upstream_user_id))
+        return await self.operation_guard.run_many(lock_keys, _apply)
 
     async def refund_transaction(
         self,
@@ -727,33 +641,13 @@ class FinancialService:
         transaction_id: int,
         reason: str,
     ) -> dict[str, Any]:
-        assert self.db.conn is not None
-        cur = await self.db.conn.execute(
-            """
-            SELECT id, telegram_user_id, amount, operation
-            FROM wallet_transactions
-            WHERE id=?
-            LIMIT 1;
-            """,
-            (transaction_id,),
-        )
-        original = await cur.fetchone()
+        original = await self.finance_repo.get_transaction(transaction_id)
         if original is None:
             raise ValueError("wallet transaction was not found.")
         original_amount = int(original["amount"] or 0)
         if original_amount >= 0:
             raise ValueError("only debit transactions can be refunded.")
-        cur = await self.db.conn.execute(
-            """
-            SELECT id
-            FROM wallet_transactions
-            WHERE reference_transaction_id=? AND kind='refund'
-            LIMIT 1;
-            """,
-            (transaction_id,),
-        )
-        refunded = await cur.fetchone()
-        if refunded is not None:
+        if await self.finance_repo.has_refund(transaction_id):
             raise ValueError("wallet transaction was already refunded.")
         return await self._apply_balance_change(
             telegram_user_id=int(original["telegram_user_id"]),
@@ -766,21 +660,9 @@ class FinancialService:
         )
 
     async def get_sales_report(self, telegram_user_id: int) -> dict[str, Any]:
-        assert self.db.conn is not None
         wallet = await self.get_wallet(telegram_user_id)
         pricing = await self.get_pricing(telegram_user_id)
-        cur = await self.db.conn.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN kind='charge' THEN ABS(amount) ELSE 0 END), 0) AS total_sales,
-                COALESCE(SUM(CASE WHEN kind='refund' THEN amount ELSE 0 END), 0) AS total_refunds,
-                COALESCE(COUNT(*), 0) AS total_transactions
-            FROM wallet_transactions
-            WHERE telegram_user_id=?;
-            """,
-            (telegram_user_id,),
-        )
-        row = await cur.fetchone()
+        row = await self.finance_repo.get_sales_report(telegram_user_id)
         return {
             "wallet": wallet,
             "pricing": pricing,
@@ -790,35 +672,8 @@ class FinancialService:
         }
 
     async def get_overall_report(self) -> dict[str, Any]:
-        assert self.db.conn is not None
         currency = await self._default_currency()
-        cur = await self.db.conn.execute(
-            """
-            SELECT
-                COALESCE(COUNT(*), 0) AS wallets_count,
-                COALESCE(SUM(balance), 0) AS total_balance
-            FROM user_wallets;
-            """
-        )
-        wallets = await cur.fetchone()
-        cur = await self.db.conn.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN kind='charge' THEN ABS(amount) ELSE 0 END), 0) AS total_sales,
-                COALESCE(SUM(CASE WHEN kind='refund' THEN amount ELSE 0 END), 0) AS total_refunds,
-                COALESCE(COUNT(CASE WHEN kind='charge' THEN 1 END), 0) AS sales_count,
-                COALESCE(COUNT(*), 0) AS total_transactions
-            FROM wallet_transactions;
-            """
-        )
-        tx = await cur.fetchone()
-        cur = await self.db.conn.execute(
-            """
-            SELECT COALESCE(COUNT(*), 0) AS pricing_profiles
-            FROM user_pricing;
-            """
-        )
-        pricing = await cur.fetchone()
+        wallets, tx, pricing = await self.finance_repo.get_overall_report()
         return {
             "currency": currency,
             "wallets_count": int(wallets["wallets_count"] or 0),
