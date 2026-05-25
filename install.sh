@@ -254,6 +254,32 @@ prepare_update_metadata() {
   fi
 }
 
+prepare_remote_update_check() {
+  if [[ "${INSTALL_MODE}" != "update" ]]; then
+    return
+  fi
+
+  if project_files_present; then
+    return
+  fi
+
+  local current_revision=""
+  current_revision="$(read_state_value "source_revision")"
+  if [[ -z "${current_revision}" ]]; then
+    return
+  fi
+
+  REMOTE_COMMIT="$(remote_head_commit || true)"
+  if [[ -n "${REMOTE_COMMIT}" ]]; then
+    PROJECT_REVISION="${REMOTE_COMMIT}"
+    PROJECT_SOURCE="github:${REPO_SLUG}@${REMOTE_COMMIT}"
+    if [[ "${current_revision}" == "${REMOTE_COMMIT}" ]]; then
+      echo "No upstream code changes detected for ${REPO_SLUG}@${REPO_BRANCH}."
+      exit 0
+    fi
+  fi
+}
+
 detect_existing_install() {
   [[ -d "${APP_DIR}" && ( -f "${APP_DIR}/main.py" || -f "${APP_DIR}/.env" || -d "${APP_DIR}/data" ) ]]
 }
@@ -653,6 +679,7 @@ print_report() {
 
 prompt_install_mode
 
+prepare_remote_update_check
 ensure_project_root
 prepare_update_metadata
 
