@@ -2,13 +2,20 @@
 
 import logging
 import time
+import asyncio
 from typing import List
 
 from aiogram import Bot
 
 from bot.db import Database
 from bot.i18n import t
-from bot.metrics import PANEL_COUNT, SYNC_RUNS, USER_SERVICE_COUNT, USER_STATUS_REQUESTS
+from bot.metrics import (
+    PANEL_COUNT,
+    SYNC_RUNS,
+    SYNC_STAGE_LATENCY_SECONDS,
+    USER_SERVICE_COUNT,
+    USER_STATUS_REQUESTS,
+)
 from bot.notification_kinds import ROOT_GLOBAL_ENDUSER_NOTIFICATION_KINDS
 from bot.services.panel_service import PanelService
 from bot.services.xui_client import XUIError
@@ -21,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class UsageService:
+    SYNC_CONCURRENCY = 8
     def __init__(
         self,
         db: Database,
@@ -847,6 +855,8 @@ class UsageService:
             return
         inbound_names_cache: dict[tuple[int, int], str] = {}
         panel_names_cache: dict[int, str] = {}
+        panel_inbounds_cache: dict[int, list[dict]] = {}
+        owner_map_cache: dict[int, dict[tuple[int, str], int]] = {}
 
         for access in access_rows:
             admin_user_id = int(access["telegram_user_id"])
@@ -855,14 +865,47 @@ class UsageService:
             panel_name = str(access.get("panel_name") or panel_id)
             panel_names_cache[panel_id] = panel_name
             try:
-                clients = await self.panel_service.list_inbound_clients(
-                    panel_id,
-                    inbound_id,
-                    owner_admin_user_id=admin_user_id,
-                )
+                inbounds = panel_inbounds_cache.get(panel_id)
+                if inbounds is None:
+                    inbounds = await self.panel_service.list_inbounds(panel_id)
+                    panel_inbounds_cache[panel_id] = inbounds
+                owner_map = owner_map_cache.get(panel_id)
+                if owner_map is None:
+                    owner_map = await self.db.list_client_owners_for_panel(panel_id)
+                    owner_map_cache[panel_id] = owner_map
+                inbound = next((row for row in inbounds if int(row.get("id") or 0) == inbound_id), None)
+                if inbound is None:
+                    continue
+                clients = []
+                for client in self.panel_service._extract_inbound_clients(inbound):
+                    client_uuid = str(client.get("uuid") or client.get("id") or "").strip()
+                    client_email = str(client.get("email") or "").strip()
+                    comment = str(client.get("comment") or "").strip()
+                    if not client_uuid or not client_email:
+                        continue
+                    owner_id = self.panel_service._owner_id_for_client(
+                        mapped_owner_id=owner_map.get((inbound_id, client_uuid)),
+                        comment=comment,
+                    )
+                    if owner_id != admin_user_id:
+                        continue
+                    used_bytes = int(client.get("up") or 0) + int(client.get("down") or 0)
+                    total_bytes = int(client.get("totalGB") or client.get("total") or 0)
+                    expiry = client.get("expiryTime") or client.get("expiry")
+                    if isinstance(expiry, int) and expiry > 10_000_000_000:
+                        expiry = expiry // 1000
+                    clients.append(
+                        {
+                            "uuid": client_uuid,
+                            "email": client_email,
+                            "used": used_bytes,
+                            "total": total_bytes,
+                            "expiry": int(expiry or 0),
+                        }
+                    )
             except Exception:
                 logger.exception(
-                    "failed to list delegated admin inbound clients",
+                    "failed to prefetch delegated admin inbound clients",
                     extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id},
                 )
                 continue
@@ -880,18 +923,11 @@ class UsageService:
                 client_uuid = str(client.get("uuid") or "").strip()
                 if not client_uuid:
                     continue
-                try:
-                    detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-                except Exception:
-                    logger.exception(
-                        "failed to fetch delegated client detail",
-                        extra={"telegram_user_id": admin_user_id, "panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
-                    )
-                    continue
-                total_bytes = int(detail.get("total") or 0)
-                used_bytes = int(detail.get("used") or 0)
+                total_bytes = int(client.get("total") or 0)
+                used_bytes = int(client.get("used") or 0)
+                expiry_at = int(client.get("expiry") or 0)
                 traffic_state = self._delegated_alert_state(total_bytes=total_bytes, used_bytes=used_bytes)
-                expiry_state = self._delegated_expiry_alert_state(expire_at=detail.get("expiry"))
+                expiry_state = self._delegated_expiry_alert_state(expire_at=expiry_at)
                 old_traffic_state, old_expiry_state = await self.db.get_delegated_admin_client_alert_states(
                     delegated_admin_user_id=admin_user_id,
                     panel_id=panel_id,
@@ -907,7 +943,7 @@ class UsageService:
                     if traffic_state == "depleted":
                         text = (
                             "هشدار سرویس:\n"
-                            f"حجم کاربر {detail.get('email')} به پایان رسیده است.\n"
+                            f"حجم کاربر {client.get('email')} به پایان رسیده است.\n"
                             f"پنل: {panel_name}\n"
                             f"اینباند: {inbound_name}\n"
                             "حجم باقی‌مانده: 0"
@@ -915,7 +951,7 @@ class UsageService:
                     else:
                         text = (
                             "هشدار سرویس:\n"
-                            f"کاربر {detail.get('email')} کمتر از 100 مگابایت حجم دارد.\n"
+                            f"کاربر {client.get('email')} کمتر از 100 مگابایت حجم دارد.\n"
                             f"پنل: {panel_name}\n"
                             f"اینباند: {inbound_name}\n"
                             f"حجم باقی‌مانده: {format_gb(remaining, 'fa')}"
@@ -933,19 +969,19 @@ class UsageService:
                     if expiry_state == "expired":
                         text = (
                             "هشدار انقضا:\n"
-                            f"زمان کاربر {detail.get('email')} به پایان رسیده است.\n"
+                            f"زمان کاربر {client.get('email')} به پایان رسیده است.\n"
                             f"پنل: {panel_name}\n"
                             f"اینباند: {inbound_name}\n"
-                            f"تاریخ پایان: {to_local_date(detail.get('expiry'), self.timezone, 'fa')}"
+                            f"تاریخ پایان: {to_local_date(expiry_at, self.timezone, 'fa')}"
                         )
                     else:
                         text = (
                             "هشدار انقضا:\n"
-                            f"کمتر از 1 روز تا پایان کاربر {detail.get('email')} باقی مانده است.\n"
+                            f"کمتر از 1 روز تا پایان کاربر {client.get('email')} باقی مانده است.\n"
                             f"پنل: {panel_name}\n"
                             f"اینباند: {inbound_name}\n"
-                            f"تاریخ پایان: {to_local_date(detail.get('expiry'), self.timezone, 'fa')}\n"
-                            f"زمان باقی‌مانده: {relative_remaining_time(detail.get('expiry'), self.timezone, 'fa')}"
+                            f"تاریخ پایان: {to_local_date(expiry_at, self.timezone, 'fa')}\n"
+                            f"زمان باقی‌مانده: {relative_remaining_time(expiry_at, self.timezone, 'fa')}"
                         )
                     expiry_kind = (
                         "bot_notify_delegated_panel_expiry_expired"
@@ -980,24 +1016,40 @@ class UsageService:
     async def refresh_all_services(self) -> None:
         services = await self.db.get_all_user_services()
         had_error = False
-        for row in services:
-            try:
-                await self._sync_service_row(row)
-            except Exception:
-                had_error = True
-                logger.exception("failed to sync service", extra={"service_id": row.get("id")})
+        semaphore = asyncio.Semaphore(self.SYNC_CONCURRENCY)
+
+        async def _sync_one(row: dict) -> bool:
+            async with semaphore:
+                try:
+                    await self._sync_service_row(row)
+                except Exception:
+                    logger.exception("failed to sync service", extra={"service_id": row.get("id")})
+                    return False
+                return True
+
+        started_sync = time.perf_counter()
+        results = await asyncio.gather(*[_sync_one(row) for row in services], return_exceptions=False)
+        SYNC_STAGE_LATENCY_SECONDS.labels(stage="services").observe(time.perf_counter() - started_sync)
+        if not all(results):
+            had_error = True
         try:
+            started = time.perf_counter()
             await self._scan_delegated_admin_alerts()
+            SYNC_STAGE_LATENCY_SECONDS.labels(stage="delegated_alerts").observe(time.perf_counter() - started)
         except Exception:
             had_error = True
             logger.exception("failed to scan delegated admin alerts")
         try:
+            started = time.perf_counter()
             await self.cleanup_depleted_clients()
+            SYNC_STAGE_LATENCY_SECONDS.labels(stage="cleanup_depleted").observe(time.perf_counter() - started)
         except Exception:
             had_error = True
             logger.exception("failed to cleanup depleted clients")
         try:
+            started = time.perf_counter()
             await self.flush_pending_admin_activity_notifications()
+            SYNC_STAGE_LATENCY_SECONDS.labels(stage="flush_admin_notifications").observe(time.perf_counter() - started)
         except Exception:
             had_error = True
             logger.exception("failed to flush admin activity notifications")

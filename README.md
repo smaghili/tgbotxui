@@ -171,6 +171,17 @@ python main.py
 - `GET /healthz`
 - `GET /metrics`
 
+متریک‌های مهم عملکرد:
+
+- `tgbot_handler_latency_seconds`
+- `tgbot_sync_stage_latency_seconds`
+
+بنچمارک سبک sync (برای مقایسه قبل/بعد بهینه‌سازی):
+
+```bash
+PYTHONPATH=. python3 scripts/benchmark_usage_sync.py --rounds 5
+```
+
 ## ساختار پروژه
 
 - `main.py`: نقطه شروع برنامه

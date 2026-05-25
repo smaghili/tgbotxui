@@ -13,6 +13,7 @@ from bot.db import Database
 from bot.handlers import admin, common
 from bot.middlewares.language_context import LanguageContextMiddleware
 from bot.middlewares.menu_state_reset import MenuStateResetMiddleware
+from bot.middlewares.perf_metrics import PerformanceMetricsMiddleware
 from bot.metrics import create_metrics_app
 from bot.middlewares.rate_limit import AdminRateLimitMiddleware
 from bot.observability import configure_logging
@@ -77,6 +78,8 @@ async def run(settings: Settings) -> None:
     )
 
     dp = Dispatcher()
+    dp.message.middleware(PerformanceMetricsMiddleware())
+    dp.callback_query.middleware(PerformanceMetricsMiddleware())
     dp.message.middleware(LanguageContextMiddleware())
     dp.message.middleware(MenuStateResetMiddleware())
     dp.callback_query.middleware(LanguageContextMiddleware())
@@ -136,6 +139,8 @@ async def run(settings: Settings) -> None:
         if bot is not None:
             with suppress(Exception):
                 await bot.session.close()
+        with suppress(Exception):
+            await xui.close()
         usage_service.attach_bot(None)
         with suppress(Exception):
             await db.close()

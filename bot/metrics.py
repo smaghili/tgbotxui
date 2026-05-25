@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from aiohttp import web
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 XUI_REQUESTS = Counter("tgbot_xui_requests_total", "Total x-ui API requests", ["endpoint", "status"])
 XUI_ERRORS = Counter("tgbot_xui_errors_total", "Total x-ui API errors", ["type"])
@@ -11,6 +11,18 @@ USER_STATUS_REQUESTS = Counter(
 )
 PANEL_COUNT = Gauge("tgbot_panels_count", "Total registered panels")
 USER_SERVICE_COUNT = Gauge("tgbot_user_services_count", "Total bound user services")
+HANDLER_LATENCY_SECONDS = Histogram(
+    "tgbot_handler_latency_seconds",
+    "Telegram handler latency in seconds",
+    ["kind", "name"],
+    buckets=(0.01, 0.03, 0.05, 0.1, 0.3, 0.5, 1, 2, 5, 10, 20, 30),
+)
+SYNC_STAGE_LATENCY_SECONDS = Histogram(
+    "tgbot_sync_stage_latency_seconds",
+    "Background sync stage latency in seconds",
+    ["stage"],
+    buckets=(0.05, 0.1, 0.3, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
+)
 
 
 async def healthz(_: web.Request) -> web.Response:
