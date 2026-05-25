@@ -30,6 +30,7 @@ SOURCE_CHANGED=1
 SHOULD_INSTALL_SYSTEM_DEPS=1
 REMOTE_COMMIT=""
 PROJECT_REVISION="local"
+NO_UPDATE_MESSAGE=""
 
 cleanup() {
   if [[ -n "${TEMP_PROJECT_DIR}" && -d "${TEMP_PROJECT_DIR}" ]]; then
@@ -121,6 +122,25 @@ remote_head_commit() {
     return
   fi
   curl -fsSL "${api_url}" 2>/dev/null | sed -n 's/.*"sha": "\([a-f0-9]\{40\}\)".*/\1/p' | head -n 1
+}
+
+project_manifest_hash() {
+  tar -cf - \
+    --exclude="${STATE_DIR_NAME}" \
+    --exclude="./${STATE_DIR_NAME}" \
+    --exclude="backups" \
+    --exclude="./backups" \
+    --exclude="data" \
+    --exclude="./data" \
+    --exclude=".venv" \
+    --exclude="./.venv" \
+    --exclude="__pycache__" \
+    --exclude="./__pycache__" \
+    --exclude=".pytest_cache" \
+    --exclude="./.pytest_cache" \
+    --exclude=".env" \
+    --exclude="./.env" \
+    -C "${APP_DIR}" . | sha256sum | awk '{print $1}'
 }
 
 has_socks_proxy() {
@@ -233,7 +253,8 @@ prepare_update_metadata() {
     if [[ -n "${REMOTE_COMMIT}" ]]; then
       PROJECT_REVISION="${REMOTE_COMMIT}"
       if [[ -n "${current_revision}" && "${current_revision}" == "${REMOTE_COMMIT}" ]]; then
-        echo "No upstream code changes detected for ${REPO_SLUG}@${REPO_BRANCH}."
+        echo "TgBot is already up to date."
+        echo "Current revision: ${current_revision}"
         exit 0
       fi
     fi
@@ -274,7 +295,8 @@ prepare_remote_update_check() {
     PROJECT_REVISION="${REMOTE_COMMIT}"
     PROJECT_SOURCE="github:${REPO_SLUG}@${REMOTE_COMMIT}"
     if [[ "${current_revision}" == "${REMOTE_COMMIT}" ]]; then
-      echo "No upstream code changes detected for ${REPO_SLUG}@${REPO_BRANCH}."
+      echo "TgBot is already up to date."
+      echo "Current revision: ${current_revision}"
       exit 0
     fi
   fi
@@ -371,7 +393,14 @@ sync_project_files() {
       "${PROJECT_ROOT}/" "${APP_DIR}/"
   fi
 
-  chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}"
+  chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}/bot" "${APP_DIR}/scripts" "${APP_DIR}/tests" "${APP_DIR}/tools" 2>/dev/null || true
+  chown "${BOT_USER}:${BOT_USER}" \
+    "${APP_DIR}/main.py" \
+    "${APP_DIR}/install.sh" \
+    "${APP_DIR}/requirements.txt" \
+    "${APP_DIR}/README.md" \
+    "${APP_DIR}/pytest.ini" \
+    "${APP_DIR}/.env.example" 2>/dev/null || true
 }
 
 detect_update_changes() {
@@ -393,14 +422,22 @@ detect_update_changes() {
     REQUIREMENTS_CHANGED=1
   fi
 
-  local current_source_hash=""
-  local new_source_hash=""
-  current_source_hash="$(read_state_value "source.sha256")"
-  new_source_hash="$(tar -cf - --exclude="${STATE_DIR_NAME}" -C "${APP_DIR}" . | sha256sum | awk '{print $1}')"
-  if [[ -n "${current_source_hash}" && "${current_source_hash}" == "${new_source_hash}" ]]; then
+  local current_revision=""
+  current_revision="$(read_state_value "source_revision")"
+  if [[ -n "${REMOTE_COMMIT}" && -n "${current_revision}" && "${current_revision}" == "${REMOTE_COMMIT}" ]]; then
     SOURCE_CHANGED=0
-  else
+  elif [[ -n "${REMOTE_COMMIT}" ]]; then
     SOURCE_CHANGED=1
+  else
+    local current_source_hash=""
+    local new_source_hash=""
+    current_source_hash="$(read_state_value "source.sha256")"
+    new_source_hash="$(project_manifest_hash)"
+    if [[ -n "${current_source_hash}" && "${current_source_hash}" == "${new_source_hash}" ]]; then
+      SOURCE_CHANGED=0
+    else
+      SOURCE_CHANGED=1
+    fi
   fi
 
   SHOULD_INSTALL_SYSTEM_DEPS="${REQUIREMENTS_CHANGED}"
@@ -519,7 +556,7 @@ build_virtualenv() {
 
 persist_install_state() {
   write_state_value "requirements.sha256" "$(sha256_file "${APP_DIR}/requirements.txt")"
-  write_state_value "source.sha256" "$(tar -cf - --exclude="${STATE_DIR_NAME}" -C "${APP_DIR}" . | sha256sum | awk '{print $1}')"
+  write_state_value "source.sha256" "$(project_manifest_hash)"
   write_state_value "source_revision" "${PROJECT_REVISION}"
   chown -R "${BOT_USER}:${BOT_USER}" "$(state_dir)"
 }
