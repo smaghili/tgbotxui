@@ -42,12 +42,14 @@ trap cleanup EXIT
 usage() {
   cat <<'EOF'
 Usage:
-  sudo bash install.sh [install|update|auto|help]
+  sudo bash install.sh [install|update|auto|menu|uninstall|help]
 
 Modes:
   install  Fresh install
   update   Update existing install and preserve .env/data
   auto     Detect existing install and ask interactively
+  menu     Open interactive management menu
+  uninstall Remove bot service and installed files
   help     Show this help
 
 Environment overrides:
@@ -66,6 +68,12 @@ case "${1:-auto}" in
   auto|"")
     INSTALL_MODE="auto"
     ;;
+  menu)
+    INSTALL_MODE="menu"
+    ;;
+  uninstall)
+    INSTALL_MODE="uninstall"
+    ;;
   help|-h|--help)
     usage
     exit 0
@@ -80,6 +88,30 @@ esac
 log_step() {
   echo
   echo "[$1] $2"
+}
+
+service_running() {
+  systemctl is-active --quiet "${SERVICE_NAME}"
+}
+
+service_enabled() {
+  systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null
+}
+
+service_state_label() {
+  if service_running; then
+    echo "Running"
+  else
+    echo "Stopped"
+  fi
+}
+
+service_autostart_label() {
+  if service_enabled; then
+    echo "Yes"
+  else
+    echo "No"
+  fi
 }
 
 state_dir() {
@@ -109,6 +141,15 @@ write_state_value() {
   local value="$2"
   ensure_state_dir
   printf '%s' "${value}" >"$(state_file "${name}")"
+}
+
+install_management_command() {
+  cat > /usr/local/bin/tgbot <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec bash "${APP_DIR}/install.sh" menu "\$@"
+EOF
+  chmod 755 /usr/local/bin/tgbot
 }
 
 sha256_file() {
@@ -304,6 +345,105 @@ prepare_remote_update_check() {
 
 detect_existing_install() {
   [[ -d "${APP_DIR}" && ( -f "${APP_DIR}/main.py" || -f "${APP_DIR}/.env" || -d "${APP_DIR}/data" ) ]]
+}
+
+uninstall_bot() {
+  systemctl disable --now "${SERVICE_NAME}" 2>/dev/null || true
+  rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+  systemctl daemon-reload
+  rm -f /usr/local/bin/tgbot
+  rm -rf "${APP_DIR}"
+  echo "TgBot uninstalled from ${APP_DIR}."
+}
+
+print_menu() {
+  local bot_state
+  local autostart_state
+  local revision
+  bot_state="$(service_state_label)"
+  autostart_state="$(service_autostart_label)"
+  revision="$(read_state_value "source_revision")"
+  if [[ -z "${revision}" ]]; then
+    revision="unknown"
+  else
+    revision="${revision:0:12}"
+  fi
+
+  echo "The OS release is: $(. /etc/os-release && echo "${ID:-unknown}")"
+  echo
+  cat <<EOF
+╔────────────────────────────────────────────────╗
+│   TgBot Management Script                      │
+│   0. Exit Script                               │
+│────────────────────────────────────────────────│
+│   1. Install                                   │
+│   2. Update                                    │
+│   3. Uninstall                                 │
+│────────────────────────────────────────────────│
+│   4. Start                                     │
+│   5. Stop                                      │
+│   6. Restart                                   │
+│   7. Check Status                              │
+│   8. Show Logs                                 │
+│────────────────────────────────────────────────│
+│   9. Enable Autostart                          │
+│  10. Disable Autostart                         │
+╚────────────────────────────────────────────────╝
+EOF
+  echo
+  echo "Bot state: ${bot_state}"
+  echo "Start automatically: ${autostart_state}"
+  echo "Installed revision: ${revision}"
+  echo
+}
+
+run_management_menu() {
+  local selection
+  while true; do
+    print_menu
+    read -r -p "Please enter your selection [0-10]: " selection
+    case "${selection}" in
+      0)
+        exit 0
+        ;;
+      1)
+        bash "${APP_DIR}/install.sh" install
+        ;;
+      2)
+        bash <(curl -Ls "https://raw.githubusercontent.com/${REPO_SLUG}/${REPO_BRANCH}/install.sh") update
+        ;;
+      3)
+        uninstall_bot
+        exit 0
+        ;;
+      4)
+        systemctl start "${SERVICE_NAME}"
+        ;;
+      5)
+        systemctl stop "${SERVICE_NAME}"
+        ;;
+      6)
+        systemctl restart "${SERVICE_NAME}"
+        ;;
+      7)
+        systemctl --no-pager --full status "${SERVICE_NAME}" || true
+        ;;
+      8)
+        journalctl -u "${SERVICE_NAME}" -n 100 --no-pager || true
+        ;;
+      9)
+        systemctl enable "${SERVICE_NAME}"
+        ;;
+      10)
+        systemctl disable "${SERVICE_NAME}"
+        ;;
+      *)
+        echo "Invalid selection."
+        ;;
+    esac
+    echo
+    read -r -p "Press Enter to continue..." _
+  done
 }
 
 prompt_install_mode() {
@@ -671,19 +811,18 @@ start_service() {
   systemctl daemon-reload
   systemctl enable "${SERVICE_NAME}"
   systemctl restart "${SERVICE_NAME}"
+  install_management_command
 }
 
 print_report() {
   local db_path
   db_path="$(resolve_database_path)"
   local status_summary="unknown"
+  local autostart_summary="No"
   local db_summary="not found"
 
-  if systemctl is-active --quiet "${SERVICE_NAME}"; then
-    status_summary="active"
-  else
-    status_summary="inactive"
-  fi
+  status_summary="$(service_state_label)"
+  autostart_summary="$(service_autostart_label)"
 
   if [[ -f "${db_path}" ]]; then
     db_summary="preserved at ${db_path} ($(du -h "${db_path}" | awk '{print $1}'))"
@@ -696,6 +835,8 @@ print_report() {
   echo "Mode: ${INSTALL_MODE}"
   echo "App dir: ${APP_DIR}"
   echo "Service: ${SERVICE_NAME} (${status_summary})"
+  echo "Bot state: ${status_summary}"
+  echo "Start automatically: ${autostart_summary}"
   echo "Runtime user: ${BOT_USER}"
   echo "Project files: synced from ${PROJECT_SOURCE}"
   echo "Database/data: ${db_summary}"
@@ -715,6 +856,15 @@ print_report() {
 }
 
 prompt_install_mode
+
+if [[ "${INSTALL_MODE}" == "menu" ]]; then
+  run_management_menu
+fi
+
+if [[ "${INSTALL_MODE}" == "uninstall" ]]; then
+  uninstall_bot
+  exit 0
+fi
 
 prepare_remote_update_check
 ensure_project_root

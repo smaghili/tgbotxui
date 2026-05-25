@@ -72,6 +72,30 @@ sudo bash install.sh install
 sudo bash install.sh update
 ```
 
+## منوی مدیریتی `tgbot`
+
+بعد از نصب، یک دستور مدیریتی هم در سیستم ساخته می‌شود:
+
+```bash
+tgbot
+```
+
+این منو برای کارهای روزمره مناسب است و گزینه‌های زیر را می‌دهد:
+
+- `Install`
+- `Update`
+- `Uninstall`
+- `Start / Stop / Restart`
+- `Check Status`
+- `Show Logs`
+- `Enable / Disable Autostart`
+
+همچنین وضعیت واقعی سرویس را از `systemd` نشان می‌دهد:
+
+- `Bot state: Running/Stopped`
+- `Start automatically: Yes/No`
+- `Installed revision`
+
 اگر mode ندهی، اسکریپت به صورت تعاملی بین `install` و `update` از تو سوال می‌پرسد:
 
 ```bash
