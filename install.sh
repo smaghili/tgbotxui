@@ -438,6 +438,10 @@ run_management_menu() {
 }
 
 prompt_install_mode() {
+  if [[ "${INSTALL_MODE}" == "menu" || "${INSTALL_MODE}" == "uninstall" ]]; then
+    return
+  fi
+
   if [[ "${INSTALL_MODE}" == "install" || "${INSTALL_MODE}" == "update" ]]; then
     return
   fi
@@ -674,13 +678,14 @@ build_virtualenv() {
     fi
 
     "${PYTHON_BIN}" -m venv "${venv_args[@]}" "${APP_DIR}/.venv"
-    "${venv_python}" -m pip install --upgrade pip
+    "${venv_python}" -m pip install --disable-pip-version-check --no-input --quiet --upgrade pip
   fi
 
   if [[ "${INSTALL_MODE}" == "update" && "${REQUIREMENTS_CHANGED}" -eq 0 ]]; then
     echo "requirements.txt unchanged; skipping pip install."
   else
-    "${venv_python}" -m pip install -r "${APP_DIR}/requirements.txt"
+    echo "Installing Python dependencies..."
+    "${venv_python}" -m pip install --disable-pip-version-check --no-input --quiet -r "${APP_DIR}/requirements.txt"
   fi
   chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}/.venv"
 }
@@ -829,21 +834,15 @@ print_report() {
   echo "Bot state: ${status_summary}"
   echo "Start automatically: ${autostart_summary}"
   echo "Runtime user: ${BOT_USER}"
-  echo "Project files: synced from ${PROJECT_SOURCE}"
+  echo "Installed revision: ${PROJECT_REVISION}"
   echo "Database/data: ${db_summary}"
   if [[ "${INSTALL_MODE}" == "update" ]]; then
     echo "Backup: ${BACKUP_DIR}"
-    echo "Update behavior: bot files replaced, .env and data preserved"
   fi
-  echo "Environment keys configured: ${UPDATED_ENV_KEYS[*]}"
   if [[ "${#ADDED_ENV_KEYS[@]}" -gt 0 ]]; then
-    echo "New .env keys added from template: ${ADDED_ENV_KEYS[*]}"
-  else
-    echo "New .env keys added from template: none"
+    echo "Added env keys: ${ADDED_ENV_KEYS[*]}"
   fi
-  echo "Migrations: applied automatically on bot startup"
   echo "==================================="
-  systemctl --no-pager --full status "${SERVICE_NAME}" || true
 }
 
 prompt_install_mode
