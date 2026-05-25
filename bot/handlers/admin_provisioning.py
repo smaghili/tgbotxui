@@ -459,31 +459,33 @@ async def start_create_user(
     if await reject_if_not_any_admin(message, settings, services):
         return
     lang = await services.db.get_user_language(message.from_user.id)
-    rows = await services.admin_provisioning_service.list_accessible_inbounds_for_actor(
+    panels = await _visible_panels_for_actor(
         actor_user_id=message.from_user.id,
         settings=settings,
+        services=services,
     )
-    if not rows:
+    if not panels:
         await message.answer(t("admin_create_user_no_access", lang))
         return
-    grouped_rows = _group_inbound_rows_by_panel(rows)
-    if len(grouped_rows) > 1:
-        panel_map = {int(panel["id"]): panel for panel in await services.panel_service.list_panels()}
-        candidate_panel_ids = sorted(grouped_rows.keys())
-        panels = [panel_map[panel_id] for panel_id in candidate_panel_ids if panel_id in panel_map]
+    if len(panels) > 1:
         await state.set_state(ProvisioningStates.waiting_create_panel_select)
         await message.answer(
             t("admin_create_user_pick_panel", lang),
             reply_markup=panel_select_keyboard(panels, "pcu:pick_panel"),
         )
         return
-    if len(grouped_rows) == 1:
-        rows = next(iter(grouped_rows.values()))
-    else:
-        default_panel = await services.panel_service.get_default_panel()
-        default_panel_id = int(default_panel["id"]) if default_panel is not None else None
-        if default_panel_id is not None and default_panel_id in grouped_rows:
-            rows = grouped_rows[default_panel_id]
+    panel_id = int(panels[0]["id"])
+    rows = [
+        row
+        for row in await services.admin_provisioning_service.list_accessible_inbounds_for_actor(
+            actor_user_id=message.from_user.id,
+            settings=settings,
+        )
+        if int(row.panel_id) == panel_id
+    ]
+    if not rows:
+        await message.answer(t("admin_create_user_no_access", lang))
+        return
     if len(rows) == 1:
         selected = rows[0]
         await state.update_data(create_panel_id=selected.panel_id, create_inbound_id=selected.inbound_id)

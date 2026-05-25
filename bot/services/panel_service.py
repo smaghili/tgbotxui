@@ -36,6 +36,7 @@ class PanelService:
         self.xui = xui
         self.sub_url_strip_port_rules = sub_url_strip_port_rules or {}
         self.sub_url_base_overrides = sub_url_base_overrides or {}
+        self._disabled_cache: dict[tuple[int, int | None, tuple[int, ...] | None], tuple[float, list[Dict[str, Any]]]] = {}
 
     async def _build_conn(self, panel_id: int) -> PanelConnection:
         panel = await self.db.get_panel(panel_id)
@@ -409,6 +410,16 @@ class PanelService:
         owner_admin_user_id: int | None = None,
         allowed_inbound_ids: set[int] | None = None,
     ) -> list[Dict[str, Any]]:
+        cache_key = (
+            int(panel_id),
+            int(owner_admin_user_id) if owner_admin_user_id is not None else None,
+            tuple(sorted(allowed_inbound_ids)) if allowed_inbound_ids is not None else None,
+        )
+        now_ts = time.time()
+        cached = self._disabled_cache.get(cache_key)
+        if cached is not None and now_ts - cached[0] <= 20:
+            return [dict(row) for row in cached[1]]
+
         rows = await self.list_clients(
             panel_id,
             owner_admin_user_id=owner_admin_user_id,
@@ -442,6 +453,7 @@ class PanelService:
                 inactive.append(row)
         rows = inactive
         rows.sort(key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"]))
+        self._disabled_cache[cache_key] = (now_ts, [dict(row) for row in rows])
         return rows
 
     async def list_low_traffic_clients(
