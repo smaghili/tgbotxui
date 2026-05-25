@@ -421,20 +421,16 @@ class UsageService:
         client_uuid: str | None,
     ) -> list[int]:
         if inbound_id and client_uuid:
-            try:
-                detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
-            except Exception:
-                logger.exception(
-                    "failed to resolve service owner for admin notification",
-                    extra={"panel_id": panel_id, "inbound_id": inbound_id, "client_uuid": client_uuid},
-                )
-            else:
-                comment = str(detail.get("comment") or "").strip()
-                owner_raw = comment.split(":", 1)[0].strip()
-                if owner_raw.isdigit():
-                    delegated_id = int(owner_raw)
-                    if await self._is_active_delegated_admin_user(delegated_id):
-                        return [delegated_id]
+            owner_id = await self.db.get_client_owner(
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_uuid=client_uuid,
+            )
+            if owner_id is not None:
+                if owner_id in self.root_admin_ids:
+                    return [owner_id]
+                if await self._is_active_delegated_admin_user(owner_id):
+                    return [owner_id]
         return sorted(self.root_admin_ids)
 
     async def _direct_owner_chat_ids_for_service(

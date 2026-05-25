@@ -149,6 +149,40 @@ def _delete_confirm_keyboard(panel_id: int, inbound_id: int, client_uuid: str, l
     )
 
 
+def _owner_pick_keyboard(
+    *,
+    panel_id: int,
+    inbound_id: int,
+    client_uuid: str,
+    owner_rows: list[dict],
+    lang: str | None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for row in owner_rows:
+        user_id = int(row["telegram_user_id"])
+        title = str(row.get("title") or "").strip()
+        full_name = str(row.get("full_name") or "").strip()
+        username = str(row.get("username") or "").strip()
+        label = title or full_name or (f"@{username}" if username else str(user_id))
+        rows.append([inline_button(_truncate_button_text(label), f"pec:owner_set:{panel_id}:{inbound_id}:{client_uuid}:{user_id}")])
+    rows.append([inline_button(t("admin_back", lang), f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _candidate_owner_rows(settings: Settings, services: ServiceContainer, lang: str | None) -> list[dict]:
+    delegated_rows = [row for row in await services.db.list_delegated_admins() if int(row.get("is_active") or 0) == 1]
+    root_rows = [
+        {
+            "telegram_user_id": rid,
+            "title": t("admin_root_label", lang),
+            "full_name": t("admin_root_label", lang),
+            "username": "",
+        }
+        for rid in sorted(settings.admin_ids)
+    ]
+    return root_rows + delegated_rows
+
+
 async def _send_config_bundle(
     message: Message,
     *,
@@ -1187,6 +1221,94 @@ async def edit_config_set_tg_prompt(callback: CallbackQuery, state: FSMContext, 
     await state.set_state(ProvisioningStates.waiting_edit_tg_id)
     await answer_with_cancel(callback.message, t("admin_enter_tg", lang), lang=lang)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pec:owner_pick:"))
+async def edit_config_owner_pick(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.data is None or callback.message is None:
+        await callback.answer()
+        return
+    try:
+        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
+        panel_id = int(panel_raw)
+        inbound_id = int(inbound_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    owner_rows = await _candidate_owner_rows(settings, services, lang)
+    await callback.message.edit_reply_markup(
+        reply_markup=_owner_pick_keyboard(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            owner_rows=owner_rows,
+            lang=lang,
+        )
+    )
+    await callback.answer(t("admin_pick_client_owner", lang))
+
+
+@router.callback_query(F.data.startswith("pec:owner_set:"))
+async def edit_config_owner_set(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if callback.data is None:
+        await callback.answer()
+        return
+    try:
+        _, _, panel_raw, inbound_raw, client_uuid, owner_raw = callback.data.split(":", 5)
+        panel_id = int(panel_raw)
+        inbound_id = int(inbound_raw)
+        owner_user_id = int(owner_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return
+    try:
+        await services.admin_provisioning_service.set_client_owner_for_actor(
+            actor_user_id=callback.from_user.id,
+            settings=settings,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+            owner_user_id=owner_user_id,
+        )
+    except Exception as exc:
+        await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
+        return
+    await render_client_detail(
+        callback,
+        services=services,
+        settings=settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        lang=lang,
+    )
+    await callback.answer(t("admin_client_owner_changed", lang))
 
 
 @router.message(ProvisioningStates.waiting_edit_tg_id)

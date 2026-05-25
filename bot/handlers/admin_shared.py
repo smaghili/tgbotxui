@@ -495,6 +495,7 @@ def edit_config_actions_keyboard(
             inline_button(t("admin_edit_change_location", lang), f"pec:locm:{panel_id}:{inbound_id}:{client_uuid}"),
         ],
         [inline_button(t("admin_set_tg", lang), f"pec:tg_input:{panel_id}:{inbound_id}:{client_uuid}")],
+        [inline_button(t("admin_change_client_owner", lang), f"pec:owner_pick:{panel_id}:{inbound_id}:{client_uuid}")],
         [inline_button(toggle_text, f"pec:toggle:{panel_id}:{inbound_id}:{client_uuid}")],
         [inline_button(t("admin_edit_delete_client", lang), f"pec:delete_ask:{panel_id}:{inbound_id}:{client_uuid}")],
     ]

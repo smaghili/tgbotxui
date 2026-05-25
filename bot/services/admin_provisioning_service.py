@@ -739,6 +739,44 @@ class AdminProvisioningService:
         )
         return detail
 
+    async def set_client_owner_for_actor(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        owner_user_id: int,
+    ) -> dict[str, Any]:
+        ref = await self._managed_ref_from_panel_client(
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            client_uuid=client_uuid,
+        )
+        detail = await self.panel_service.get_client_detail(ref.panel_id, ref.inbound_id, ref.client_uuid)
+        if owner_user_id not in settings.admin_ids and not await self.access_service.is_delegated_admin(owner_user_id):
+            raise ValueError("selected owner is not an active admin.")
+        client_email = str(detail.get("email") or ref.client_email or "").strip()
+        await self.db.upsert_client_owner(
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            client_uuid=ref.client_uuid,
+            owner_user_id=owner_user_id,
+            client_email=client_email or None,
+        )
+        lang = await self.db.get_user_language(actor_user_id)
+        await self._record_templated_admin_activity(
+            actor_user_id=actor_user_id,
+            settings=settings,
+            action_key="admin_activity_action_set_tg_id",
+            user=str(detail.get("email") or ref.client_email or "-"),
+            panel_id=ref.panel_id,
+            inbound_id=ref.inbound_id,
+            details=[t("admin_activity_detail_new_value", lang, value=f"owner={owner_user_id}")],
+        )
+        return detail
+
     async def add_client_total_gb_for_actor(
         self,
         *,
