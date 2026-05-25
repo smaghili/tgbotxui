@@ -164,7 +164,7 @@ def _owner_pick_keyboard(
         full_name = str(row.get("full_name") or "").strip()
         username = str(row.get("username") or "").strip()
         label = title or full_name or (f"@{username}" if username else str(user_id))
-        rows.append([inline_button(_truncate_button_text(label), f"pec:owner_set:{panel_id}:{inbound_id}:{client_uuid}:{user_id}")])
+        rows.append([inline_button(_truncate_button_text(label), f"pec:owner_set:{user_id}")])
     rows.append([inline_button(t("admin_back", lang), f"pec:detail:{panel_id}:{inbound_id}:{client_uuid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1224,7 +1224,12 @@ async def edit_config_set_tg_prompt(callback: CallbackQuery, state: FSMContext, 
 
 
 @router.callback_query(F.data.startswith("pec:owner_pick:"))
-async def edit_config_owner_pick(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+async def edit_config_owner_pick(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
@@ -1248,6 +1253,11 @@ async def edit_config_owner_pick(callback: CallbackQuery, settings: Settings, se
     ):
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
+    await state.update_data(
+        owner_pick_panel_id=panel_id,
+        owner_pick_inbound_id=inbound_id,
+        owner_pick_client_uuid=client_uuid,
+    )
     owner_rows = await _candidate_owner_rows(settings, services, lang)
     await callback.message.edit_reply_markup(
         reply_markup=_owner_pick_keyboard(
@@ -1262,7 +1272,12 @@ async def edit_config_owner_pick(callback: CallbackQuery, settings: Settings, se
 
 
 @router.callback_query(F.data.startswith("pec:owner_set:"))
-async def edit_config_owner_set(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+async def edit_config_owner_set(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    services: ServiceContainer,
+) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
@@ -1270,11 +1285,16 @@ async def edit_config_owner_set(callback: CallbackQuery, settings: Settings, ser
         await callback.answer()
         return
     try:
-        _, _, panel_raw, inbound_raw, client_uuid, owner_raw = callback.data.split(":", 5)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
+        owner_raw = callback.data.split(":", 2)[2]
         owner_user_id = int(owner_raw)
     except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    data = await state.get_data()
+    panel_id = int(data.get("owner_pick_panel_id") or 0)
+    inbound_id = int(data.get("owner_pick_inbound_id") or 0)
+    client_uuid = str(data.get("owner_pick_client_uuid") or "")
+    if panel_id <= 0 or inbound_id <= 0 or not client_uuid:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
     if not await _ensure_inbound_access(
