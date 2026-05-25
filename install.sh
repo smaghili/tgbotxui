@@ -12,6 +12,8 @@ BOT_USER="${BOT_USER:-tgbot}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 REPO_SLUG="${REPO_SLUG:-smaghili/tgbotxui}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
+STATE_DIR_NAME=".install-state"
+SYSTEM_DEPS=(python3 python3-venv python3-pip python3-socks rsync)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}"
@@ -23,6 +25,11 @@ INSTALL_MODE="auto"
 TOTAL_STEPS=9
 UPDATED_ENV_KEYS=()
 ADDED_ENV_KEYS=()
+REQUIREMENTS_CHANGED=1
+SOURCE_CHANGED=1
+SHOULD_INSTALL_SYSTEM_DEPS=1
+REMOTE_COMMIT=""
+PROJECT_REVISION="local"
 
 cleanup() {
   if [[ -n "${TEMP_PROJECT_DIR}" && -d "${TEMP_PROJECT_DIR}" ]]; then
@@ -72,6 +79,48 @@ esac
 log_step() {
   echo
   echo "[$1] $2"
+}
+
+state_dir() {
+  echo "${APP_DIR}/${STATE_DIR_NAME}"
+}
+
+state_file() {
+  local name="$1"
+  echo "$(state_dir)/${name}"
+}
+
+ensure_state_dir() {
+  mkdir -p "$(state_dir)"
+}
+
+read_state_value() {
+  local name="$1"
+  local file
+  file="$(state_file "${name}")"
+  if [[ -f "${file}" ]]; then
+    cat "${file}"
+  fi
+}
+
+write_state_value() {
+  local name="$1"
+  local value="$2"
+  ensure_state_dir
+  printf '%s' "${value}" >"$(state_file "${name}")"
+}
+
+sha256_file() {
+  local path="$1"
+  sha256sum "${path}" | awk '{print $1}'
+}
+
+remote_head_commit() {
+  local api_url="https://api.github.com/repos/${REPO_SLUG}/commits/${REPO_BRANCH}"
+  if ! command -v curl >/dev/null 2>&1; then
+    return
+  fi
+  curl -fsSL "${api_url}" 2>/dev/null | sed -n 's/.*"sha": "\([a-f0-9]\{40\}\)".*/\1/p' | head -n 1
 }
 
 has_socks_proxy() {
@@ -150,7 +199,12 @@ download_project_archive() {
   fi
 
   PROJECT_ROOT="${extracted_dir}"
-  PROJECT_SOURCE="github:${REPO_SLUG}@${REPO_BRANCH}"
+  if [[ -n "${REMOTE_COMMIT}" ]]; then
+    PROJECT_REVISION="${REMOTE_COMMIT}"
+    PROJECT_SOURCE="github:${REPO_SLUG}@${REMOTE_COMMIT}"
+  else
+    PROJECT_SOURCE="github:${REPO_SLUG}@${REPO_BRANCH}"
+  fi
 
   if ! project_files_present; then
     echo "Downloaded archive is missing required project files."
@@ -164,6 +218,40 @@ ensure_project_root() {
     return
   fi
   download_project_archive
+}
+
+prepare_update_metadata() {
+  if [[ "${INSTALL_MODE}" != "update" ]]; then
+    return
+  fi
+
+  local current_revision=""
+  current_revision="$(read_state_value "source_revision")"
+
+  if [[ "${PROJECT_SOURCE}" != "${PROJECT_ROOT}" ]]; then
+    REMOTE_COMMIT="$(remote_head_commit || true)"
+    if [[ -n "${REMOTE_COMMIT}" ]]; then
+      PROJECT_REVISION="${REMOTE_COMMIT}"
+      if [[ -n "${current_revision}" && "${current_revision}" == "${REMOTE_COMMIT}" ]]; then
+        echo "No upstream code changes detected for ${REPO_SLUG}@${REPO_BRANCH}."
+        exit 0
+      fi
+    fi
+  fi
+
+  local current_requirements_hash=""
+  local project_requirements_hash=""
+  current_requirements_hash="$(read_state_value "requirements.sha256")"
+  if [[ -f "${PROJECT_ROOT}/requirements.txt" ]]; then
+    project_requirements_hash="$(sha256_file "${PROJECT_ROOT}/requirements.txt")"
+  fi
+  if [[ -n "${current_requirements_hash}" && -n "${project_requirements_hash}" && "${current_requirements_hash}" == "${project_requirements_hash}" ]]; then
+    REQUIREMENTS_CHANGED=0
+    SHOULD_INSTALL_SYSTEM_DEPS=0
+  else
+    REQUIREMENTS_CHANGED=1
+    SHOULD_INSTALL_SYSTEM_DEPS=1
+  fi
 }
 
 detect_existing_install() {
@@ -258,6 +346,38 @@ sync_project_files() {
   fi
 
   chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}"
+}
+
+detect_update_changes() {
+  if [[ "${INSTALL_MODE}" != "update" ]]; then
+    REQUIREMENTS_CHANGED=1
+    SOURCE_CHANGED=1
+    SHOULD_INSTALL_SYSTEM_DEPS=1
+    return
+  fi
+
+  local current_requirements_hash=""
+  local new_requirements_hash=""
+  current_requirements_hash="$(read_state_value "requirements.sha256")"
+  new_requirements_hash="$(sha256_file "${APP_DIR}/requirements.txt")"
+
+  if [[ -n "${current_requirements_hash}" && "${current_requirements_hash}" == "${new_requirements_hash}" ]]; then
+    REQUIREMENTS_CHANGED=0
+  else
+    REQUIREMENTS_CHANGED=1
+  fi
+
+  local current_source_hash=""
+  local new_source_hash=""
+  current_source_hash="$(read_state_value "source.sha256")"
+  new_source_hash="$(tar -cf - --exclude="${STATE_DIR_NAME}" -C "${APP_DIR}" . | sha256sum | awk '{print $1}')"
+  if [[ -n "${current_source_hash}" && "${current_source_hash}" == "${new_source_hash}" ]]; then
+    SOURCE_CHANGED=0
+  else
+    SOURCE_CHANGED=1
+  fi
+
+  SHOULD_INSTALL_SYSTEM_DEPS="${REQUIREMENTS_CHANGED}"
 }
 
 set_env_value() {
@@ -363,8 +483,19 @@ build_virtualenv() {
     "${venv_python}" -m pip install --upgrade pip
   fi
 
-  "${venv_python}" -m pip install -r "${APP_DIR}/requirements.txt"
+  if [[ "${INSTALL_MODE}" == "update" && "${REQUIREMENTS_CHANGED}" -eq 0 ]]; then
+    echo "requirements.txt unchanged; skipping pip install."
+  else
+    "${venv_python}" -m pip install -r "${APP_DIR}/requirements.txt"
+  fi
   chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}/.venv"
+}
+
+persist_install_state() {
+  write_state_value "requirements.sha256" "$(sha256_file "${APP_DIR}/requirements.txt")"
+  write_state_value "source.sha256" "$(tar -cf - --exclude="${STATE_DIR_NAME}" -C "${APP_DIR}" . | sha256sum | awk '{print $1}')"
+  write_state_value "source_revision" "${PROJECT_REVISION}"
+  chown -R "${BOT_USER}:${BOT_USER}" "$(state_dir)"
 }
 
 apply_database_migrations() {
@@ -523,10 +654,15 @@ print_report() {
 prompt_install_mode
 
 ensure_project_root
+prepare_update_metadata
 
 log_step "1/${TOTAL_STEPS}" "Installing dependencies..."
-apt-get update
-apt-get install -y "${PYTHON_BIN}" python3-venv python3-pip python3-socks rsync
+if [[ "${INSTALL_MODE}" == "update" && "${SHOULD_INSTALL_SYSTEM_DEPS}" -eq 0 ]]; then
+  echo "System dependencies unchanged; skipping apt install."
+else
+  apt-get update
+  apt-get install -y "${SYSTEM_DEPS[@]}"
+fi
 
 log_step "2/${TOTAL_STEPS}" "Preparing runtime user..."
 ensure_runtime_user
@@ -536,6 +672,7 @@ backup_existing_state
 
 log_step "4/${TOTAL_STEPS}" "Syncing project to ${APP_DIR}..."
 sync_project_files
+detect_update_changes
 
 log_step "5/${TOTAL_STEPS}" "Building virtualenv..."
 build_virtualenv
@@ -550,6 +687,7 @@ apply_database_migrations
 
 log_step "8/${TOTAL_STEPS}" "Enabling and starting service..."
 start_service
+persist_install_state
 
 log_step "9/${TOTAL_STEPS}" "Printing report..."
 print_report
