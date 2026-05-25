@@ -1,141 +1,85 @@
-# ربات تلگرام مدیریت 3x-ui
+# TgBotXUI
 
-این پروژه یک ربات تلگرام برای مدیریت پنل‌های `3x-ui / x-ui` است. ربات هم برای مدیر اصلی و هم برای ادمین فرعی جریان‌های جدا دارد و امکاناتی مثل ساخت کاربر، ویرایش کانفیگ، هشدار اتمام سرویس، مدیریت پنل‌ها و اتصال سرویس به کاربر تلگرام را پوشش می‌دهد.
+ربات تلگرام برای مدیریت پنل‌های `3x-ui / x-ui`.
 
-## قابلیت‌ها
+## Features
 
-- مدیریت پنل‌های `3x-ui`
-- تنظیم و حذف پنل پیش‌فرض
-- لیست اینباندها، کاربران، کاربران آنلاین، غیرفعال و آخرین آنلاین
-- ساخت کاربر جدید با ارسال QR، لینک کانفیگ و لینک ساب
-- ویرایش کانفیگ، افزایش حجم، افزایش روز، تغییر `tgId` و حذف کاربر
-- عملیات گروهی روی کل پنل
-- هشدار اتمام حجم، نزدیک‌شدن به آستانه‌ها و پایان سرویس
-- ادمین فرعی با دسترسی محدود به اینباندها/کاربرهای خودش
-- چندزبانه (`فارسی / English`)
-- `SQLite` + migration
-- سرویس `systemd`
+- مدیریت چند پنل
+- ساخت، ویرایش، تمدید و حذف کاربر
+- نمایش کاربران آنلاین، غیرفعال و آخرین آنلاین
+- پشتیبانی از ادمین اصلی و ادمین فرعی با دسترسی محدود
+- ارسال کانفیگ، QR و subscription link
+- هشدار اتمام حجم و پایان سرویس
+- نصب و اجرا با `systemd`
+- منوی مدیریتی سرور با دستور `tgbot`
 
-## نصب سریع
+## Quick Install
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/smaghili/tgbotxui/main/install.sh)
 ```
 
-یا به‌صورت صریح با mode نصب:
+برای نصب صریح:
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/smaghili/tgbotxui/main/install.sh) install
 ```
 
-اگر بخواهی می‌توانی به روش clone هم نصب کنی:
-
-```bash
-git clone https://github.com/smaghili/tgbotxui.git
-cd tgbotxui
-sudo bash install.sh install
-```
-
-## آپدیت سریع
-
-برای آپدیت سریع هم همان الگو را می‌توانی اجرا کنی:
+## Update
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/smaghili/tgbotxui/main/install.sh) update
 ```
 
-اگر سورس را محلی داری، داخل همان روت پروژه این دستور را اجرا کن:
+در حالت update:
 
-```bash
-sudo bash install.sh update
-```
+- `.env` حفظ می‌شود
+- `data/` و دیتابیس حفظ می‌شوند
+- از وضعیت قبلی backup گرفته می‌شود
+- اگر چیزی تغییر نکرده باشد، اسکریپت زودتر خارج می‌شود
 
-رفتار آپدیت:
+## Server Menu
 
-- فایل‌های پروژه جایگزین می‌شوند
-- فایل `.env` حفظ می‌شود
-- دیتابیس و پوشه `data/` حفظ می‌شوند
-- اگر کلید جدیدی به `.env.example` اضافه شده باشد، به `.env` فعلی اضافه می‌شود
-- از وضعیت قبلی در `backups/` بکاپ گرفته می‌شود
-
-## نصب از روی سورس
-
-اگر ریپو را clone کرده‌ای، از داخل روت پروژه:
-
-```bash
-sudo bash install.sh install
-```
-
-برای آپدیت از روی سورس محلی:
-
-```bash
-sudo bash install.sh update
-```
-
-## منوی مدیریتی `tgbot`
-
-بعد از نصب، یک دستور مدیریتی هم در سیستم ساخته می‌شود:
+بعد از نصب:
 
 ```bash
 tgbot
 ```
 
-این منو برای کارهای روزمره مناسب است و گزینه‌های زیر را می‌دهد:
+منو این گزینه‌ها را می‌دهد:
 
 - `Install`
 - `Update`
 - `Uninstall`
-- `Start / Stop / Restart`
+- `Start`
+- `Stop`
+- `Restart`
 - `Check Status`
 - `Show Logs`
-- `Enable / Disable Autostart`
 
-همچنین وضعیت واقعی سرویس را از `systemd` نشان می‌دهد:
+و وضعیت واقعی سرویس را نشان می‌دهد:
 
 - `Bot state: Running/Stopped`
 - `Start automatically: Yes/No`
-- `Installed revision`
 
-اگر mode ندهی، اسکریپت به صورت تعاملی بین `install` و `update` از تو سوال می‌پرسد:
-
-```bash
-sudo bash install.sh
-```
-
-## مسیرها و مقادیر پیش‌فرض نصب
-
-- مسیر نصب: `/opt/tgbot`
-- نام سرویس: `tgbot`
-- کاربر سرویس: `tgbot`
-- فایل سرویس: `/etc/systemd/system/tgbot.service`
-
-در صورت نیاز می‌توانی قبل از اجرا override بدهی:
-
-```bash
-sudo APP_DIR=/opt/mybot SERVICE_NAME=mybot BOT_USER=mybot bash install.sh install
-```
-
-## متغیرهای مهم `.env`
+## Important Env
 
 فایل نمونه: [.env.example](./.env.example)
 
-مهم‌ترین کلیدها:
+کلیدهای ضروری:
 
 - `BOT_TOKEN`
 - `ADMIN_IDS`
 - `ENCRYPTION_KEY`
+
+کلیدهای رایج:
+
 - `DATABASE_PATH`
 - `TIMEZONE`
+- `TELEGRAM_PROXIES`
 - `SYNC_INTERVAL_SECONDS`
-- `DEPLETED_CLIENT_DELETE_AFTER_HOURS`
-- `SUB_URL_STRIP_PORT_RULES`
-- `SUB_URL_BASE_OVERRIDES`
 
-محدودیت ساخت هر ادمین فرعی از پروفایل همان ادمین در بخش مدیریت ادمین‌ها خوانده می‌شود.
-
-## اجرای محلی توسعه
-
-### لینوکس
+## Local Run
 
 ```bash
 python3 -m venv .venv
@@ -145,96 +89,22 @@ cp .env.example .env
 python main.py
 ```
 
-### ویندوز
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item .env.example .env
-python main.py
-```
-
-## دستورات مهم ربات
+## Commands
 
 - `/start`
 - `/status`
 - `/help`
 - `/cancel`
-- `/bind ...`
 - `/sync_all`
 
-## منوی مدیریت
-
-### مدیر اصلی
-
-- افزودن پنل
-- لیست پنل‌ها
-- لیست اینباندها
-- لیست کاربران
-- کاربران آنلاین
-- آخرین آنلاین
-- کاربران غیرفعال
-- ساخت کاربر
-- ویرایش کانفیگ
-- مدیریت ادمین‌ها
-- تنظیم حذف خودکار
-- عملیات گروهی
-
-### ادمین فرعی
-
-- لیست کاربران قابل‌دسترسی
-- لیست اینباندهای قابل‌دسترسی
-- کاربران آنلاین/غیرفعال/آخرین آنلاین در محدوده خودش
-- ساخت کاربر فقط روی اینباندهای مجاز
-- ویرایش فقط روی کاربرهای محدوده خودش
-- بدون دسترسی به مدیریت اصلی پنل‌ها و مدیریت ادمین‌ها
-
-## مانیتورینگ
-
-- `GET /healthz`
-- `GET /metrics`
-
-متریک‌های مهم عملکرد:
-
-- `tgbot_handler_latency_seconds`
-- `tgbot_sync_stage_latency_seconds`
-
-بنچمارک سبک sync (برای مقایسه قبل/بعد بهینه‌سازی):
-
-```bash
-PYTHONPATH=. python3 scripts/benchmark_usage_sync.py --rounds 5
-```
-
-## ساختار پروژه
-
-- `main.py`: نقطه شروع برنامه
-- `bot/handlers`: هندلرهای تلگرام و جریان‌های UI
-- `bot/services`: منطق اصلی پروژه و ارتباط با پنل
-- `bot/middlewares`: middlewareها
-- `bot/migrations`: migrationهای دیتابیس
-- `bot/i18n.py`: متن‌ها و ترجمه‌ها
-- `install.sh`: نصب و آپدیت پروژه
-
-## تست
+## Test
 
 ```bash
 python -m pytest
 ```
 
-یا فقط تست‌های اصلی:
+## Paths
 
-```bash
-python -m pytest tests/test_admin_keyboards.py tests/test_delegated_visibility.py tests/test_usage_notifications.py
-```
-
-## نکات مهم
-
-- در حالت `update`، کتابخانه‌ها از صفر پاک نمی‌شوند و `.venv` در صورت سالم بودن reuse می‌شود
-- سرویس بعد از نصب/آپدیت به صورت خودکار restart می‌شود
-- migrationها در startup برنامه اعمال می‌شوند
-- اگر تلگرام روی سرور فیلتر باشد، می‌توانی `TELEGRAM_PROXIES` را در `.env` تنظیم کنی
-
-## ریپو
-
-- GitHub: <https://github.com/smaghili/tgbotxui>
+- App: `/opt/tgbot`
+- Service: `tgbot`
+- Service file: `/etc/systemd/system/tgbot.service`

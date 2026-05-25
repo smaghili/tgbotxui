@@ -385,9 +385,6 @@ print_menu() {
 │   6. Restart                                   │
 │   7. Check Status                              │
 │   8. Show Logs                                 │
-│────────────────────────────────────────────────│
-│   9. Enable Autostart                          │
-│  10. Disable Autostart                         │
 ╚────────────────────────────────────────────────╝
 EOF
   echo
@@ -401,7 +398,7 @@ run_management_menu() {
   local selection
   while true; do
     print_menu
-    read -r -p "Please enter your selection [0-10]: " selection
+    read -r -p "Please enter your selection [0-8]: " selection
     case "${selection}" in
       0)
         exit 0
@@ -430,12 +427,6 @@ run_management_menu() {
         ;;
       8)
         journalctl -u "${SERVICE_NAME}" -n 100 --no-pager || true
-        ;;
-      9)
-        systemctl enable "${SERVICE_NAME}"
-        ;;
-      10)
-        systemctl disable "${SERVICE_NAME}"
         ;;
       *)
         echo "Invalid selection."
