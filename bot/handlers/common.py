@@ -186,6 +186,108 @@ async def _filter_admin_owned_status_rows(
     return visible
 
 
+async def _admin_can_view_status_row(
+    *,
+    user_id: int,
+    username: str | None,
+    row: dict,
+    services: ServiceContainer,
+) -> bool:
+    visible_rows = await _filter_admin_owned_status_rows(
+        user_id=user_id,
+        username=username,
+        service_rows=[row],
+        services=services,
+    )
+    return bool(visible_rows)
+
+
+async def _answer_empty_status(
+    message: Message,
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str,
+) -> None:
+    await services.common_handler_service.add_audit_log(
+        actor_user_id=user_id,
+        action="view_status",
+        target_type="user_service",
+        success=True,
+        details="empty",
+    )
+    await _answer_with_main_menu(
+        message,
+        t("status_empty", lang),
+        user_id=user_id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+
+
+async def _send_admin_service_status(
+    message: Message,
+    *,
+    user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str,
+) -> None:
+    try:
+        service_rows = await services.common_handler_service.get_user_services(user_id)
+        service_rows = await _filter_admin_owned_status_rows(
+            user_id=user_id,
+            username=message.from_user.username if message.from_user is not None else None,
+            service_rows=service_rows,
+            services=services,
+        )
+    except Exception as exc:
+        logger.exception("failed to fetch admin status services", extra={"telegram_user_id": user_id})
+        await services.common_handler_service.add_audit_log(
+            actor_user_id=user_id,
+            action="view_status",
+            target_type="user_service",
+            success=False,
+            details=str(exc)[:500],
+        )
+        await _answer_with_main_menu(
+            message,
+            t("status_fetch_error", lang),
+            user_id=user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+        return
+
+    if not service_rows:
+        await _answer_empty_status(message, user_id=user_id, settings=settings, services=services, lang=lang)
+        return
+
+    await services.common_handler_service.add_audit_log(
+        actor_user_id=user_id,
+        action="view_status",
+        target_type="user_service",
+        success=True,
+    )
+    if len(service_rows) > 1:
+        await message.answer(
+            t("status_choose_service", lang),
+            reply_markup=_status_services_choice_keyboard(service_rows, lang),
+        )
+        return
+
+    await _render_status_for_service_row(
+        message,
+        row=service_rows[0],
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
+
+
 async def _send_service_status(
     message: Message,
     *,
@@ -227,6 +329,17 @@ async def _send_service_status(
                 logger.exception("auto-bind by telegram identity failed", extra={"telegram_user_id": user_id})
             else:
                 await services.common_handler_service.set_app_setting(_status_autobind_cache_key(user_id), str(int(time.time())))
+
+    if is_any_admin_user:
+        await _send_admin_service_status(
+            message,
+            user_id=user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+        return
+
     try:
         status_messages = await services.usage_service.get_user_status_messages(user_id, force_refresh=force_refresh)
         service_rows = await services.common_handler_service.get_user_services(user_id)
@@ -249,22 +362,6 @@ async def _send_service_status(
         )
         return
 
-    if is_any_admin_user and service_rows:
-        all_rows = list(service_rows)
-        all_status_messages = list(status_messages)
-        service_rows = await _filter_admin_owned_status_rows(
-            user_id=user_id,
-            username=message.from_user.username if message.from_user is not None else None,
-            service_rows=all_rows,
-            services=services,
-        )
-        if service_rows and all_status_messages:
-            status_by_id: dict[int, str] = {}
-            for idx, row in enumerate(all_rows):
-                if idx < len(all_status_messages):
-                    status_by_id[int(row["id"])] = all_status_messages[idx]
-            status_messages = [status_by_id[int(row["id"])] for row in service_rows if int(row["id"]) in status_by_id]
-
     if (
         skipped_autobind_due_to_cooldown
         and message.from_user is not None
@@ -284,22 +381,8 @@ async def _send_service_status(
                 status_messages = await services.usage_service.get_user_status_messages(user_id, force_refresh=force_refresh)
                 service_rows = await services.common_handler_service.get_user_services(user_id)
 
-    if not status_messages:
-        await services.common_handler_service.add_audit_log(
-            actor_user_id=user_id,
-            action="view_status",
-            target_type="user_service",
-            success=True,
-            details="empty",
-        )
-        await _answer_with_main_menu(
-            message,
-            t("status_empty", lang),
-            user_id=user_id,
-            settings=settings,
-            services=services,
-            lang=lang,
-        )
+    if not status_messages or not service_rows:
+        await _answer_empty_status(message, user_id=user_id, settings=settings, services=services, lang=lang)
         return
 
     await services.common_handler_service.add_audit_log(
@@ -447,6 +530,14 @@ async def show_status_service(callback: CallbackQuery, settings: Settings, servi
         await callback.answer(t("status_not_found", lang), show_alert=True)
         return
     if int(row["telegram_user_id"]) != callback.from_user.id:
+        await callback.answer(t("status_no_access", lang), show_alert=True)
+        return
+    if await services.access_service.is_any_admin(callback.from_user.id, settings) and not await _admin_can_view_status_row(
+        user_id=callback.from_user.id,
+        username=callback.from_user.username,
+        row=row,
+        services=services,
+    ):
         await callback.answer(t("status_no_access", lang), show_alert=True)
         return
     try:
