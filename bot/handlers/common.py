@@ -5,12 +5,14 @@ import logging
 import time
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.keyboards import main_keyboard
 from bot.services.container import ServiceContainer
+from bot.states import CommonStates
 
 from .admin_shared import (
     callback_error_alert,
@@ -103,6 +105,7 @@ def _status_services_choice_keyboard(service_rows: list[dict], lang: str) -> Inl
         service_id = int(row["id"])
         title = str(row.get("service_name") or row.get("client_email") or service_id).strip() or str(service_id)
         rows.append([inline_button(title[:48], f"status_show:{service_id}")])
+    rows.append([inline_button(t("status_missing_btn", lang), "status_missing_prompt")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -398,6 +401,65 @@ async def show_status_service(callback: CallbackQuery, settings: Settings, servi
         await callback_error_alert(callback, exc, lang)
         return
     await callback.answer()
+
+
+@router.callback_query(F.data == "status_missing_prompt")
+async def status_missing_prompt(callback: CallbackQuery, state: FSMContext, services: ServiceContainer) -> None:
+    lang = await _user_lang(services, callback.from_user.id)
+    await state.set_state(CommonStates.waiting_status_missing_link)
+    if callback.message is not None:
+        await callback.message.answer(t("status_missing_prompt", lang))
+    await callback.answer()
+
+
+@router.message(CommonStates.waiting_status_missing_link)
+async def status_missing_receive_link(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    user_id = message.from_user.id
+    lang = await _user_lang(services, user_id)
+    result = await services.common_handler_service.bind_missing_status_service_by_link(
+        panel_service=services.panel_service,
+        telegram_user_id=user_id,
+        link_or_config=message.text or "",
+    )
+    if result.status == "invalid_link":
+        await message.answer(t("status_missing_invalid_link", lang))
+        return
+    await state.clear()
+    if result.status == "exists":
+        await _answer_with_main_menu(
+            message,
+            t("status_missing_exists", lang),
+            user_id=user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+        return
+    if result.status == "added":
+        await _answer_with_main_menu(
+            message,
+            t("status_missing_added", lang),
+            user_id=user_id,
+            settings=settings,
+            services=services,
+            lang=lang,
+        )
+        await _send_service_status(
+            message,
+            settings=settings,
+            services=services,
+            force_refresh=True,
+            target_user_id=user_id,
+        )
+        return
+    await _answer_with_main_menu(
+        message,
+        t("status_missing_not_found", lang),
+        user_id=user_id,
+        settings=settings,
+        services=services,
+        lang=lang,
+    )
 
 
 @router.callback_query(F.data.startswith("status_rotate_no:"))

@@ -611,9 +611,15 @@ class PanelService:
                 clients = await self.list_clients(panel_id)
             except Exception:
                 continue
+            owner_map = await self.db.list_client_owners_for_panel(panel_id)
             for client in clients:
-                tg_id = str(client.get("tg_id") or "").strip().lower()
-                if not tg_id or tg_id not in candidates:
+                inbound_id = int(client.get("inbound_id") or 0)
+                client_uuid = str(client.get("uuid") or "").strip()
+                tg_id = str(client.get("tg_id") or client.get("tgId") or "").strip().lower()
+                owner_user_id = owner_map.get((inbound_id, client_uuid)) if inbound_id > 0 and client_uuid else None
+                is_identity_match = bool(tg_id) and tg_id in candidates
+                is_owner_match = int(owner_user_id or 0) == telegram_user_id
+                if not is_identity_match and not is_owner_match:
                     continue
                 try:
                     await self.bind_service_to_user(

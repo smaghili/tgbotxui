@@ -38,3 +38,11 @@ class PanelAccessContext:
     inbounds: list[dict]
     selected_inbound_ids: frozenset[int]
     lang: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class StatusMissingServiceResult:
+    status: str  # one of: added, exists, not_found, invalid_link
+    panel_id: int | None = None
+    inbound_id: int | None = None
+    client_email: str | None = None

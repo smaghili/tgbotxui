@@ -86,3 +86,7 @@ class FinanceStates(StatesGroup):
     waiting_pricing_gb = State()
     waiting_pricing_day = State()
     waiting_pricing_history_choice = State()
+
+
+class CommonStates(StatesGroup):
+    waiting_status_missing_link = State()

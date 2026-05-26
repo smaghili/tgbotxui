@@ -286,6 +286,30 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "لطفا یکی از سرویس های خود را انتخاب کنید.",
         "en": "Please select one of your services.",
     },
+    "status_missing_btn": {
+        "fa": "👉 سرویس من در لیست نیست 👈",
+        "en": "👉 My service is not listed 👈",
+    },
+    "status_missing_prompt": {
+        "fa": "لطفا لینک هوشمند اشتراک خود را که در لیست سرویس های شما نمی باشد وارد کنید 👇",
+        "en": "Please enter your smart subscription/config link that is not listed 👇",
+    },
+    "status_missing_not_found": {
+        "fa": "سرویس شما یافت نشد. لطفا با ادمین تماس بگیرید.",
+        "en": "Your service was not found. Please contact admin.",
+    },
+    "status_missing_exists": {
+        "fa": "این سرویس از قبل در لیست سرویس‌های شما موجود است.",
+        "en": "This service is already in your service list.",
+    },
+    "status_missing_added": {
+        "fa": "✅ سرویس شما با موفقیت به لیست اضافه شد.",
+        "en": "✅ Your service was added to the list.",
+    },
+    "status_missing_invalid_link": {
+        "fa": "لینک وارد شده معتبر نیست. لطفا لینک ساب یا کانفیگ معتبر بفرستید.",
+        "en": "The provided link is invalid. Please send a valid subscription or config link.",
+    },
     "status_invalid_id": {"fa": "شناسه نامعتبر است.", "en": "Invalid ID."},
     "status_not_found": {"fa": "سرویس پیدا نشد.", "en": "Service not found."},
     "status_no_access": {"fa": "شما به این سرویس دسترسی ندارید.", "en": "You do not have access to this service."},
