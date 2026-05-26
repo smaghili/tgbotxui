@@ -1,4 +1,5 @@
 from bot.handlers.admin_provisioning import _edit_search_results_keyboard
+from bot.handlers.admin_shared import parse_client_callback
 
 
 def test_edit_search_results_keyboard_uses_edit_callbacks() -> None:
@@ -25,3 +26,17 @@ def test_edit_search_results_keyboard_adds_pagination_callbacks() -> None:
     assert nav_row[0].callback_data == "pecp:3:1:sample"
     assert nav_row[1].text == "2/2"
     assert markup.inline_keyboard[-1][0].callback_data == "pecsr:3:sample"
+
+
+def test_edit_detail_callback_payload_keeps_panel_inbound_and_uuid() -> None:
+    callback_data = "pec:detail:7:2:uuid-1"
+
+    _, _, panel_raw, inbound_raw, client_uuid = callback_data.split(":", 4)
+
+    assert int(panel_raw) == 7
+    assert int(inbound_raw) == 2
+    assert client_uuid == "uuid-1"
+
+
+def test_shared_client_callback_parser_still_supports_cr_prefix() -> None:
+    assert parse_client_callback("cr:7:2:uuid-1", "cr") == (7, 2, "uuid-1")

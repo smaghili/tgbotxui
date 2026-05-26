@@ -1286,7 +1286,9 @@ async def edit_config_show_detail(callback: CallbackQuery, settings: Settings, s
         await callback.answer()
         return
     try:
-        panel_id, inbound_id, client_uuid = parse_client_callback(callback.data.replace("pec:detail", "cr", 1), "cr")
+        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
+        panel_id = int(panel_raw)
+        inbound_id = int(inbound_raw)
     except ValueError:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
