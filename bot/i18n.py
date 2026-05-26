@@ -279,7 +279,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "Failed to fetch service status. Please try again later.",
     },
     "status_empty": {
-        "fa": "سرویسی به اکانت شما متصل نشده است. برای اتصال با ادمین هماهنگ کنید.",
+        "fa": "سرویسی به اکانت شما متصل نشده است.",
         "en": "No service is connected to your account. Contact admin to bind a service.",
     },
     "status_choose_service": {

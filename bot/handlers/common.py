@@ -99,13 +99,21 @@ def _status_rotate_confirm_keyboard(service_id: int, lang: str) -> InlineKeyboar
     return yes_no_inline_keyboard(f"status_rotate_yes:{service_id}", f"status_rotate_no:{service_id}", lang)
 
 
+def _status_missing_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [inline_button(t("status_missing_btn", lang), "status_missing_prompt")],
+        ]
+    )
+
+
 def _status_services_choice_keyboard(service_rows: list[dict], lang: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for row in service_rows:
         service_id = int(row["id"])
         title = str(row.get("service_name") or row.get("client_email") or service_id).strip() or str(service_id)
         rows.append([inline_button(title[:48], f"status_show:{service_id}")])
-    rows.append([inline_button(t("status_missing_btn", lang), "status_missing_prompt")])
+    rows.extend(_status_missing_keyboard(lang).inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -217,14 +225,7 @@ async def _answer_empty_status(
         success=True,
         details="empty",
     )
-    await _answer_with_main_menu(
-        message,
-        t("status_empty", lang),
-        user_id=user_id,
-        settings=settings,
-        services=services,
-        lang=lang,
-    )
+    await message.answer(t("status_empty", lang), reply_markup=_status_missing_keyboard(lang))
 
 
 async def _send_admin_service_status(
