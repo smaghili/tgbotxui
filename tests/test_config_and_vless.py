@@ -264,6 +264,47 @@ class PanelServiceVlessTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_bind_services_for_telegram_identity_can_disable_owner_fallback(self) -> None:
+        class FakeDB:
+            async def list_client_owners_for_panel(self, panel_id: int) -> dict[tuple[int, str], int]:
+                return {(2, "uuid-2"): 777}
+
+        service = PanelService(FakeDB(), None, None)  # type: ignore[arg-type]
+
+        async def list_panels() -> list[dict[str, object]]:
+            return [{"id": 1, "name": "Main"}]
+
+        async def list_clients(panel_id: int) -> list[dict[str, object]]:
+            return [
+                {"email": "user-a", "inbound_id": 1, "uuid": "uuid-1", "tg_id": "777"},
+                {"email": "user-b", "inbound_id": 2, "uuid": "uuid-2", "tg_id": ""},
+            ]
+
+        bound_calls: list[tuple[int, int, str, int | None]] = []
+
+        async def bind_service_to_user(
+            *,
+            panel_id: int,
+            telegram_user_id: int,
+            client_email: str,
+            service_name: str | None,
+            inbound_id: int | None = None,
+        ) -> dict[str, object]:
+            bound_calls.append((panel_id, telegram_user_id, client_email, inbound_id))
+            return {}
+
+        service.list_panels = list_panels  # type: ignore[method-assign]
+        service.list_clients = list_clients  # type: ignore[method-assign]
+        service.bind_service_to_user = bind_service_to_user  # type: ignore[method-assign]
+
+        bound = await service.bind_services_for_telegram_identity(
+            telegram_user_id=777,
+            username=None,
+            allow_owner_fallback=False,
+        )
+
+        self.assertEqual(bound, 1)
+        self.assertEqual(bound_calls, [(1, 777, "user-a", 1)])
 
 if __name__ == "__main__":
     unittest.main()

@@ -597,6 +597,7 @@ class PanelService:
         *,
         telegram_user_id: int,
         username: str | None,
+        allow_owner_fallback: bool = True,
     ) -> int:
         candidates = {str(telegram_user_id)}
         username_norm = (username or "").strip().lstrip("@").lower()
@@ -611,14 +612,14 @@ class PanelService:
                 clients = await self.list_clients(panel_id)
             except Exception:
                 continue
-            owner_map = await self.db.list_client_owners_for_panel(panel_id)
+            owner_map = await self.db.list_client_owners_for_panel(panel_id) if allow_owner_fallback else {}
             for client in clients:
                 inbound_id = int(client.get("inbound_id") or 0)
                 client_uuid = str(client.get("uuid") or "").strip()
                 tg_id = str(client.get("tg_id") or client.get("tgId") or "").strip().lower()
                 owner_user_id = owner_map.get((inbound_id, client_uuid)) if inbound_id > 0 and client_uuid else None
                 is_identity_match = bool(tg_id) and tg_id in candidates
-                is_owner_match = int(owner_user_id or 0) == telegram_user_id
+                is_owner_match = allow_owner_fallback and int(owner_user_id or 0) == telegram_user_id
                 if not is_identity_match and not is_owner_match:
                     continue
                 try:

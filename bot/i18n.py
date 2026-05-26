@@ -291,8 +291,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "👉 My service is not listed 👈",
     },
     "status_missing_prompt": {
-        "fa": "لطفا لینک هوشمند اشتراک خود را که در لیست سرویس های شما نمی باشد وارد کنید 👇",
-        "en": "Please enter your smart subscription/config link that is not listed 👇",
+        "fa": "لطفا لینک ساب و یا کانفیگ خود را که در لیست سرویس های شما نمی باشد وارد کنید 👇",
+        "en": "Please enter your subscription link or config link that is not listed 👇",
     },
     "status_missing_not_found": {
         "fa": "سرویس شما یافت نشد. لطفا با ادمین تماس بگیرید.",

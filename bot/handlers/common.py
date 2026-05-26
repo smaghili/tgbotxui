@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from bot.config import Settings
 from bot.i18n import button_variants, t
-from bot.keyboards import main_keyboard
+from bot.keyboards import cancel_only_keyboard, main_keyboard
 from bot.services.container import ServiceContainer
 from bot.states import CommonStates
 
@@ -155,6 +155,7 @@ async def _send_service_status(
 ) -> None:
     user_id = target_user_id if target_user_id is not None else message.from_user.id
     lang = await _user_lang(services, user_id)
+    is_any_admin_user = await services.access_service.is_any_admin(user_id, settings)
     skipped_autobind_due_to_cooldown = False
     if message.from_user is not None and message.from_user.id == user_id:
         # Keep user identity fresh and try auto-bind on demand, so users do not need /start again.
@@ -179,6 +180,7 @@ async def _send_service_status(
                 await services.panel_service.bind_services_for_telegram_identity(
                     telegram_user_id=user_id,
                     username=message.from_user.username,
+                    allow_owner_fallback=not is_any_admin_user,
                 )
             except Exception:
                 logger.exception("auto-bind by telegram identity failed", extra={"telegram_user_id": user_id})
@@ -216,6 +218,7 @@ async def _send_service_status(
             rebound = await services.panel_service.bind_services_for_telegram_identity(
                 telegram_user_id=user_id,
                 username=message.from_user.username,
+                allow_owner_fallback=not is_any_admin_user,
             )
         except Exception:
             logger.exception("fallback auto-bind by telegram identity failed", extra={"telegram_user_id": user_id})
@@ -408,7 +411,14 @@ async def status_missing_prompt(callback: CallbackQuery, state: FSMContext, serv
     lang = await _user_lang(services, callback.from_user.id)
     await state.set_state(CommonStates.waiting_status_missing_link)
     if callback.message is not None:
+<<<<<<< HEAD
         await callback.message.answer(t("status_missing_prompt", lang))
+=======
+        await callback.message.answer(
+            t("status_missing_prompt", lang),
+            reply_markup=cancel_only_keyboard(lang),
+        )
+>>>>>>> 6cb14a6 (Improve status flow and service auto-binding)
     await callback.answer()
 
 
@@ -422,7 +432,14 @@ async def status_missing_receive_link(message: Message, state: FSMContext, setti
         link_or_config=message.text or "",
     )
     if result.status == "invalid_link":
+<<<<<<< HEAD
         await message.answer(t("status_missing_invalid_link", lang))
+=======
+        await message.answer(
+            t("status_missing_invalid_link", lang),
+            reply_markup=cancel_only_keyboard(lang),
+        )
+>>>>>>> 6cb14a6 (Improve status flow and service auto-binding)
         return
     await state.clear()
     if result.status == "exists":
