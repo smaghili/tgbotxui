@@ -411,14 +411,10 @@ async def status_missing_prompt(callback: CallbackQuery, state: FSMContext, serv
     lang = await _user_lang(services, callback.from_user.id)
     await state.set_state(CommonStates.waiting_status_missing_link)
     if callback.message is not None:
-<<<<<<< HEAD
-        await callback.message.answer(t("status_missing_prompt", lang))
-=======
         await callback.message.answer(
             t("status_missing_prompt", lang),
             reply_markup=cancel_only_keyboard(lang),
         )
->>>>>>> 6cb14a6 (Improve status flow and service auto-binding)
     await callback.answer()
 
 
@@ -432,14 +428,10 @@ async def status_missing_receive_link(message: Message, state: FSMContext, setti
         link_or_config=message.text or "",
     )
     if result.status == "invalid_link":
-<<<<<<< HEAD
-        await message.answer(t("status_missing_invalid_link", lang))
-=======
         await message.answer(
             t("status_missing_invalid_link", lang),
             reply_markup=cancel_only_keyboard(lang),
         )
->>>>>>> 6cb14a6 (Improve status flow and service auto-binding)
         return
     await state.clear()
     if result.status == "exists":
