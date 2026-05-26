@@ -77,6 +77,27 @@ class CommonHandlerService:
         )
         return match.group(0) if match else None
 
+    @staticmethod
+    async def _sync_client_tg_id_if_possible(
+        *,
+        panel_service: Any,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        telegram_user_id: int,
+    ) -> None:
+        if inbound_id <= 0 or not client_uuid:
+            return
+        try:
+            await panel_service.set_client_tg_id(
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_uuid=client_uuid,
+                tg_id=str(telegram_user_id),
+            )
+        except Exception:
+            return
+
     async def bind_missing_status_service_by_link(
         self,
         *,
@@ -100,8 +121,16 @@ class CommonHandlerService:
             if not email:
                 continue
             inbound_id = int(match.get("inbound_id") or 0)
+            client_uuid = str(match.get("id") or match.get("client_id") or "").strip()
             existing = await self.db.get_user_services_by_panel_email(panel_id, email)
             if any(int(row.get("telegram_user_id") or 0) == telegram_user_id for row in existing):
+                await self._sync_client_tg_id_if_possible(
+                    panel_service=panel_service,
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                    telegram_user_id=telegram_user_id,
+                )
                 return StatusMissingServiceResult(
                     status="exists",
                     panel_id=panel_id,
@@ -114,6 +143,13 @@ class CommonHandlerService:
                 client_email=email,
                 service_name=None,
                 inbound_id=inbound_id if inbound_id > 0 else None,
+            )
+            await self._sync_client_tg_id_if_possible(
+                panel_service=panel_service,
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_uuid=client_uuid,
+                telegram_user_id=telegram_user_id,
             )
             return StatusMissingServiceResult(
                 status="added",
