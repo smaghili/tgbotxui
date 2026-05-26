@@ -8,6 +8,11 @@ from bot.repositories.delegated_admin_repository import DelegatedAdminRepository
 from bot.services.access_service import AccessService
 from bot.services.financial_service import FinancialService
 from bot.services.panel_service import PanelService
+from bot.services.panel_access_errors import (
+    PanelAccessDelegatedAdminNotFoundError,
+    PanelAccessInboundNotFoundError,
+    PanelAccessPanelNotFoundError,
+)
 from bot.services.provisioning_models import InboundAccess
 
 
@@ -153,6 +158,72 @@ class DelegatedAccessService:
             details=f"user={telegram_user_id};panel={panel_id}",
         )
         return access_id
+
+    async def list_panel_inbound_access_state(
+        self,
+        *,
+        panel_id: int,
+        telegram_user_id: int,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], set[int]]:
+        panel = await self.panel_service.get_panel(panel_id)
+        if panel is None:
+            raise PanelAccessPanelNotFoundError
+        delegated = await self.repo.get_by_user_id(telegram_user_id)
+        if delegated is None:
+            raise PanelAccessDelegatedAdminNotFoundError
+        inbounds = await self.panel_service.list_inbounds(panel_id)
+        selected_ids = {
+            int(row["inbound_id"])
+            for row in await self.repo.list_admin_access_rows_for_user(telegram_user_id)
+            if int(row["panel_id"]) == panel_id
+        }
+        return panel, inbounds, selected_ids
+
+    async def sync_delegated_admin_panel_inbound_access(
+        self,
+        *,
+        actor_user_id: int,
+        panel_id: int,
+        telegram_user_id: int,
+        inbound_ids: set[int],
+    ) -> None:
+        delegated = await self.repo.get_by_user_id(telegram_user_id)
+        if delegated is None:
+            raise PanelAccessDelegatedAdminNotFoundError
+        inbounds = await self.panel_service.list_inbounds(panel_id)
+        available_ids = {int(inbound.get("id") or 0) for inbound in inbounds if int(inbound.get("id") or 0) > 0}
+        normalized_ids = {int(inbound_id) for inbound_id in inbound_ids if int(inbound_id) > 0}
+        if not normalized_ids.issubset(available_ids):
+            raise PanelAccessInboundNotFoundError
+        delegated_admin_id = int(delegated["id"])
+        current_rows = [row for row in await self.repo.list_admin_access_rows_for_user(telegram_user_id) if int(row["panel_id"]) == panel_id]
+        current_map = {int(row["inbound_id"]): int(row["access_id"]) for row in current_rows}
+        await self.repo.add_panel_access(delegated_admin_id=delegated_admin_id, panel_id=panel_id)
+        for inbound_id in normalized_ids - set(current_map):
+            access_id = await self.repo.add_inbound_access(
+                delegated_admin_id=delegated_admin_id,
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+            )
+            await self.db.add_audit_log(
+                actor_user_id=actor_user_id,
+                action="grant_delegated_admin_access",
+                target_type="delegated_admin_inbound",
+                target_id=str(access_id),
+                success=True,
+                details=f"user={telegram_user_id};panel={panel_id};inbound={inbound_id}",
+            )
+        for inbound_id in set(current_map) - normalized_ids:
+            access_id = current_map[inbound_id]
+            revoked = await self.repo.revoke_access(access_id)
+            await self.db.add_audit_log(
+                actor_user_id=actor_user_id,
+                action="revoke_delegated_admin_access",
+                target_type="delegated_admin_inbound",
+                target_id=str(access_id),
+                success=revoked,
+                details=f"user={telegram_user_id};panel={panel_id};inbound={inbound_id}",
+            )
 
     async def revoke_delegated_admin_access(self, *, actor_user_id: int, access_id: int) -> bool:
         revoked = await self.repo.revoke_access(access_id)

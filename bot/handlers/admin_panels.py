@@ -7,8 +7,17 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.keyboards import main_keyboard
+from bot.services.panel_access_errors import (
+    PanelAccessDelegatedAdminNotFoundError,
+    PanelAccessDeniedError,
+    PanelAccessInboundNotFoundError,
+    PanelAccessInvalidCallbackError,
+    PanelAccessPanelNotFoundError,
+    PanelAccessStateMismatchError,
+)
+from bot.services.provisioning_models import PanelAccessContext, PanelAccessSelectionState
 from bot.services.container import ServiceContainer
-from bot.states import AddPanelStates, AdminSettingsStates, InboundsListStates
+from bot.states import AddPanelStates, AdminSettingsStates, DelegatedAdminStates, InboundsListStates
 
 from .admin_outbound_panel import send_panel_outbounds_overview
 from .admin_shared import (
@@ -67,13 +76,151 @@ def _panel_access_admins_keyboard(panel_id: int, admins: list[dict], lang: str |
             [
                 InlineKeyboardButton(
                     text=title[:42],
-                    callback_data=f"panel_access_grant:{panel_id}:{user_id}",
+                    callback_data=f"panel_access_pick:{panel_id}:{user_id}",
                 )
             ]
         )
     if not rows:
         rows.append([InlineKeyboardButton(text=t("admin_none", lang), callback_data="noop")])
+    rows.append([InlineKeyboardButton(text=t("admin_back", lang), callback_data=f"panel_actions:{panel_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _panel_access_inbounds_text(panel: dict, admin: dict, lang: str | None = None) -> str:
+    admin_name = str(admin.get("title") or admin.get("full_name") or admin.get("username") or admin.get("telegram_user_id") or "-")
+    return t("panel_access_pick_inbounds", lang, panel=panel["name"], admin=admin_name)
+
+
+def _panel_access_inbounds_keyboard(
+    panel_id: int,
+    target_user_id: int,
+    inbounds: list[dict],
+    selected_inbound_ids: set[int],
+    lang: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for inbound in inbounds:
+        inbound_id = int(inbound.get("id") or 0)
+        if inbound_id <= 0:
+            continue
+        remark = str(inbound.get("remark") or "").strip()
+        name = remark or f"inbound-{inbound.get('port') or inbound_id}"
+        prefix = "✅ " if inbound_id in selected_inbound_ids else ""
+        rows.append(
+            [InlineKeyboardButton(text=f"{prefix}{name}"[:64], callback_data=f"panel_access_toggle:{panel_id}:{target_user_id}:{inbound_id}")]
+        )
+    rows.append([InlineKeyboardButton(text=t("panel_access_save", lang), callback_data=f"panel_access_save:{panel_id}:{target_user_id}")])
+    rows.append([InlineKeyboardButton(text=t("admin_back", lang), callback_data=f"panel_access_ask:{panel_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _panel_actions_keyboard(panel_id: int, lang: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("panel_action_access", lang), callback_data=f"panel_access_ask:{panel_id}"),
+                InlineKeyboardButton(text=t("panel_action_reconnect", lang), callback_data=f"panel_reconnect:{panel_id}"),
+                InlineKeyboardButton(text=t("panel_action_delete", lang), callback_data=f"panel_delete_ask:{panel_id}"),
+            ],
+            [InlineKeyboardButton(text=t("panel_actions_back_to_list", lang), callback_data="panel_actions_back")],
+        ]
+    )
+
+
+def _parse_callback_ids(callback_data: str, expected_parts: int) -> tuple[int, ...]:
+    parts = callback_data.split(":")
+    if len(parts) != expected_parts:
+        raise PanelAccessInvalidCallbackError
+    try:
+        return tuple(int(part) for part in parts[1:])
+    except ValueError as exc:
+        raise PanelAccessInvalidCallbackError from exc
+
+
+def _panel_access_error_text(exc: Exception, lang: str | None) -> str:
+    mapping = {
+        PanelAccessInvalidCallbackError: t("bind_invalid_id", lang),
+        PanelAccessStateMismatchError: t("bind_invalid_id", lang),
+        PanelAccessDeniedError: t("no_admin_access", lang),
+        PanelAccessPanelNotFoundError: t("admin_panel_not_found", lang),
+        PanelAccessDelegatedAdminNotFoundError: t("admin_delegated_not_found", lang),
+        PanelAccessInboundNotFoundError: t("bind_invalid_id", lang),
+    }
+    for exc_type, text in mapping.items():
+        if isinstance(exc, exc_type):
+            return text
+    return str(exc)
+
+
+def _serialize_panel_access_state(state: PanelAccessSelectionState) -> dict[str, object]:
+    return {
+        "panel_access_panel_id": state.panel_id,
+        "panel_access_target_user_id": state.target_user_id,
+        "panel_access_selected_inbound_ids": sorted(state.selected_inbound_ids),
+    }
+
+
+def _deserialize_panel_access_state(data: dict, *, panel_id: int, target_user_id: int) -> PanelAccessSelectionState:
+    state = PanelAccessSelectionState(
+        panel_id=int(data.get("panel_access_panel_id") or 0),
+        target_user_id=int(data.get("panel_access_target_user_id") or 0),
+        selected_inbound_ids=frozenset(int(value) for value in data.get("panel_access_selected_inbound_ids", [])),
+    )
+    if state.panel_id != panel_id or state.target_user_id != target_user_id:
+        raise PanelAccessStateMismatchError
+    return state
+
+
+def _toggle_inbound_selection(state: PanelAccessSelectionState, inbound_id: int) -> PanelAccessSelectionState:
+    selected = set(state.selected_inbound_ids)
+    if inbound_id in selected:
+        selected.remove(inbound_id)
+    else:
+        selected.add(inbound_id)
+    return PanelAccessSelectionState(
+        panel_id=state.panel_id,
+        target_user_id=state.target_user_id,
+        selected_inbound_ids=frozenset(selected),
+    )
+
+
+async def _resolve_panel_access_context(
+    callback: CallbackQuery,
+    settings: Settings,
+    services: ServiceContainer,
+    *,
+    panel_id: int,
+    target_user_id: int | None = None,
+) -> PanelAccessContext:
+    lang = await services.db.get_user_language(callback.from_user.id)
+    if not await services.access_service.can_access_panel(
+        user_id=callback.from_user.id,
+        settings=settings,
+        panel_id=panel_id,
+    ):
+        raise PanelAccessDeniedError
+    panel = await services.panel_service.get_panel(panel_id)
+    if panel is None:
+        raise PanelAccessPanelNotFoundError
+    admins = await services.db.list_delegated_admins(
+        manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+    )
+    if target_user_id is None:
+        return PanelAccessContext(panel=panel, admin={}, inbounds=[], selected_inbound_ids=frozenset(), lang=lang)
+    admin = next((row for row in admins if int(row["telegram_user_id"]) == target_user_id), None)
+    if admin is None:
+        raise PanelAccessDelegatedAdminNotFoundError
+    _, inbounds, selected_inbound_ids = await services.admin_provisioning_service.list_panel_inbound_access_state(
+        panel_id=panel_id,
+        telegram_user_id=target_user_id,
+    )
+    return PanelAccessContext(
+        panel=panel,
+        admin=admin,
+        inbounds=inbounds,
+        selected_inbound_ids=frozenset(selected_inbound_ids),
+        lang=lang,
+    )
 
 
 def _panel_api_version_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
@@ -402,29 +549,59 @@ async def panel_access_ask(callback: CallbackQuery, settings: Settings, services
     if callback.message is None or callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
     try:
-        panel_id = int(callback.data.split(":", 1)[1])
-    except ValueError:
-        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
-        return
-    panel = await services.panel_service.get_panel(panel_id)
-    if panel is None:
-        await callback.answer(t("admin_panel_not_found", lang), show_alert=True)
-        return
-    if not await services.access_service.can_access_panel(
-        user_id=callback.from_user.id,
-        settings=settings,
-        panel_id=panel_id,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        (panel_id,) = _parse_callback_ids(callback.data, 2)
+        context = await _resolve_panel_access_context(callback, settings, services, panel_id=panel_id)
+    except Exception as exc:
+        lang = await services.db.get_user_language(callback.from_user.id)
+        await callback.answer(_panel_access_error_text(exc, lang), show_alert=True)
         return
     admins = await services.db.list_delegated_admins(
         manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
     )
     await callback.message.edit_text(
-        t("panel_access_select_admin", lang, name=panel["name"]),
-        reply_markup=_panel_access_admins_keyboard(panel_id, admins, lang),
+        t("panel_access_select_admin", context.lang, name=context.panel["name"]),
+        reply_markup=_panel_access_admins_keyboard(panel_id, admins, context.lang),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel_access_pick:"))
+async def panel_access_pick(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    try:
+        panel_id, target_user_id = _parse_callback_ids(callback.data, 3)
+        context = await _resolve_panel_access_context(
+            callback,
+            settings,
+            services,
+            panel_id=panel_id,
+            target_user_id=target_user_id,
+        )
+    except Exception as exc:
+        lang = await services.db.get_user_language(callback.from_user.id)
+        await callback.answer(_panel_access_error_text(exc, lang), show_alert=True)
+        return
+    selection_state = PanelAccessSelectionState(
+        panel_id=panel_id,
+        target_user_id=target_user_id,
+        selected_inbound_ids=context.selected_inbound_ids,
+    )
+    await state.set_state(DelegatedAdminStates.waiting_inbound_selection)
+    await state.update_data(**_serialize_panel_access_state(selection_state))
+    await callback.message.edit_text(
+        _panel_access_inbounds_text(context.panel, context.admin, context.lang),
+        reply_markup=_panel_access_inbounds_keyboard(
+            panel_id,
+            target_user_id,
+            context.inbounds,
+            set(selection_state.selected_inbound_ids),
+            context.lang,
+        ),
     )
     await callback.answer()
 
@@ -438,7 +615,7 @@ async def panel_actions(callback: CallbackQuery, settings: Settings, services: S
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     try:
-        panel_id = int(callback.data.split(":", 1)[1])
+        (panel_id,) = _parse_callback_ids(callback.data, 2)
     except ValueError:
         await callback.answer(t("bind_invalid_id", lang), show_alert=True)
         return
@@ -454,22 +631,9 @@ async def panel_actions(callback: CallbackQuery, settings: Settings, services: S
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
     status = "✅" if panel.get("last_login_ok") else "❌"
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔑 دسترسی", callback_data=f"panel_access_ask:{panel_id}"),
-                InlineKeyboardButton(text="🔄 تلاش مجدد", callback_data=f"panel_reconnect:{panel_id}"),
-                InlineKeyboardButton(text="🗑️ حذف", callback_data=f"panel_delete_ask:{panel_id}"),
-            ],
-            [InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data="panel_actions_back")],
-        ]
-    )
-    is_fa = (lang or "fa").startswith("fa")
-    connection_label = "وضعیت اتصال" if is_fa else "Connection status"
-    panel_id_label = "شناسه پنل" if is_fa else "Panel ID"
     await callback.message.edit_text(
-        f"{panel['name']}\n{panel_id_label}: {panel_id}\n{connection_label}: {status}",
-        reply_markup=kb,
+        f"{panel['name']}\n{t('panel_id_label', lang)}: {panel_id}\n{t('panel_connection_status', lang)}: {status}",
+        reply_markup=_panel_actions_keyboard(panel_id, lang),
     )
     await callback.answer()
 
@@ -512,39 +676,82 @@ async def panel_actions_back(callback: CallbackQuery, settings: Settings, servic
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("panel_access_grant:"))
-async def panel_access_grant(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+@router.callback_query(DelegatedAdminStates.waiting_inbound_selection, F.data.startswith("panel_access_toggle:"))
+async def panel_access_toggle(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await _reject_callback_if_not_full_admin(callback, settings, services):
         return
     if callback.message is None or callback.data is None:
         await callback.answer()
         return
-    lang = await services.db.get_user_language(callback.from_user.id)
     try:
-        _, panel_raw, user_raw = callback.data.split(":", 2)
-        panel_id = int(panel_raw)
-        target_user_id = int(user_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("bind_invalid_id", lang), show_alert=True)
-        return
-    if not await services.access_service.can_access_panel(
-        user_id=callback.from_user.id,
-        settings=settings,
-        panel_id=panel_id,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
-        return
-    try:
-        await services.admin_provisioning_service.grant_delegated_admin_panel_access(
-            actor_user_id=callback.from_user.id,
-            telegram_user_id=target_user_id,
+        panel_id, target_user_id, inbound_id = _parse_callback_ids(callback.data, 4)
+        selection_state = _deserialize_panel_access_state(await state.get_data(), panel_id=panel_id, target_user_id=target_user_id)
+        context = await _resolve_panel_access_context(
+            callback,
+            settings,
+            services,
             panel_id=panel_id,
+            target_user_id=target_user_id,
         )
-    except ValueError:
-        await callback.answer(t("admin_delegated_not_found", lang), show_alert=True)
+    except Exception as exc:
+        lang = await services.db.get_user_language(callback.from_user.id)
+        await callback.answer(_panel_access_error_text(exc, lang), show_alert=True)
         return
-    await refresh_panels_message(callback, services, settings)
-    await callback.answer(t("panel_access_granted", lang))
+    available_ids = {int(inbound.get("id") or 0) for inbound in context.inbounds}
+    if inbound_id not in available_ids:
+        await callback.answer(_panel_access_error_text(PanelAccessInboundNotFoundError(), context.lang), show_alert=True)
+        return
+    next_state = _toggle_inbound_selection(selection_state, inbound_id)
+    await state.update_data(**_serialize_panel_access_state(next_state))
+    await callback.message.edit_text(
+        _panel_access_inbounds_text(context.panel, context.admin, context.lang),
+        reply_markup=_panel_access_inbounds_keyboard(
+            panel_id,
+            target_user_id,
+            context.inbounds,
+            set(next_state.selected_inbound_ids),
+            context.lang,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(DelegatedAdminStates.waiting_inbound_selection, F.data.startswith("panel_access_save:"))
+async def panel_access_save(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+    if await _reject_callback_if_not_full_admin(callback, settings, services):
+        return
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    try:
+        panel_id, target_user_id = _parse_callback_ids(callback.data, 3)
+        selection_state = _deserialize_panel_access_state(await state.get_data(), panel_id=panel_id, target_user_id=target_user_id)
+        context = await _resolve_panel_access_context(
+            callback,
+            settings,
+            services,
+            panel_id=panel_id,
+            target_user_id=target_user_id,
+        )
+        await services.admin_provisioning_service.sync_delegated_admin_panel_inbound_access(
+            actor_user_id=callback.from_user.id,
+            panel_id=panel_id,
+            telegram_user_id=target_user_id,
+            inbound_ids=set(selection_state.selected_inbound_ids),
+        )
+        admins = await services.db.list_delegated_admins(
+            manager_user_id=None if services.access_service.is_root_admin(callback.from_user.id, settings) else callback.from_user.id
+        )
+    except Exception as exc:
+        lang = await services.db.get_user_language(callback.from_user.id)
+        await callback.answer(_panel_access_error_text(exc, lang), show_alert=True)
+        return
+    await state.clear()
+    await callback.message.edit_text(
+        t("panel_access_select_admin", context.lang, name=context.panel["name"]),
+        reply_markup=_panel_access_admins_keyboard(panel_id, admins, context.lang),
+    )
+    await callback.answer(t("panel_access_granted", context.lang))
 
 
 @router.callback_query(F.data.startswith("panel_delete_ask:"))

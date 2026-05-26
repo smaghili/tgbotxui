@@ -11,6 +11,7 @@ from bot.handlers.admin_shared import (
     yes_no_inline_keyboard,
 )
 from bot.handlers.admin_access import _delegated_detail_keyboard, _delegated_subordinates_keyboard
+from bot.handlers.admin_panels import _panel_access_admins_keyboard, _panel_access_inbounds_keyboard
 from bot.i18n import btn, t
 from bot.keyboards import admin_keyboard
 
@@ -133,16 +134,50 @@ def test_panel_select_keyboard_uses_default_and_health_markers() -> None:
     assert second_row.callback_data == "pick:8"
 
 
-def test_panels_glass_keyboard_includes_panel_access_button() -> None:
+def test_panels_glass_keyboard_keeps_actions_only_in_settings_entry() -> None:
     markup = panels_glass_keyboard(
         [{"id": 7, "name": "xui CDN", "last_login_ok": True, "is_default": True}]
     )
 
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
-    assert "panel_access_ask:7" in callbacks
-    assert "panel_delete_ask:7" in callbacks
+    assert "panel_actions:7" in callbacks
+    assert "panel_access_ask:7" not in callbacks
+    assert "panel_delete_ask:7" not in callbacks
     assert "panel_outbounds_list:7" not in callbacks
+
+
+def test_panel_access_admins_keyboard_uses_pick_and_back_actions() -> None:
+    markup = _panel_access_admins_keyboard(
+        7,
+        [{"telegram_user_id": 42, "title": "Admin A"}],
+        "fa",
+    )
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "panel_access_pick:7:42" in callbacks
+    assert "panel_actions:7" in callbacks
+    assert "panel_access_grant:7:42" not in callbacks
+
+
+def test_panel_access_inbounds_keyboard_marks_selected_and_has_save_and_back() -> None:
+    markup = _panel_access_inbounds_keyboard(
+        7,
+        42,
+        [{"id": 11, "remark": "A"}, {"id": 12, "remark": "B"}],
+        {12},
+        "fa",
+    )
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "A" in labels
+    assert "✅ B" in labels
+    assert "panel_access_toggle:7:42:11" in callbacks
+    assert "panel_access_toggle:7:42:12" in callbacks
+    assert "panel_access_save:7:42" in callbacks
+    assert "panel_access_ask:7" in callbacks
+    assert t("panel_access_save", "fa") in labels
 
 
 def test_yes_no_inline_keyboard_builds_two_buttons() -> None:

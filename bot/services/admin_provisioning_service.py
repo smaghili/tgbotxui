@@ -1088,6 +1088,32 @@ class AdminProvisioningService:
             panel_id=panel_id,
         )
 
+    async def list_panel_inbound_access_state(
+        self,
+        *,
+        panel_id: int,
+        telegram_user_id: int,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], set[int]]:
+        return await self.delegated_access.list_panel_inbound_access_state(
+            panel_id=panel_id,
+            telegram_user_id=telegram_user_id,
+        )
+
+    async def sync_delegated_admin_panel_inbound_access(
+        self,
+        *,
+        actor_user_id: int,
+        panel_id: int,
+        telegram_user_id: int,
+        inbound_ids: set[int],
+    ) -> None:
+        await self.delegated_access.sync_delegated_admin_panel_inbound_access(
+            actor_user_id=actor_user_id,
+            panel_id=panel_id,
+            telegram_user_id=telegram_user_id,
+            inbound_ids=inbound_ids,
+        )
+
     async def change_delegated_admin_parent(
         self,
         *,

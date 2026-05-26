@@ -658,6 +658,17 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "✅ دسترسی ادمین به این پنل ثبت شد.",
         "en": "✅ Admin panel access was saved.",
     },
+    "panel_access_pick_inbounds": {
+        "fa": "پنل: {panel}\nادمین: {admin}\n\nاینباندهای قابل دسترسی را انتخاب کنید:",
+        "en": "Panel: {panel}\nAdmin: {admin}\n\nSelect accessible inbounds:",
+    },
+    "panel_access_save": {"fa": "ثبت", "en": "Save"},
+    "panel_action_access": {"fa": "🔑 دسترسی", "en": "🔑 Access"},
+    "panel_action_reconnect": {"fa": "🔄 تلاش مجدد", "en": "🔄 Retry"},
+    "panel_action_delete": {"fa": "🗑️ حذف", "en": "🗑️ Delete"},
+    "panel_actions_back_to_list": {"fa": "⬅️ بازگشت به لیست", "en": "⬅️ Back to list"},
+    "panel_connection_status": {"fa": "وضعیت اتصال", "en": "Connection status"},
+    "panel_id_label": {"fa": "شناسه پنل", "en": "Panel ID"},
     "inbounds_select_panel": {"fa": "پنل پیش‌فرض انتخاب نشده است.\nبرای دریافت لیست ورودی‌ها، پنل را انتخاب کنید:", "en": "Default panel is not selected.\nSelect a panel to view inbounds:"},
 
     "admin_manage_admins_title": {
