@@ -145,6 +145,47 @@ async def _render_status_for_service_row(
     await message.answer(card, reply_markup=_status_service_keyboard(int(row["id"]), lang))
 
 
+async def _filter_admin_owned_status_rows(
+    *,
+    user_id: int,
+    username: str | None,
+    service_rows: list[dict],
+    services: ServiceContainer,
+) -> list[dict]:
+    candidates = {str(user_id)}
+    username_norm = (username or "").strip().lstrip("@").lower()
+    if username_norm:
+        candidates.add(username_norm)
+        candidates.add(f"@{username_norm}")
+
+    by_panel: dict[int, dict[str, str]] = {}
+    for row in service_rows:
+        panel_id = int(row.get("panel_id") or 0)
+        if panel_id <= 0 or panel_id in by_panel:
+            continue
+        try:
+            clients = await services.panel_service.list_clients(panel_id)
+        except Exception:
+            by_panel[panel_id] = {}
+            continue
+        tg_map: dict[str, str] = {}
+        for client in clients:
+            email = str(client.get("email") or "").strip().lower()
+            tg_id = str(client.get("tg_id") or client.get("tgId") or "").strip().lower()
+            if email and tg_id:
+                tg_map[email] = tg_id
+        by_panel[panel_id] = tg_map
+
+    visible: list[dict] = []
+    for row in service_rows:
+        panel_id = int(row.get("panel_id") or 0)
+        email = str(row.get("client_email") or "").strip().lower()
+        tg_id = by_panel.get(panel_id, {}).get(email, "")
+        if tg_id and tg_id in candidates:
+            visible.append(row)
+    return visible
+
+
 async def _send_service_status(
     message: Message,
     *,
@@ -207,6 +248,22 @@ async def _send_service_status(
             lang=lang,
         )
         return
+
+    if is_any_admin_user and service_rows:
+        all_rows = list(service_rows)
+        all_status_messages = list(status_messages)
+        service_rows = await _filter_admin_owned_status_rows(
+            user_id=user_id,
+            username=message.from_user.username if message.from_user is not None else None,
+            service_rows=all_rows,
+            services=services,
+        )
+        if service_rows and all_status_messages:
+            status_by_id: dict[int, str] = {}
+            for idx, row in enumerate(all_rows):
+                if idx < len(all_status_messages):
+                    status_by_id[int(row["id"])] = all_status_messages[idx]
+            status_messages = [status_by_id[int(row["id"])] for row in service_rows if int(row["id"]) in status_by_id]
 
     if (
         skipped_autobind_due_to_cooldown
