@@ -836,7 +836,7 @@ async def select_edit_search_result(
         await callback.answer()
         return
     try:
-        _, panel_raw, inbound_raw, client_uuid, scope, page_raw, query = callback.data.split(":", 6)
+        _, _, panel_raw, inbound_raw, client_uuid, scope, page_raw, query = callback.data.split(":", 7)
         panel_id = int(panel_raw)
         inbound_id = int(inbound_raw)
         page = int(page_raw)
