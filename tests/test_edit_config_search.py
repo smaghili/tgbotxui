@@ -38,5 +38,17 @@ def test_edit_detail_callback_payload_keeps_panel_inbound_and_uuid() -> None:
     assert client_uuid == "uuid-1"
 
 
+def test_edit_search_result_callback_payload_matches_handler_parser() -> None:
+    callback_data = "pecs:7:2:uuid-1:3:sample-query"
+
+    _, panel_raw, inbound_raw, client_uuid, page_raw, query = callback_data.split(":", 5)
+
+    assert int(panel_raw) == 7
+    assert int(inbound_raw) == 2
+    assert client_uuid == "uuid-1"
+    assert int(page_raw) == 3
+    assert query == "sample-query"
+
+
 def test_shared_client_callback_parser_still_supports_cr_prefix() -> None:
     assert parse_client_callback("cr:7:2:uuid-1", "cr") == (7, 2, "uuid-1")

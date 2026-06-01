@@ -1,6 +1,7 @@
 import unittest
 
 from bot.services.common_handler_service import CommonHandlerService
+from bot.handlers.common import _filter_admin_owned_status_rows
 
 
 class CommonHandlerServiceMissingStatusTests(unittest.IsolatedAsyncioTestCase):
@@ -92,6 +93,45 @@ class CommonHandlerServiceMissingStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(panel.calls[0]["telegram_user_id"], 42)
         self.assertEqual(panel.calls[0]["panel_id"], 9)
         self.assertEqual(panel.calls[0]["client_email"], "bob")
+
+
+class CommonStatusAdminVisibilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_filter_admin_owned_status_rows_uses_targeted_detail_lookup(self) -> None:
+        class FakePanelService:
+            def __init__(self) -> None:
+                self.detail_calls: list[tuple[int, int, str]] = []
+
+            async def get_client_detail(self, panel_id: int, inbound_id: int, client_uuid: str) -> dict:
+                self.detail_calls.append((panel_id, inbound_id, client_uuid))
+                if client_uuid == "uuid-visible":
+                    return {"tg_id": "12345"}
+                return {"tg_id": "99999"}
+
+            async def list_clients(self, panel_id: int) -> list[dict]:
+                raise AssertionError("list_clients should not be used for admin status visibility")
+
+        class FakeServices:
+            def __init__(self) -> None:
+                self.panel_service = FakePanelService()
+
+        services = FakeServices()
+        rows = [
+            {"id": 1, "panel_id": 10, "inbound_id": 20, "client_id": "uuid-visible", "client_email": "a@example.com"},
+            {"id": 2, "panel_id": 10, "inbound_id": 21, "client_id": "uuid-hidden", "client_email": "b@example.com"},
+        ]
+
+        visible = await _filter_admin_owned_status_rows(
+            user_id=12345,
+            username=None,
+            service_rows=rows,
+            services=services,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual([row["id"] for row in visible], [1])
+        self.assertEqual(
+            services.panel_service.detail_calls,
+            [(10, 20, "uuid-visible"), (10, 21, "uuid-hidden")],
+        )
 
 
 if __name__ == "__main__":

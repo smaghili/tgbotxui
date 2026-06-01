@@ -836,7 +836,7 @@ async def select_edit_search_result(
         await callback.answer()
         return
     try:
-        _, _, panel_raw, inbound_raw, client_uuid, scope, page_raw, query = callback.data.split(":", 7)
+        _, panel_raw, inbound_raw, client_uuid, page_raw, query = callback.data.split(":", 5)
         panel_id = int(panel_raw)
         inbound_id = int(inbound_raw)
         page = int(page_raw)
@@ -862,7 +862,7 @@ async def select_edit_search_result(
             settings=settings,
             services=services,
             lang=lang,
-            back_callback=f"pecp:{scope}:{page}:{query}",
+            back_callback=f"pecp:{panel_id}:{page}:{query}",
             back_text=t("admin_back", lang),
         )
     except Exception as exc:
