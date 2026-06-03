@@ -41,6 +41,8 @@ def _delegate_finance_comment_tag(comment: str) -> str | None:
     if tail.lower() == "moaf":
         return "moaf"
     return None
+
+
 class AdminProvisioningService:
     def __init__(
         self,
@@ -88,6 +90,48 @@ class AdminProvisioningService:
             if title:
                 return title
         return str(actor_user_id)
+
+    async def _log_delegated_create_failure(
+        self,
+        *,
+        actor_user_id: int,
+        settings: Settings,
+        panel_id: int,
+        inbound_id: int,
+        client_email: str,
+        total_gb: float,
+        expiry_days: int,
+        exc: Exception,
+    ) -> None:
+        if self.access_service.is_root_admin(actor_user_id, settings):
+            return
+        delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
+        profile = await self.db.get_delegated_admin_profile(actor_user_id)
+        wallet = await self.financial_service.get_wallet(actor_user_id) if self.financial_service is not None else None
+        parent_user_id = int((delegated or {}).get("parent_user_id") or 0) or None
+        parent_profile = await self.db.get_delegated_admin_profile(parent_user_id) if parent_user_id is not None else None
+        parent_wallet = (
+            await self.financial_service.get_wallet(parent_user_id)
+            if self.financial_service is not None and parent_user_id is not None
+            else None
+        )
+        logger.warning(
+            "delegated create client failed",
+            extra={
+                "actor_user_id": actor_user_id,
+                "panel_id": panel_id,
+                "inbound_id": inbound_id,
+                "client_email": client_email,
+                "total_gb": total_gb,
+                "expiry_days": expiry_days,
+                "error": str(exc),
+                "delegate_allow_negative_wallet": int(profile.get("allow_negative_wallet") or 0),
+                "delegate_wallet_balance": int((wallet or {}).get("balance") or 0),
+                "delegate_parent_user_id": parent_user_id or 0,
+                "parent_allow_negative_wallet": int((parent_profile or {}).get("allow_negative_wallet") or 0),
+                "parent_wallet_balance": int((parent_wallet or {}).get("balance") or 0),
+            },
+        )
 
     async def _panel_inbound_names(self, *, panel_id: int, inbound_id: int) -> tuple[str, str]:
         try:
@@ -1397,15 +1441,28 @@ class AdminProvisioningService:
 
             charge_tx = None
             if self.financial_service is not None:
-                charge_tx = await self.financial_service.charge_operation(
-                    actor_user_id=actor_user_id,
-                    settings=settings,
-                    operation="create_client",
-                    panel_id=panel_id,
-                    traffic_gb=total_gb,
-                    expiry_days=expiry_days,
-                    details=f"panel={panel_id};inbound={inbound_id};email={normalized_email}",
-                )
+                try:
+                    charge_tx = await self.financial_service.charge_operation(
+                        actor_user_id=actor_user_id,
+                        settings=settings,
+                        operation="create_client",
+                        panel_id=panel_id,
+                        traffic_gb=total_gb,
+                        expiry_days=expiry_days,
+                        details=f"panel={panel_id};inbound={inbound_id};email={normalized_email}",
+                    )
+                except Exception as exc:
+                    await self._log_delegated_create_failure(
+                        actor_user_id=actor_user_id,
+                        settings=settings,
+                        panel_id=panel_id,
+                        inbound_id=inbound_id,
+                        client_email=normalized_email,
+                        total_gb=total_gb,
+                        expiry_days=expiry_days,
+                        exc=exc,
+                    )
+                    raise
             try:
                 created = await self.panel_service.create_client(
                     panel_id=panel_id,

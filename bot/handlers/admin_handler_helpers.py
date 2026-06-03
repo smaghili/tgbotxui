@@ -13,6 +13,7 @@ from .admin_shared import actor_display_name
 DELEGATED_PROFILE_ERROR_KEYS: tuple[tuple[str, str], ...] = (
     ("insufficient wallet balance for upstream delegated admin", "admin_delegated_upstream_wallet_insufficient"),
     ("insufficient wallet balance for delegated admin", "finance_insufficient_wallet"),
+    ("insufficient wallet balance", "finance_insufficient_wallet"),
     ("delegated_unlimited_not_allowed", "finance_unlimited_not_allowed"),
     ("max clients reached", "admin_delegated_limit_error_max_clients"),
     ("traffic is below", "admin_delegated_limit_error_traffic_min"),

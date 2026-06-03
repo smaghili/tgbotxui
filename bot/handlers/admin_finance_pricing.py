@@ -20,6 +20,20 @@ from .admin_shared import answer_with_cancel, reject_callback_if_not_any_admin, 
 router = Router(name="admin_finance_pricing")
 
 
+async def _pricing_target_from_state(state: FSMContext) -> tuple[int, int, int, str | None] | None:
+    data = await state.get_data()
+    try:
+        return (
+            int(data["finance_pricing_target_user_id"]),
+            int(data["finance_price_per_gb"]),
+            int(data["finance_price_per_day"]),
+            str(data.get("finance_allocated_tiers_json")) if data.get("finance_allocated_tiers_json") is not None else None,
+        )
+    except (KeyError, TypeError, ValueError):
+        await state.clear()
+        return None
+
+
 @router.message(FinanceStates.waiting_pricing_target)
 async def finance_pricing_target_input(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
@@ -128,19 +142,19 @@ async def finance_pricing_history_apply(
         await callback.answer()
         return
     lang = await services.db.get_user_language(callback.from_user.id)
-    data = await state.get_data()
+    target_ref = await _pricing_target_from_state(state)
+    if target_ref is None:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
     await state.clear()
+    target_user_id, price_gb, price_day, allocated_tiers_json = target_ref
     await _save_pricing_and_answer(
         callback.message,
         actor_user_id=callback.from_user.id,
-        target_user_id=int(data["finance_pricing_target_user_id"]),
-        price_gb=int(data["finance_price_per_gb"]),
-        price_day=int(data["finance_price_per_day"]),
-        allocated_tiers_json=(
-            str(data.get("finance_allocated_tiers_json"))
-            if data.get("finance_allocated_tiers_json") is not None
-            else None
-        ),
+        target_user_id=target_user_id,
+        price_gb=price_gb,
+        price_day=price_day,
+        allocated_tiers_json=allocated_tiers_json,
         apply_to_past_reports=True,
         settings=settings,
         services=services,
@@ -162,19 +176,19 @@ async def finance_pricing_history_keep(
         await callback.answer()
         return
     lang = await services.db.get_user_language(callback.from_user.id)
-    data = await state.get_data()
+    target_ref = await _pricing_target_from_state(state)
+    if target_ref is None:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
     await state.clear()
+    target_user_id, price_gb, price_day, allocated_tiers_json = target_ref
     await _save_pricing_and_answer(
         callback.message,
         actor_user_id=callback.from_user.id,
-        target_user_id=int(data["finance_pricing_target_user_id"]),
-        price_gb=int(data["finance_price_per_gb"]),
-        price_day=int(data["finance_price_per_day"]),
-        allocated_tiers_json=(
-            str(data.get("finance_allocated_tiers_json"))
-            if data.get("finance_allocated_tiers_json") is not None
-            else None
-        ),
+        target_user_id=target_user_id,
+        price_gb=price_gb,
+        price_day=price_day,
+        allocated_tiers_json=allocated_tiers_json,
         apply_to_past_reports=False,
         settings=settings,
         services=services,

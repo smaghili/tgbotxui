@@ -64,6 +64,107 @@ async def _delegated_profile_for(
     if not is_delegated_admin:
         return None
     return await services.handler_context_service.delegated_profile(source.from_user.id)
+
+
+async def _reply_with_delegated_or_generic_error(
+    target: Message | CallbackQuery,
+    exc: Exception,
+    *,
+    lang: str | None,
+    generic_text: str,
+    include_duplicate: bool = True,
+) -> bool:
+    delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=include_duplicate)
+    if delegated_error is not None:
+        if isinstance(target, CallbackQuery):
+            await target.answer(delegated_error, show_alert=True)
+        else:
+            await target.answer(delegated_error)
+        return True
+    if isinstance(target, CallbackQuery):
+        await target.answer(generic_text, show_alert=True)
+    else:
+        await target.answer(generic_text)
+    return True
+
+
+async def _scoped_provisioning_client_from_callback(
+    callback: CallbackQuery,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+    prefix: str,
+    require_message: bool = False,
+) -> tuple[int, int, str] | None:
+    if callback.data is None or (require_message and callback.message is None):
+        await callback.answer()
+        return None
+    try:
+        panel_id, inbound_id, client_uuid = parse_client_callback(callback.data, prefix)
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return None
+    if not await _ensure_inbound_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        return None
+    return panel_id, inbound_id, client_uuid
+
+
+async def _provisioning_client_from_state(
+    state: FSMContext,
+    *,
+    actor_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+    panel_key: str = "edit_panel_id",
+    inbound_key: str = "edit_inbound_id",
+    uuid_key: str = "edit_client_uuid",
+) -> tuple[int, int, str] | None:
+    data = await state.get_data()
+    try:
+        panel_id = int(data[panel_key])
+        inbound_id = int(data[inbound_key])
+        client_uuid = str(data[uuid_key])
+    except (KeyError, TypeError, ValueError):
+        await state.clear()
+        return None
+    await state.clear()
+    if not await _ensure_inbound_access(
+        user_id=actor_user_id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        return None
+    return panel_id, inbound_id, client_uuid
+
+
+async def _stored_owner_pick_from_state(
+    state: FSMContext,
+) -> tuple[int, int, str] | None:
+    data = await state.get_data()
+    try:
+        panel_id = int(data["owner_pick_panel_id"])
+        inbound_id = int(data["owner_pick_inbound_id"])
+        client_uuid = str(data["owner_pick_client_uuid"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if panel_id <= 0 or inbound_id <= 0 or not client_uuid:
+        return None
+    return panel_id, inbound_id, client_uuid
+
+
 def _edit_actions_keyboard(
     panel_id: int,
     inbound_id: int,
@@ -595,12 +696,12 @@ async def _finish_create_user(
             tg_id=str(data.get("create_tg_id") or ""),
         )
     except Exception as exc:
-        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
-        if delegated_error is not None:
-            await message.answer(delegated_error)
-            await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
-            return
-        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        await _reply_with_delegated_or_generic_error(
+            message,
+            exc,
+            lang=lang,
+            generic_text=t("admin_edit_config_error", lang, error=exc),
+        )
         await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         return
     await _send_config_bundle(
@@ -857,26 +958,16 @@ async def edit_config_toggle_enable(callback: CallbackQuery, settings: Settings,
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:toggle",
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         detail, enabled = await services.admin_provisioning_service.toggle_client_for_actor(
             actor_user_id=callback.from_user.id,
@@ -908,26 +999,17 @@ async def edit_config_get_config(callback: CallbackQuery, settings: Settings, se
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:get_config",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await callback.answer(t("status_prepare_config", lang))
     try:
         detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
@@ -965,26 +1047,17 @@ async def edit_config_rotate_ask(callback: CallbackQuery, settings: Settings, se
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:rotate_ask",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await callback.message.answer(
         t("admin_edit_rotate_confirm", lang),
         reply_markup=_rotate_confirm_keyboard(panel_id, inbound_id, client_uuid, lang),
@@ -997,26 +1070,17 @@ async def edit_config_rotate_yes(callback: CallbackQuery, settings: Settings, se
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:rotate_yes",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await callback.answer(t("status_rotating", lang))
     try:
         detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
@@ -1078,26 +1142,17 @@ async def edit_config_set_tg_prompt(callback: CallbackQuery, state: FSMContext, 
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:tg_input",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await state.update_data(edit_panel_id=panel_id, edit_inbound_id=inbound_id, edit_client_uuid=client_uuid)
     await state.set_state(ProvisioningStates.waiting_edit_tg_id)
     await answer_with_cancel(callback.message, t("admin_enter_tg", lang), lang=lang)
@@ -1114,26 +1169,17 @@ async def edit_config_owner_pick(
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:owner_pick",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await state.update_data(
         owner_pick_panel_id=panel_id,
         owner_pick_inbound_id=inbound_id,
@@ -1171,13 +1217,11 @@ async def edit_config_owner_set(
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
-    data = await state.get_data()
-    panel_id = int(data.get("owner_pick_panel_id") or 0)
-    inbound_id = int(data.get("owner_pick_inbound_id") or 0)
-    client_uuid = str(data.get("owner_pick_client_uuid") or "")
-    if panel_id <= 0 or inbound_id <= 0 or not client_uuid:
+    client_ref = await _stored_owner_pick_from_state(state)
+    if client_ref is None:
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
+    panel_id, inbound_id, client_uuid = client_ref
     if not await _ensure_inbound_access(
         user_id=callback.from_user.id,
         settings=settings,
@@ -1222,22 +1266,18 @@ async def edit_config_set_tg_value(message: Message, state: FSMContext, settings
     if tg_id is None:
         await message.answer(t("admin_tgid_invalid", lang))
         return
-    data = await state.get_data()
-    await state.clear()
-    panel_id = int(data["edit_panel_id"])
-    inbound_id = int(data["edit_inbound_id"])
-    client_uuid = str(data["edit_client_uuid"])
-    if not await _ensure_inbound_access(
-        user_id=message.from_user.id,
+    client_ref = await _provisioning_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+        lang=lang,
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", lang))
         await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.set_client_tg_id_for_actor(
             actor_user_id=message.from_user.id,
@@ -1263,26 +1303,16 @@ async def edit_config_show_detail(callback: CallbackQuery, settings: Settings, s
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except ValueError:
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:detail",
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await render_client_detail(
         callback,
         services=services,
@@ -1300,26 +1330,17 @@ async def edit_config_add_traffic_prompt(callback: CallbackQuery, state: FSMCont
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:traffic_input",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await state.update_data(edit_panel_id=panel_id, edit_inbound_id=inbound_id, edit_client_uuid=client_uuid)
     await state.set_state(ProvisioningStates.waiting_edit_add_traffic_gb)
     await callback.message.answer(t("admin_edit_enter_add_traffic", lang))
@@ -1333,26 +1354,17 @@ async def edit_config_reset_traffic_ask(
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:traffic_reset_ask",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await state.update_data(edit_panel_id=panel_id, edit_inbound_id=inbound_id, edit_client_uuid=client_uuid)
     await state.set_state(ProvisioningStates.waiting_edit_reset_traffic_gb)
     await callback.message.answer(t("admin_edit_enter_reset_traffic", lang))
@@ -1371,21 +1383,17 @@ async def edit_config_reset_traffic_value(message: Message, state: FSMContext, s
     except ValueError:
         await message.answer(t("admin_invalid_nonnegative_number", lang))
         return
-    data = await state.get_data()
-    await state.clear()
-    panel_id = int(data["edit_panel_id"])
-    inbound_id = int(data["edit_inbound_id"])
-    client_uuid = str(data["edit_client_uuid"])
-    if not await _ensure_inbound_access(
-        user_id=message.from_user.id,
+    client_ref = await _provisioning_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+        lang=lang,
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", lang))
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.reset_client_traffic_for_actor(
             actor_user_id=message.from_user.id,
@@ -1396,11 +1404,12 @@ async def edit_config_reset_traffic_value(message: Message, state: FSMContext, s
             total_gb=None if gb == 0 else gb,
         )
     except Exception as exc:
-        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
-        if delegated_error is not None:
-            await message.answer(delegated_error)
-            return
-        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        await _reply_with_delegated_or_generic_error(
+            message,
+            exc,
+            lang=lang,
+            generic_text=t("admin_edit_config_error", lang, error=exc),
+        )
         return
     done_text = (
         t("admin_edit_traffic_reset_done", lang, gb=gb)
@@ -1510,11 +1519,12 @@ async def edit_config_location_pick(callback: CallbackQuery, settings: Settings,
             outbound_tag=outbound_tag,
         )
     except Exception as exc:
-        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
-        if delegated_error is not None:
-            await callback.answer(delegated_error, show_alert=True)
-            return
-        await callback.answer(t("admin_edit_config_error", lang, error=exc), show_alert=True)
+        await _reply_with_delegated_or_generic_error(
+            callback,
+            exc,
+            lang=lang,
+            generic_text=t("admin_edit_config_error", lang, error=exc),
+        )
         return
     await render_client_detail(
         callback,
@@ -1540,21 +1550,17 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
     except ValueError:
         await message.answer(t("admin_invalid_positive_number", lang))
         return
-    data = await state.get_data()
-    await state.clear()
-    panel_id = int(data["edit_panel_id"])
-    inbound_id = int(data["edit_inbound_id"])
-    client_uuid = str(data["edit_client_uuid"])
-    if not await _ensure_inbound_access(
-        user_id=message.from_user.id,
+    client_ref = await _provisioning_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+        lang=lang,
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", lang))
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.add_client_total_gb_for_actor(
             actor_user_id=message.from_user.id,
@@ -1565,11 +1571,12 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
             add_gb=gb,
         )
     except ValueError as exc:
-        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
-        if delegated_error is not None:
-            await message.answer(delegated_error)
-            return
-        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        await _reply_with_delegated_or_generic_error(
+            message,
+            exc,
+            lang=lang,
+            generic_text=t("admin_edit_config_error", lang, error=exc),
+        )
         return
     except Exception as exc:
         await message.answer(t("admin_edit_config_error", lang, error=exc))
@@ -1594,26 +1601,17 @@ async def edit_config_add_days_prompt(callback: CallbackQuery, state: FSMContext
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:days_input",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await state.update_data(edit_panel_id=panel_id, edit_inbound_id=inbound_id, edit_client_uuid=client_uuid)
     await state.set_state(ProvisioningStates.waiting_edit_add_expiry_days)
     await callback.message.answer(t("admin_edit_enter_add_days", lang))
@@ -1632,21 +1630,17 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
     except ValueError:
         await message.answer(t("admin_invalid_positive_number", lang))
         return
-    data = await state.get_data()
-    await state.clear()
-    panel_id = int(data["edit_panel_id"])
-    inbound_id = int(data["edit_inbound_id"])
-    client_uuid = str(data["edit_client_uuid"])
-    if not await _ensure_inbound_access(
-        user_id=message.from_user.id,
+    client_ref = await _provisioning_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+        lang=lang,
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", lang))
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.extend_client_expiry_days_for_actor(
             actor_user_id=message.from_user.id,
@@ -1657,11 +1651,12 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
             add_days=days,
         )
     except ValueError as exc:
-        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
-        if delegated_error is not None:
-            await message.answer(delegated_error)
-            return
-        await message.answer(t("admin_edit_config_error", lang, error=exc))
+        await _reply_with_delegated_or_generic_error(
+            message,
+            exc,
+            lang=lang,
+            generic_text=t("admin_edit_config_error", lang, error=exc),
+        )
         return
     except Exception as exc:
         await message.answer(t("admin_edit_config_error", lang, error=exc))
@@ -1683,26 +1678,17 @@ async def edit_config_delete_ask(callback: CallbackQuery, settings: Settings, se
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:delete_ask",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await callback.message.edit_reply_markup(reply_markup=_delete_confirm_keyboard(panel_id, inbound_id, client_uuid, lang))
     await callback.answer()
 
@@ -1712,26 +1698,17 @@ async def edit_config_delete_yes(callback: CallbackQuery, settings: Settings, se
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     lang = await _lang_for(callback, services)
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        _, _, panel_raw, inbound_raw, client_uuid = callback.data.split(":", 4)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
-        return
-    if not await _ensure_inbound_access(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_provisioning_client_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", lang), show_alert=True)
+        lang=lang,
+        prefix="pec:delete_yes",
+        require_message=True,
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid = client_ref
     await services.admin_provisioning_service.delete_client_for_actor(
         actor_user_id=callback.from_user.id,
         settings=settings,

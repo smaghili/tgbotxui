@@ -3,6 +3,7 @@ from __future__ import annotations
 from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
+from bot.i18n import t
 from bot.services.container import ServiceContainer
 from .admin_handler_helpers import delegated_profile_error_text
 from .admin_shared import (
@@ -11,9 +12,119 @@ from .admin_shared import (
     ensure_client_access,
     inbound_display_name,
     panel_bulk_actions_keyboard,
+    parse_client_callback,
+    parse_client_callback_with_value,
     single_button_inline_keyboard,
     users_clients_keyboard,
 )
+
+
+async def parse_panel_action_callback(
+    callback: CallbackQuery,
+    *,
+    require_message: bool = False,
+) -> int | None:
+    if callback.data is None or (require_message and callback.message is None):
+        await callback.answer()
+        return None
+    try:
+        _, panel_raw = callback.data.split(":", 1)
+        return int(panel_raw)
+    except (ValueError, IndexError):
+        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+        return None
+
+
+async def scoped_client_from_callback(
+    callback: CallbackQuery,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    prefix: str,
+    require_message: bool = False,
+) -> tuple[int, int, str] | None:
+    if callback.data is None or (require_message and callback.message is None):
+        await callback.answer()
+        return None
+    try:
+        panel_id, inbound_id, client_uuid = parse_client_callback(callback.data, prefix)
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+        return None
+    if not await ensure_client_scope(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return None
+    return panel_id, inbound_id, client_uuid
+
+
+async def scoped_client_value_from_callback(
+    callback: CallbackQuery,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    prefix: str,
+) -> tuple[int, int, str, str] | None:
+    if callback.data is None:
+        await callback.answer()
+        return None
+    try:
+        panel_id, inbound_id, client_uuid, value_raw = parse_client_callback_with_value(callback.data, prefix)
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+        return None
+    if not await ensure_client_scope(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return None
+    return panel_id, inbound_id, client_uuid, value_raw
+
+
+async def scoped_client_from_state(
+    state,
+    *,
+    actor_user_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    panel_key: str = "client_manage_panel_id",
+    inbound_key: str = "client_manage_inbound_id",
+    uuid_key: str = "client_manage_uuid",
+) -> tuple[int, int, str] | None:
+    data = await state.get_data()
+    try:
+        panel_id = int(data[panel_key])
+        inbound_id = int(data[inbound_key])
+        client_uuid = str(data[uuid_key])
+    except (KeyError, TypeError, ValueError):
+        await state.clear()
+        return None
+    await state.clear()
+    if not await ensure_client_scope(
+        user_id=actor_user_id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        return None
+    return panel_id, inbound_id, client_uuid
+
+
+def is_handled_delegated_operation_error(exc: Exception) -> bool:
+    return delegated_profile_error_text(exc, None) is not None
 
 
 async def actor_scope(

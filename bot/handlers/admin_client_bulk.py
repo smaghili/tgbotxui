@@ -11,13 +11,12 @@ from bot.states import ClientManageStates
 from bot.utils import parse_gb_amount
 from .admin_client_helpers import (
     bulk_clients_for_panel,
-    delegated_profile_error_text,
+    is_handled_delegated_operation_error,
     open_bulk_panel_menu,
-    visible_bulk_panels,
+    parse_panel_action_callback,
+    resolve_panel_or_prompt,
 )
 from .admin_shared import (
-    action_panel_select_keyboard,
-    answer_with_admin_menu,
     answer_with_cancel,
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
@@ -30,10 +29,14 @@ router = Router(name="admin_client_bulk")
 async def start_bulk_operations(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    try:
-        panel_id = await services.panel_service.resolve_panel_id(None)
-    except ValueError:
-        panel_id = None
+    panel_id = await resolve_panel_or_prompt(
+        message,
+        services,
+        settings=settings,
+        actor_user_id=message.from_user.id,
+        action_text_key="admin_bulk_pick_panel",
+        action_prefix="bulk_panel_pick",
+    )
     if panel_id is not None:
         await open_bulk_panel_menu(
             message,
@@ -42,33 +45,15 @@ async def start_bulk_operations(message: Message, settings: Settings, services: 
             services=services,
             panel_id=panel_id,
         )
-        return
-    panels = await visible_bulk_panels(
-        user_id=message.from_user.id,
-        settings=settings,
-        services=services,
-    )
-    if not panels:
-        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
-        return
-    await message.answer(
-        t("admin_bulk_pick_panel", None),
-        reply_markup=action_panel_select_keyboard(panels, "bulk_panel_pick"),
-    )
+    return
 
 
 @router.callback_query(F.data.startswith("bulk_panel_pick:"))
 async def bulk_panel_pick(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if callback.message is None or callback.data is None:
-        await callback.answer()
-        return
-    try:
-        _, panel_raw = callback.data.split(":", 1)
-        panel_id = int(panel_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+    panel_id = await parse_panel_action_callback(callback, require_message=True)
+    if panel_id is None:
         return
     await open_bulk_panel_menu(
         callback,
@@ -88,14 +73,8 @@ async def users_bulk_add_traffic_prompt(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if callback.message is None or callback.data is None:
-        await callback.answer()
-        return
-    try:
-        _, panel_raw = callback.data.split(":", 1)
-        panel_id = int(panel_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+    panel_id = await parse_panel_action_callback(callback, require_message=True)
+    if panel_id is None:
         return
     await state.update_data(bulk_panel_id=panel_id)
     await state.set_state(ClientManageStates.waiting_bulk_add_traffic_gb)
@@ -113,14 +92,8 @@ async def users_bulk_add_days_prompt(
 ) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if callback.message is None or callback.data is None:
-        await callback.answer()
-        return
-    try:
-        _, panel_raw = callback.data.split(":", 1)
-        panel_id = int(panel_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+    panel_id = await parse_panel_action_callback(callback, require_message=True)
+    if panel_id is None:
         return
     await state.update_data(bulk_panel_id=panel_id)
     await state.set_state(ClientManageStates.waiting_bulk_add_expiry_days)
@@ -166,11 +139,7 @@ async def bulk_add_traffic_gb(message: Message, state: FSMContext, settings: Set
             )
             success += 1
         except Exception as exc:
-            delegated_error = delegated_profile_error_text(exc, None)
-            if delegated_error is not None:
-                failed += 1
-                continue
-            if "insufficient" in str(exc).lower():
+            if is_handled_delegated_operation_error(exc):
                 failed += 1
                 continue
             failed += 1
@@ -219,11 +188,7 @@ async def bulk_add_expiry_days(message: Message, state: FSMContext, settings: Se
             )
             success += 1
         except Exception as exc:
-            delegated_error = delegated_profile_error_text(exc, None)
-            if delegated_error is not None:
-                failed += 1
-                continue
-            if "insufficient" in str(exc).lower():
+            if is_handled_delegated_operation_error(exc):
                 failed += 1
                 continue
             failed += 1

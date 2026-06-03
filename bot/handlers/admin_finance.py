@@ -31,6 +31,13 @@ router.include_router(wallet_router)
 router.include_router(pricing_router)
 
 
+async def _reject_callback_if_not_root_admin(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> bool:
+    if services.access_service.is_root_admin(callback.from_user.id, settings):
+        return False
+    await callback.answer(t("no_admin_access", None), show_alert=True)
+    return True
+
+
 @router.message(F.text.in_(button_variants("btn_manage_finance")))
 async def manage_finance_menu(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
@@ -89,8 +96,7 @@ async def finance_my_delegates_list_message(message: Message, settings: Settings
 async def finance_root_menu(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     if callback.message is not None:
@@ -106,8 +112,7 @@ async def finance_root_menu(callback: CallbackQuery, settings: Settings, service
 async def finance_delegates_list(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     rows = await services.admin_provisioning_service.list_delegated_admin_accesses(manager_user_id=None)
@@ -143,8 +148,7 @@ async def finance_my_delegates_list(callback: CallbackQuery, settings: Settings,
 async def finance_root_back(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     if callback.message is not None:
@@ -164,8 +168,7 @@ async def finance_root_back(callback: CallbackQuery, settings: Settings, service
 async def finance_root_list_close(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     if callback.message is not None:
@@ -206,8 +209,7 @@ async def finance_delegated_back(callback: CallbackQuery, settings: Settings, se
 async def finance_wallet_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     await state.set_state(FinanceStates.waiting_wallet_target)
@@ -221,8 +223,7 @@ async def finance_wallet_prompt(callback: CallbackQuery, state: FSMContext, sett
 async def finance_pricing_prompt(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     await state.set_state(FinanceStates.waiting_pricing_target)
@@ -235,8 +236,7 @@ async def finance_pricing_prompt(callback: CallbackQuery, state: FSMContext, set
 async def finance_overall_report(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if not services.access_service.is_root_admin(callback.from_user.id, settings):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+    if await _reject_callback_if_not_root_admin(callback, settings, services):
         return
     lang = await services.db.get_user_language(callback.from_user.id)
     report = await services.financial_service.get_overall_report()
@@ -272,4 +272,3 @@ async def finance_my_sales_report(callback: CallbackQuery, settings: Settings, s
         lang=lang,
     )
     await callback.answer()
-

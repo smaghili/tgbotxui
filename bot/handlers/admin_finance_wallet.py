@@ -27,6 +27,15 @@ from .admin_shared import (
 router = Router(name="admin_finance_wallet")
 
 
+async def _wallet_target_from_state(state: FSMContext) -> tuple[int, str] | None:
+    data = await state.get_data()
+    try:
+        return int(data["finance_wallet_target_user_id"]), str(data["finance_wallet_action"])
+    except (KeyError, TypeError, ValueError):
+        await state.clear()
+        return None
+
+
 @router.message(FinanceStates.waiting_wallet_target)
 async def finance_wallet_target_input(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
@@ -210,10 +219,12 @@ async def finance_wallet_amount_input(message: Message, state: FSMContext, setti
     except ValueError:
         await answer_with_cancel(message, t("finance_invalid_amount", lang), lang=lang)
         return
-    data = await state.get_data()
+    target_ref = await _wallet_target_from_state(state)
+    if target_ref is None:
+        await message.answer(t("admin_invalid_data", lang))
+        return
     await state.clear()
-    target_user_id = int(data["finance_wallet_target_user_id"])
-    action = str(data["finance_wallet_action"])
+    target_user_id, action = target_ref
     if not await _can_manage_finance_target(
         actor_user_id=message.from_user.id,
         target_user_id=target_user_id,
@@ -261,4 +272,3 @@ async def finance_wallet_amount_input(message: Message, state: FSMContext, setti
             lang=lang,
         ),
     )
-

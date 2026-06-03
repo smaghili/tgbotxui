@@ -11,8 +11,9 @@ from bot.states import ClientManageStates
 from bot.utils import parse_gb_amount
 from .admin_handler_helpers import delegated_profile_error_text
 from .admin_client_helpers import (
-    ensure_client_scope as _ensure_client_scope,
     scoped_client_from_callback as _scoped_client_from_callback,
+    scoped_client_from_state as _scoped_client_from_state,
+    scoped_client_value_from_callback as _scoped_client_value_from_callback,
 )
 from .admin_shared import (
     answer_with_admin_menu,
@@ -23,13 +24,46 @@ from .admin_shared import (
     client_ips_log_keyboard,
     client_traffic_menu_keyboard,
     normalize_tg_id,
-    parse_client_callback_with_value,
     reject_callback_if_not_any_admin,
     render_client_detail,
     set_client_action_context,
 )
 
 router = Router(name="admin_client_actions")
+
+
+async def _handle_callback_operation_error(callback: CallbackQuery, exc: Exception) -> bool:
+    delegated_error = delegated_profile_error_text(exc, None)
+    if delegated_error is None:
+        return False
+    await callback.answer(delegated_error, show_alert=True)
+    return True
+
+
+async def _handle_message_operation_error(
+    message: Message,
+    exc: Exception,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    fallback_text: str,
+) -> bool:
+    delegated_error = delegated_profile_error_text(exc, None)
+    if delegated_error is not None:
+        await answer_with_admin_menu(
+            message,
+            delegated_error,
+            settings=settings,
+            services=services,
+        )
+        return True
+    await answer_with_admin_menu(
+        message,
+        fallback_text,
+        settings=settings,
+        services=services,
+    )
+    return True
 
 
 @router.callback_query(F.data.startswith("tm:"))
@@ -54,24 +88,15 @@ async def client_traffic_menu(callback: CallbackQuery, settings: Settings, servi
 async def client_traffic_set(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if callback.data is None:
-        await callback.answer()
-        return
-    try:
-        panel_id, inbound_id, client_uuid, value_raw = parse_client_callback_with_value(callback.data, "ts")
-    except ValueError:
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
-        return
-    if not await _ensure_client_scope(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_client_value_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+        prefix="ts",
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid, value_raw = client_ref
     total_gb: float | None = None if value_raw == "unlimited" else parse_gb_amount(value_raw)
     try:
         await services.admin_provisioning_service.set_client_total_gb_for_actor(
@@ -83,9 +108,7 @@ async def client_traffic_set(callback: CallbackQuery, settings: Settings, servic
             total_gb=total_gb,
         )
     except Exception as exc:
-        delegated_error = delegated_profile_error_text(exc, None)
-        if delegated_error is not None:
-            await callback.answer(delegated_error, show_alert=True)
+        if await _handle_callback_operation_error(callback, exc):
             return
         await callback_error_alert(callback, exc)
         return
@@ -135,24 +158,15 @@ async def client_expiry_menu(callback: CallbackQuery, settings: Settings, servic
 async def client_expiry_set(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if callback.data is None:
-        await callback.answer()
-        return
-    try:
-        panel_id, inbound_id, client_uuid, value_raw = parse_client_callback_with_value(callback.data, "es")
-    except ValueError:
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
-        return
-    if not await _ensure_client_scope(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_client_value_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+        prefix="es",
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid, value_raw = client_ref
     days: int | None = None if value_raw == "unlimited" else int(value_raw)
     try:
         await services.admin_provisioning_service.set_client_expiry_days_for_actor(
@@ -164,9 +178,7 @@ async def client_expiry_set(callback: CallbackQuery, settings: Settings, service
             days=days,
         )
     except Exception as exc:
-        delegated_error = delegated_profile_error_text(exc, None)
-        if delegated_error is not None:
-            await callback.answer(delegated_error, show_alert=True)
+        if await _handle_callback_operation_error(callback, exc):
             return
         await callback_error_alert(callback, exc)
         return
@@ -216,24 +228,15 @@ async def client_iplimit_menu(callback: CallbackQuery, settings: Settings, servi
 async def iplimit_set_callback(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    if callback.data is None:
-        await callback.answer()
-        return
-    try:
-        panel_id, inbound_id, client_uuid, value_raw = parse_client_callback_with_value(callback.data, "is")
-    except ValueError:
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
-        return
-    if not await _ensure_client_scope(
-        user_id=callback.from_user.id,
+    client_ref = await _scoped_client_value_from_callback(
+        callback,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
-        await callback.answer(t("no_admin_access", None), show_alert=True)
+        prefix="is",
+    )
+    if client_ref is None:
         return
+    panel_id, inbound_id, client_uuid, value_raw = client_ref
     limit_ip: int | None = None if value_raw == "unlimited" else int(value_raw)
     try:
         await services.admin_provisioning_service.set_client_limit_ip_for_actor(
@@ -379,21 +382,16 @@ async def client_custom_traffic_gb(message: Message, state: FSMContext, settings
     except ValueError:
         await message.answer(t("admin_invalid_gb", None))
         return
-    data = await state.get_data()
-    panel_id = int(data["client_manage_panel_id"])
-    inbound_id = int(data["client_manage_inbound_id"])
-    client_uuid = str(data["client_manage_uuid"])
-    await state.clear()
-    if not await _ensure_client_scope(
-        user_id=message.from_user.id,
+    client_ref = await _scoped_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", None))
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.set_client_total_gb_for_actor(
             actor_user_id=message.from_user.id,
@@ -404,22 +402,14 @@ async def client_custom_traffic_gb(message: Message, state: FSMContext, settings
             total_gb=gb,
         )
     except Exception as exc:
-        delegated_error = delegated_profile_error_text(exc, None)
-        if delegated_error is not None:
-            await answer_with_admin_menu(
-                message,
-                delegated_error,
-                settings=settings,
-                services=services,
-            )
-            return
-        await answer_with_admin_menu(
+        if await _handle_message_operation_error(
             message,
-            f"{t('admin_update_traffic_error', None)}:\n{exc}",
+            exc,
             settings=settings,
             services=services,
-        )
-        return
+            fallback_text=f"{t('admin_update_traffic_error', None)}:\n{exc}",
+        ):
+            return
     await message.answer(
         t("admin_done", None),
         reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),
@@ -436,21 +426,16 @@ async def client_custom_expiry_days(message: Message, state: FSMContext, setting
     except ValueError:
         await message.answer(t("admin_invalid_days", None))
         return
-    data = await state.get_data()
-    panel_id = int(data["client_manage_panel_id"])
-    inbound_id = int(data["client_manage_inbound_id"])
-    client_uuid = str(data["client_manage_uuid"])
-    await state.clear()
-    if not await _ensure_client_scope(
-        user_id=message.from_user.id,
+    client_ref = await _scoped_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", None))
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.set_client_expiry_days_for_actor(
             actor_user_id=message.from_user.id,
@@ -461,22 +446,14 @@ async def client_custom_expiry_days(message: Message, state: FSMContext, setting
             days=days,
         )
     except Exception as exc:
-        delegated_error = delegated_profile_error_text(exc, None)
-        if delegated_error is not None:
-            await answer_with_admin_menu(
-                message,
-                delegated_error,
-                settings=settings,
-                services=services,
-            )
-            return
-        await answer_with_admin_menu(
+        if await _handle_message_operation_error(
             message,
-            f"{t('admin_update_expiry_error', None)}:\n{exc}",
+            exc,
             settings=settings,
             services=services,
-        )
-        return
+            fallback_text=f"{t('admin_update_expiry_error', None)}:\n{exc}",
+        ):
+            return
     await message.answer(
         t("admin_done", None),
         reply_markup=back_to_detail_keyboard(panel_id, inbound_id, client_uuid),
@@ -493,21 +470,16 @@ async def client_custom_ip_limit(message: Message, state: FSMContext, settings: 
     except ValueError:
         await message.answer(t("admin_invalid_ip", None))
         return
-    data = await state.get_data()
-    panel_id = int(data["client_manage_panel_id"])
-    inbound_id = int(data["client_manage_inbound_id"])
-    client_uuid = str(data["client_manage_uuid"])
-    await state.clear()
-    if not await _ensure_client_scope(
-        user_id=message.from_user.id,
+    client_ref = await _scoped_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", None))
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.set_client_limit_ip_for_actor(
             actor_user_id=message.from_user.id,
@@ -538,21 +510,16 @@ async def client_set_tg_id(message: Message, state: FSMContext, settings: Settin
     if tg_id is None:
         await message.answer(t("admin_tgid_invalid", None))
         return
-    data = await state.get_data()
-    panel_id = int(data["client_manage_panel_id"])
-    inbound_id = int(data["client_manage_inbound_id"])
-    client_uuid = str(data["client_manage_uuid"])
-    await state.clear()
-    if not await _ensure_client_scope(
-        user_id=message.from_user.id,
+    client_ref = await _scoped_client_from_state(
+        state,
+        actor_user_id=message.from_user.id,
         settings=settings,
         services=services,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-    ):
+    )
+    if client_ref is None:
         await message.answer(t("no_admin_access", None))
         return
+    panel_id, inbound_id, client_uuid = client_ref
     try:
         await services.admin_provisioning_service.set_client_tg_id_for_actor(
             actor_user_id=message.from_user.id,
