@@ -13,6 +13,7 @@ from bot.pagination import chunk_buttons, paginate_window
 from bot.services.container import ServiceContainer
 from bot.states import ProvisioningStates
 from bot.utils import build_admin_activity_notice, format_gb, gb_to_bytes, parse_gb_amount
+from .admin_handler_helpers import delegated_profile_error_text
 from .admin_provisioning_support import (
     candidate_owner_rows as _candidate_owner_rows,
     create_tg_id_choice_keyboard as _create_tg_id_choice_keyboard,
@@ -63,26 +64,6 @@ async def _delegated_profile_for(
     if not is_delegated_admin:
         return None
     return await services.handler_context_service.delegated_profile(source.from_user.id)
-
-
-def _delegated_profile_error_text(exc: Exception, lang: str | None) -> str | None:
-    text = str(exc).lower()
-    mapping = [
-        ("already exists on this inbound", "admin_duplicate_client_email"),
-        ("max clients reached", "admin_delegated_limit_error_max_clients"),
-        ("traffic is below", "admin_delegated_limit_error_traffic_min"),
-        ("traffic is above", "admin_delegated_limit_error_traffic_max"),
-        ("expiry is below", "admin_delegated_limit_error_days_min"),
-        ("expiry is above", "admin_delegated_limit_error_days_max"),
-        ("inactive", "admin_delegated_inactive"),
-        ("expired", "admin_delegated_expired"),
-    ]
-    for needle, key in mapping:
-        if needle in text:
-            return t(key, lang)
-    return None
-
-
 def _edit_actions_keyboard(
     panel_id: int,
     inbound_id: int,
@@ -614,7 +595,7 @@ async def _finish_create_user(
             tg_id=str(data.get("create_tg_id") or ""),
         )
     except Exception as exc:
-        delegated_error = _delegated_profile_error_text(exc, lang)
+        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
         if delegated_error is not None:
             await message.answer(delegated_error)
             await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
@@ -1415,7 +1396,7 @@ async def edit_config_reset_traffic_value(message: Message, state: FSMContext, s
             total_gb=None if gb == 0 else gb,
         )
     except Exception as exc:
-        delegated_error = _delegated_profile_error_text(exc, lang)
+        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
         if delegated_error is not None:
             await message.answer(delegated_error)
             return
@@ -1529,7 +1510,7 @@ async def edit_config_location_pick(callback: CallbackQuery, settings: Settings,
             outbound_tag=outbound_tag,
         )
     except Exception as exc:
-        delegated_error = _delegated_profile_error_text(exc, lang)
+        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
         if delegated_error is not None:
             await callback.answer(delegated_error, show_alert=True)
             return
@@ -1584,12 +1565,9 @@ async def edit_config_add_traffic_value(message: Message, state: FSMContext, set
             add_gb=gb,
         )
     except ValueError as exc:
-        delegated_error = _delegated_profile_error_text(exc, lang)
+        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
         if delegated_error is not None:
             await message.answer(delegated_error)
-            return
-        if "insufficient" in str(exc).lower():
-            await message.answer(t("finance_insufficient_wallet", lang))
             return
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
@@ -1679,12 +1657,9 @@ async def edit_config_add_days_value(message: Message, state: FSMContext, settin
             add_days=days,
         )
     except ValueError as exc:
-        delegated_error = _delegated_profile_error_text(exc, lang)
+        delegated_error = delegated_profile_error_text(exc, lang, include_duplicate=True)
         if delegated_error is not None:
             await message.answer(delegated_error)
-            return
-        if "insufficient" in str(exc).lower():
-            await message.answer(t("finance_insufficient_wallet", lang))
             return
         await message.answer(t("admin_edit_config_error", lang, error=exc))
         return

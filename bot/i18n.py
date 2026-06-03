@@ -265,6 +265,10 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "fa": "موجودی کیف پول کافی نیست.",
         "en": "Insufficient wallet balance.",
     },
+    "admin_delegated_upstream_wallet_insufficient": {
+        "fa": "ساخت انجام نشد چون کیف پول بالادستی مالی این نماینده موجودی کافی ندارد.",
+        "en": "Operation failed because the delegated admin's financial parent does not have enough wallet balance.",
+    },
     "finance_unlimited_not_allowed": {
         "fa": "برای مدیران فرعی تنظیم نامحدود مجاز نیست.",
         "en": "Unlimited values are not allowed for delegated admins.",

@@ -10,6 +10,20 @@ from bot.utils import build_admin_activity_notice
 from .admin_shared import actor_display_name
 
 
+DELEGATED_PROFILE_ERROR_KEYS: tuple[tuple[str, str], ...] = (
+    ("insufficient wallet balance for upstream delegated admin", "admin_delegated_upstream_wallet_insufficient"),
+    ("insufficient wallet balance for delegated admin", "finance_insufficient_wallet"),
+    ("delegated_unlimited_not_allowed", "finance_unlimited_not_allowed"),
+    ("max clients reached", "admin_delegated_limit_error_max_clients"),
+    ("traffic is below", "admin_delegated_limit_error_traffic_min"),
+    ("traffic is above", "admin_delegated_limit_error_traffic_max"),
+    ("expiry is below", "admin_delegated_limit_error_days_min"),
+    ("expiry is above", "admin_delegated_limit_error_days_max"),
+    ("inactive", "admin_delegated_inactive"),
+    ("expired", "admin_delegated_expired"),
+)
+
+
 def delegated_profile_error_text(
     exc: Exception,
     lang: str | None,
@@ -17,15 +31,7 @@ def delegated_profile_error_text(
     include_duplicate: bool = False,
 ) -> str | None:
     text = str(exc).lower()
-    mapping: list[tuple[str, str]] = [
-        ("max clients reached", "admin_delegated_limit_error_max_clients"),
-        ("traffic is below", "admin_delegated_limit_error_traffic_min"),
-        ("traffic is above", "admin_delegated_limit_error_traffic_max"),
-        ("expiry is below", "admin_delegated_limit_error_days_min"),
-        ("expiry is above", "admin_delegated_limit_error_days_max"),
-        ("inactive", "admin_delegated_inactive"),
-        ("expired", "admin_delegated_expired"),
-    ]
+    mapping: list[tuple[str, str]] = list(DELEGATED_PROFILE_ERROR_KEYS)
     if include_duplicate:
         mapping.insert(0, ("already exists on this inbound", "admin_duplicate_client_email"))
     for needle, key in mapping:

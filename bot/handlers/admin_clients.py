@@ -10,9 +10,9 @@ from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
 from bot.states import ClientManageStates
 from bot.utils import parse_gb_amount
+from .admin_handler_helpers import delegated_profile_error_text
 from .admin_client_helpers import (
     actor_scope as _actor_scope,
-    delegated_profile_error_text as _delegated_profile_error_text,
     ensure_client_scope as _ensure_client_scope,
     low_traffic_threshold_mb as _low_traffic_threshold_mb,
     render_inbound_clients_view as _render_inbound_clients_view,
@@ -1134,15 +1134,9 @@ async def client_traffic_set(callback: CallbackQuery, settings: Settings, servic
             total_gb=total_gb,
         )
     except Exception as exc:
-        delegated_error = _delegated_profile_error_text(exc, None)
+        delegated_error = delegated_profile_error_text(exc, None)
         if delegated_error is not None:
             await callback.answer(delegated_error, show_alert=True)
-            return
-        if str(exc) == "delegated_unlimited_not_allowed":
-            await callback.answer(t("finance_unlimited_not_allowed", None), show_alert=True)
-            return
-        if "insufficient" in str(exc).lower():
-            await callback.answer(t("finance_insufficient_wallet", None), show_alert=True)
             return
         await callback_error_alert(callback, exc)
         return
@@ -1238,15 +1232,9 @@ async def client_expiry_set(callback: CallbackQuery, settings: Settings, service
             days=days,
         )
     except Exception as exc:
-        delegated_error = _delegated_profile_error_text(exc, None)
+        delegated_error = delegated_profile_error_text(exc, None)
         if delegated_error is not None:
             await callback.answer(delegated_error, show_alert=True)
-            return
-        if str(exc) == "delegated_unlimited_not_allowed":
-            await callback.answer(t("finance_unlimited_not_allowed", None), show_alert=True)
-            return
-        if "insufficient" in str(exc).lower():
-            await callback.answer(t("finance_insufficient_wallet", None), show_alert=True)
             return
         await callback_error_alert(callback, exc)
         return
@@ -1545,19 +1533,11 @@ async def client_custom_traffic_gb(message: Message, state: FSMContext, settings
             total_gb=gb,
         )
     except Exception as exc:
-        delegated_error = _delegated_profile_error_text(exc, None)
+        delegated_error = delegated_profile_error_text(exc, None)
         if delegated_error is not None:
             await answer_with_admin_menu(
                 message,
                 delegated_error,
-                settings=settings,
-                services=services,
-            )
-            return
-        if "insufficient" in str(exc).lower():
-            await answer_with_admin_menu(
-                message,
-                t("finance_insufficient_wallet", None),
                 settings=settings,
                 services=services,
             )
@@ -1610,19 +1590,11 @@ async def client_custom_expiry_days(message: Message, state: FSMContext, setting
             days=days,
         )
     except Exception as exc:
-        delegated_error = _delegated_profile_error_text(exc, None)
+        delegated_error = delegated_profile_error_text(exc, None)
         if delegated_error is not None:
             await answer_with_admin_menu(
                 message,
                 delegated_error,
-                settings=settings,
-                services=services,
-            )
-            return
-        if "insufficient" in str(exc).lower():
-            await answer_with_admin_menu(
-                message,
-                t("finance_insufficient_wallet", None),
                 settings=settings,
                 services=services,
             )

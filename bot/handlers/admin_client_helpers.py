@@ -3,8 +3,8 @@ from __future__ import annotations
 from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
-from bot.i18n import t
 from bot.services.container import ServiceContainer
+from .admin_handler_helpers import delegated_profile_error_text
 from .admin_shared import (
     action_panel_select_keyboard,
     answer_with_admin_menu,
@@ -14,23 +14,6 @@ from .admin_shared import (
     single_button_inline_keyboard,
     users_clients_keyboard,
 )
-
-
-def delegated_profile_error_text(exc: Exception, lang: str | None) -> str | None:
-    text = str(exc).lower()
-    mapping = [
-        ("max clients reached", "admin_delegated_limit_error_max_clients"),
-        ("traffic is below", "admin_delegated_limit_error_traffic_min"),
-        ("traffic is above", "admin_delegated_limit_error_traffic_max"),
-        ("expiry is below", "admin_delegated_limit_error_days_min"),
-        ("expiry is above", "admin_delegated_limit_error_days_max"),
-        ("inactive", "admin_delegated_inactive"),
-        ("expired", "admin_delegated_expired"),
-    ]
-    for needle, key in mapping:
-        if needle in text:
-            return t(key, lang)
-    return None
 
 
 async def actor_scope(

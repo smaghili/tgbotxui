@@ -168,6 +168,72 @@ async def test_charge_allows_negative_wallet_balance_for_trusted_delegate() -> N
 
 
 @pytest.mark.asyncio
+async def test_charge_reports_upstream_wallet_failure_separately() -> None:
+    db_path = _db_path(".test-finance-upstream-negative.sqlite3")
+    db = Database(str(db_path))
+    await db.connect()
+    await db.init_schema()
+    await db.upsert_user(telegram_user_id=2001, full_name="Parent Delegate", username="parent_delegate", is_admin=False)
+    await db.upsert_user(telegram_user_id=2002, full_name="Child Delegate", username="child_delegate", is_admin=False)
+    await db.upsert_delegated_admin(
+        telegram_user_id=2001,
+        title="Parent Delegate",
+        created_by=1,
+        parent_user_id=None,
+        admin_scope="full",
+    )
+    await db.upsert_delegated_admin(
+        telegram_user_id=2002,
+        title="Child Delegate",
+        created_by=1,
+        parent_user_id=2001,
+        admin_scope="limited",
+    )
+
+    access_service = AccessService(db)
+    financial_service = FinancialService(db=db, access_service=access_service)
+
+    await financial_service.set_pricing(
+        actor_user_id=1,
+        telegram_user_id=2001,
+        price_per_gb=100_000,
+        price_per_day=0,
+    )
+    await financial_service.set_pricing(
+        actor_user_id=1,
+        telegram_user_id=2002,
+        price_per_gb=200_000,
+        price_per_day=50_000,
+    )
+    await db.update_delegated_admin_profile(
+        telegram_user_id=2001,
+        allow_negative_wallet=0,
+    )
+    await db.update_delegated_admin_profile(
+        telegram_user_id=2002,
+        allow_negative_wallet=1,
+    )
+
+    with pytest.raises(ValueError, match="insufficient wallet balance for upstream delegated admin"):
+        await financial_service.charge_operation(
+            actor_user_id=2002,
+            settings=SimpleNamespace(admin_ids=[]),
+            operation="create_client",
+            traffic_gb=1,
+            expiry_days=1,
+        )
+
+    child_wallet = await financial_service.get_wallet(2002)
+    parent_wallet = await financial_service.get_wallet(2001)
+    assert int(child_wallet["balance"]) == 0
+    assert int(parent_wallet["balance"]) == 0
+
+    await db.close()
+    if db_path.exists():
+        db_path.unlink()
+
+
+@pytest.mark.asyncio
 async def test_consumed_basis_does_not_charge_wallet_on_operation() -> None:
     db_path = _db_path(".test-finance-consumed.sqlite3")
     db = Database(str(db_path))

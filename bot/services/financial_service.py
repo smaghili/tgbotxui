@@ -14,6 +14,17 @@ from bot.services.operation_guard_service import OperationGuardService
 from bot.utils import parse_detail_pairs
 
 
+class WalletChargeError(ValueError):
+    """Domain error for wallet debits during delegated operations."""
+
+    def __init__(self, *, owner_user_id: int, owner_label: str, is_upstream: bool) -> None:
+        self.owner_user_id = int(owner_user_id)
+        self.owner_label = owner_label.strip() or str(owner_user_id)
+        self.is_upstream = bool(is_upstream)
+        scope = "upstream delegated admin" if self.is_upstream else "delegated admin"
+        super().__init__(f"insufficient wallet balance for {scope}: {self.owner_label}")
+
+
 def _parse_consumed_pricing_tiers_json(raw: Any) -> list[dict[str, int]]:
     if raw is None or raw == "":
         return []
@@ -386,6 +397,54 @@ class FinancialService:
             targets.append(root_ids[0])
         return targets
 
+    async def _wallet_charge_owner_label(self, telegram_user_id: int) -> str:
+        user = await self.db.get_user_by_telegram_id(telegram_user_id)
+        if user is not None:
+            full_name = str(user.get("full_name") or "").strip()
+            username = str(user.get("username") or "").strip()
+            if full_name:
+                return full_name
+            if username:
+                return f"@{username}"
+        delegated = await self.db.get_delegated_admin_by_user_id(telegram_user_id)
+        if delegated is not None:
+            title = str(delegated.get("title") or "").strip()
+            if title:
+                return title
+        return str(telegram_user_id)
+
+    async def _charge_wallet(
+        self,
+        *,
+        telegram_user_id: int,
+        actor_user_id: int,
+        amount: int,
+        operation: str,
+        details: str,
+        metadata: dict[str, Any],
+        allow_negative_balance: bool,
+        is_upstream: bool,
+    ) -> dict[str, Any]:
+        try:
+            return await self._apply_balance_change(
+                telegram_user_id=telegram_user_id,
+                actor_user_id=actor_user_id,
+                delta=-amount,
+                kind="charge",
+                operation=operation,
+                details=details,
+                metadata=metadata,
+                allow_negative_balance=allow_negative_balance,
+            )
+        except ValueError as exc:
+            if "insufficient wallet balance" not in str(exc).lower():
+                raise
+            raise WalletChargeError(
+                owner_user_id=telegram_user_id,
+                owner_label=await self._wallet_charge_owner_label(telegram_user_id),
+                is_upstream=is_upstream,
+            ) from exc
+
     async def _apply_balance_change(
         self,
         *,
@@ -562,11 +621,10 @@ class FinancialService:
             if amount <= 0:
                 return None
             allow_negative_wallet = int(profile.get("allow_negative_wallet") or 0) == 1
-            actor_tx = await self._apply_balance_change(
+            actor_tx = await self._charge_wallet(
                 telegram_user_id=actor_user_id,
                 actor_user_id=actor_user_id,
-                delta=-amount,
-                kind="charge",
+                amount=amount,
                 operation=operation,
                 details=details or f"traffic_gb={traffic_gb};expiry_days={expiry_days}",
                 metadata={
@@ -577,6 +635,7 @@ class FinancialService:
                     "price_per_day": int(charge["price_per_day"] or 0),
                 },
                 allow_negative_balance=allow_negative_wallet,
+                is_upstream=False,
             )
             related_transaction_ids: list[int] = []
             try:
@@ -598,11 +657,10 @@ class FinancialService:
                         if self.access_service.is_root_admin(upstream_user_id, settings)
                         else int(upstream_profile.get("allow_negative_wallet") or 0) == 1
                     )
-                    upstream_tx = await self._apply_balance_change(
+                    upstream_tx = await self._charge_wallet(
                         telegram_user_id=upstream_user_id,
                         actor_user_id=actor_user_id,
-                        delta=-upstream_amount,
-                        kind="charge",
+                        amount=upstream_amount,
                         operation=f"wholesale_{operation}",
                         details=(
                             f"source_actor={actor_user_id};traffic_gb={traffic_gb};"
@@ -616,6 +674,7 @@ class FinancialService:
                             "price_per_day": int(upstream_charge.get("price_per_day") or 0),
                         },
                         allow_negative_balance=allow_negative_upstream,
+                        is_upstream=True,
                     )
                     related_transaction_ids.append(int(upstream_tx["id"]))
             except Exception:
