@@ -538,6 +538,24 @@ sync_project_files() {
     "${APP_DIR}/.env.example" 2>/dev/null || true
 }
 
+fix_runtime_permissions() {
+  mkdir -p "${APP_DIR}" "${APP_DIR}/data" "$(state_dir)"
+
+  chown -R "${BOT_USER}:${BOT_USER}" "${APP_DIR}"
+
+  chmod 755 "${APP_DIR}"
+  chmod 755 "${APP_DIR}/data"
+  chmod 755 "$(state_dir)"
+
+  local db_path
+  db_path="$(resolve_database_path)"
+  if [[ "${db_path}" == "${APP_DIR}"/* ]]; then
+    mkdir -p "$(dirname "${db_path}")"
+    chown -R "${BOT_USER}:${BOT_USER}" "$(dirname "${db_path}")"
+    chmod 755 "$(dirname "${db_path}")"
+  fi
+}
+
 detect_update_changes() {
   if [[ "${INSTALL_MODE}" != "update" ]]; then
     REQUIREMENTS_CHANGED=1
@@ -876,6 +894,7 @@ backup_existing_state
 
 log_step "4/${TOTAL_STEPS}" "Syncing project to ${APP_DIR}..."
 sync_project_files
+fix_runtime_permissions
 detect_update_changes
 
 log_step "5/${TOTAL_STEPS}" "Building virtualenv..."
