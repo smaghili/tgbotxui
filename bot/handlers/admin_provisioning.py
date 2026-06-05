@@ -365,8 +365,8 @@ async def _render_create_target_picker(
         group_service = services.admin_provisioning_service.client_group_service
         groups = await group_service.list_groups(panel_id=panel_id)
         if not groups:
-            await group_service.ensure_default_group(panel_id=panel_id)
-            groups = await group_service.list_groups(panel_id=panel_id)
+            await _show_target_text(target, t("admin_create_user_no_groups", lang))
+            return True
         await state.update_data(create_panel_id=panel_id)
         await _show_target_text(
             target,

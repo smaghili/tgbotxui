@@ -858,13 +858,16 @@ class PanelService:
                 "limitIp": int(payload_client["limitIp"] or 0),
                 "totalGB": int(payload_client["totalGB"] or 0),
                 "expiryTime": int(payload_client["expiryTime"] or 0),
-                "tgId": str(payload_client["tgId"] or ""),
                 "subId": str(payload_client["subId"] or ""),
                 "id": str(payload_client["id"] or ""),
                 "flow": str(payload_client["flow"] or ""),
                 "reset": int(payload_client["reset"] or 0),
             }
         )
+        if conn.api_version == "v3":
+            normalized_tg_id = self._normalize_v3_tg_id(payload_client.get("tgId"))
+            if normalized_tg_id is not None:
+                update_payload["tgId"] = normalized_tg_id
         try:
             await self._with_auth_request(
                 panel_id,
@@ -885,6 +888,15 @@ class PanelService:
         raw = secrets.token_urlsafe(length)
         safe = "".join(ch for ch in raw if ch.isalnum())
         return (safe or secrets.token_hex(8))[:length]
+
+    @staticmethod
+    def _normalize_v3_tg_id(value: Any) -> int | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if raw.lstrip("-").isdigit():
+            return int(raw)
+        return None
 
     async def create_client(
         self,
@@ -962,13 +974,15 @@ class PanelService:
                     "comment": comment.strip(),
                     "totalGB": total_bytes,
                     "expiryTime": expiry_ms,
-                    "tgId": tg_id.strip(),
                     "subId": payload_client["subId"],
                     "id": client_uuid,
                     "flow": flow,
                 },
                 "inboundIds": normalized_inbound_ids,
             }
+            normalized_tg_id = self._normalize_v3_tg_id(tg_id)
+            if normalized_tg_id is not None:
+                payload["client"]["tgId"] = normalized_tg_id
         try:
             await self._with_auth_request(
                 panel_id,

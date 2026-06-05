@@ -708,6 +708,7 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "panel_group_pick_inbounds": {"fa": "اینباندهای گروه {name} را انتخاب کنید:", "en": "Select inbounds for group {name}:"},
     "panel_group_saved": {"fa": "تنظیمات گروه ذخیره شد.", "en": "Group settings were saved."},
     "admin_create_user_pick_group": {"fa": "گروه موردنظر برای ساخت کاربر را انتخاب کنید:", "en": "Select a group for the new client:"},
+    "admin_create_user_no_groups": {"fa": "برای این پنل هنوز گروهی ساخته نشده است.\nلطفا ابتدا یک گروه ایجاد نمایید.", "en": "No group exists for this panel yet.\nPlease create a group first."},
     "inbounds_select_panel": {"fa": "پنل پیش‌فرض انتخاب نشده است.\nبرای دریافت لیست ورودی‌ها، پنل را انتخاب کنید:", "en": "Default panel is not selected.\nSelect a panel to view inbounds:"},
 
     "admin_manage_admins_title": {
