@@ -122,6 +122,7 @@ def _panel_actions_keyboard(panel_id: int, lang: str | None = None) -> InlineKey
                 InlineKeyboardButton(text=t("panel_action_reconnect", lang), callback_data=f"panel_reconnect:{panel_id}"),
                 InlineKeyboardButton(text=t("panel_action_delete", lang), callback_data=f"panel_delete_ask:{panel_id}"),
             ],
+            [InlineKeyboardButton(text=t("panel_action_groups", lang), callback_data=f"pg:menu:{panel_id}")],
             [InlineKeyboardButton(text=t("panel_actions_back_to_list", lang), callback_data="panel_actions_back")],
         ]
     )
@@ -631,9 +632,17 @@ async def panel_actions(callback: CallbackQuery, settings: Settings, services: S
         await callback.answer(t("no_admin_access", lang), show_alert=True)
         return
     status = "✅" if panel.get("last_login_ok") else "❌"
+    reply_markup = _panel_actions_keyboard(panel_id, lang)
+    if str(panel.get("api_version") or "legacy") != "v3":
+        reply_markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                reply_markup.inline_keyboard[0],
+                reply_markup.inline_keyboard[-1],
+            ]
+        )
     await callback.message.edit_text(
         f"{panel['name']}\n{t('panel_id_label', lang)}: {panel_id}\n{t('panel_connection_status', lang)}: {status}",
-        reply_markup=_panel_actions_keyboard(panel_id, lang),
+        reply_markup=reply_markup,
     )
     await callback.answer()
 

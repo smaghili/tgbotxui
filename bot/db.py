@@ -977,6 +977,143 @@ class Database:
         await self.conn.commit()
         return (cur.rowcount or 0) > 0
 
+    async def create_client_inbound_group(self, *, panel_id: int, name: str, is_default: bool = False) -> int:
+        assert self.conn is not None
+        if is_default:
+            await self.conn.execute("UPDATE client_inbound_groups SET is_default=0 WHERE panel_id=?;", (panel_id,))
+        cur = await self.conn.execute(
+            """
+            INSERT INTO client_inbound_groups(panel_id, name, is_default, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP);
+            """,
+            (panel_id, name.strip(), int(is_default)),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid)
+
+    async def get_client_inbound_group(self, group_id: int) -> Dict[str, Any] | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, panel_id, name, is_default, created_at, updated_at
+            FROM client_inbound_groups
+            WHERE id=?
+            LIMIT 1;
+            """,
+            (group_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_client_inbound_group_by_name(self, *, panel_id: int, name: str) -> Dict[str, Any] | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, panel_id, name, is_default, created_at, updated_at
+            FROM client_inbound_groups
+            WHERE panel_id=? AND LOWER(name)=LOWER(?)
+            LIMIT 1;
+            """,
+            (panel_id, name.strip()),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_default_client_inbound_group(self, *, panel_id: int) -> Dict[str, Any] | None:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, panel_id, name, is_default, created_at, updated_at
+            FROM client_inbound_groups
+            WHERE panel_id=? AND is_default=1
+            ORDER BY id ASC
+            LIMIT 1;
+            """,
+            (panel_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_client_inbound_groups(self, *, panel_id: int) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, panel_id, name, is_default, created_at, updated_at
+            FROM client_inbound_groups
+            WHERE panel_id=?
+            ORDER BY is_default DESC, LOWER(name) ASC, id ASC;
+            """,
+            (panel_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def set_default_client_inbound_group(self, *, panel_id: int, group_id: int) -> None:
+        assert self.conn is not None
+        await self.conn.execute("UPDATE client_inbound_groups SET is_default=0 WHERE panel_id=?;", (panel_id,))
+        await self.conn.execute(
+            """
+            UPDATE client_inbound_groups
+            SET is_default=1, updated_at=CURRENT_TIMESTAMP
+            WHERE id=? AND panel_id=?;
+            """,
+            (group_id, panel_id),
+        )
+        await self.conn.commit()
+
+    async def add_client_inbound_group_member(
+        self,
+        *,
+        group_id: int,
+        inbound_id: int,
+        inbound_remark: str | None = None,
+        position: int = 0,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO client_inbound_group_members(group_id, inbound_id, inbound_remark, position)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(group_id, inbound_id) DO UPDATE SET
+                inbound_remark=excluded.inbound_remark,
+                position=excluded.position;
+            """,
+            (group_id, inbound_id, inbound_remark, position),
+        )
+        await self.conn.commit()
+
+    async def list_client_inbound_group_members(self, *, group_id: int) -> List[Dict[str, Any]]:
+        assert self.conn is not None
+        cur = await self.conn.execute(
+            """
+            SELECT id, group_id, inbound_id, inbound_remark, position, created_at
+            FROM client_inbound_group_members
+            WHERE group_id=?
+            ORDER BY position ASC, inbound_id ASC;
+            """,
+            (group_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def replace_client_inbound_group_members(self, *, group_id: int, members: List[Dict[str, Any]]) -> None:
+        assert self.conn is not None
+        await self.conn.execute("DELETE FROM client_inbound_group_members WHERE group_id=?;", (group_id,))
+        for member in members:
+            await self.conn.execute(
+                """
+                INSERT INTO client_inbound_group_members(group_id, inbound_id, inbound_remark, position)
+                VALUES (?, ?, ?, ?);
+                """,
+                (
+                    group_id,
+                    int(member["inbound_id"]),
+                    member.get("inbound_remark"),
+                    int(member.get("position") or 0),
+                ),
+            )
+        await self.conn.commit()
+
     async def set_panel_login_status(self, panel_id: int, ok: bool, last_error: str | None) -> None:
         assert self.conn is not None
         await self.conn.execute(

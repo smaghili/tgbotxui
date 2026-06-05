@@ -49,6 +49,11 @@ class DelegatedAdminStates(StatesGroup):
     waiting_finex_remain_bulk_confirm = State()
 
 
+class PanelGroupStates(StatesGroup):
+    waiting_group_name = State()
+    waiting_inbound_selection = State()
+
+
 class InboundLocationStates(StatesGroup):
     choosing_panel = State()
     choosing_inbounds = State()

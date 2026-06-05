@@ -411,7 +411,11 @@ class XUIClient:
     async def get_client_traffics(
         self, conn: PanelConnection, cookies: Dict[str, str] | None, client_email: str
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/getClientTraffics/{quote(client_email, safe='')}"
+        endpoint = (
+            f"/clients/traffic/{quote(client_email, safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/getClientTraffics/{quote(client_email, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="GET",
@@ -434,6 +438,15 @@ class XUIClient:
     async def get_default_settings(
         self, conn: PanelConnection, cookies: Dict[str, str] | None
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        if conn.api_version == "v3":
+            return await self.request(
+                conn=conn,
+                method="POST",
+                endpoint="/setting/defaultSettings",
+                cookies=cookies,
+                payload=None,
+                under_panel=True,
+            )
         return await self.request(
             conn=conn,
             method="POST",
@@ -445,29 +458,52 @@ class XUIClient:
     async def get_online_clients(
         self, conn: PanelConnection, cookies: Dict[str, str] | None
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        return await self.request(
-            conn=conn,
-            method="POST",
-            endpoint="/inbounds/onlines",
-            cookies=cookies,
-            payload=None,
-        )
+        last_exc: Exception | None = None
+        for method, endpoint in (("POST", "/clients/onlines"), ("POST", "/inbounds/onlines")):
+            try:
+                return await self.request(
+                    conn=conn,
+                    method=method,
+                    endpoint=endpoint,
+                    cookies=cookies,
+                    payload=None,
+                )
+            except XUIError as exc:
+                last_exc = exc
+                continue
+        raise XUIError(f"online clients endpoint unavailable: {last_exc}")
 
     async def get_last_online(
         self, conn: PanelConnection, cookies: Dict[str, str] | None
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        return await self.request(
-            conn=conn,
-            method="POST",
-            endpoint="/inbounds/lastOnline",
-            cookies=cookies,
-            payload=None,
-        )
+        last_exc: Exception | None = None
+        for method, endpoint in (("POST", "/clients/lastOnline"), ("POST", "/inbounds/lastOnline")):
+            try:
+                return await self.request(
+                    conn=conn,
+                    method=method,
+                    endpoint=endpoint,
+                    cookies=cookies,
+                    payload=None,
+                )
+            except XUIError as exc:
+                last_exc = exc
+                continue
+        raise XUIError(f"last-online endpoint unavailable: {last_exc}")
 
     async def get_client_traffics_by_id(
-        self, conn: PanelConnection, cookies: Dict[str, str] | None, client_uuid: str
+        self,
+        conn: PanelConnection,
+        cookies: Dict[str, str] | None,
+        client_uuid: str,
+        *,
+        email: str | None = None,
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/getClientTrafficsById/{quote(client_uuid, safe='')}"
+        endpoint = (
+            f"/clients/traffic/{quote((email or '').strip(), safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/getClientTrafficsById/{quote(client_uuid, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="GET",
@@ -479,7 +515,11 @@ class XUIClient:
     async def get_client_links(
         self, conn: PanelConnection, cookies: Dict[str, str] | None, *, inbound_id: int, email: str
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/getClientLinks/{inbound_id}/{quote(email, safe='')}"
+        endpoint = (
+            f"/clients/links/{quote(email, safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/getClientLinks/{inbound_id}/{quote(email, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="GET",
@@ -494,9 +534,14 @@ class XUIClient:
         cookies: Dict[str, str] | None,
         *,
         client_uuid: str,
+        email: str | None = None,
         payload: Dict[str, Any],
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/updateClient/{quote(client_uuid, safe='')}"
+        endpoint = (
+            f"/clients/update/{quote((email or '').strip(), safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/updateClient/{quote(client_uuid, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="POST",
@@ -512,6 +557,14 @@ class XUIClient:
         *,
         payload: Dict[str, Any],
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        if "client" in payload and "inboundIds" in payload:
+            return await self.request(
+                conn=conn,
+                method="POST",
+                endpoint="/clients/add",
+                cookies=cookies,
+                payload=payload,
+            )
         return await self.request(
             conn=conn,
             method="POST",
@@ -527,8 +580,13 @@ class XUIClient:
         *,
         inbound_id: int,
         client_uuid: str,
+        email: str | None = None,
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/{inbound_id}/delClient/{quote(client_uuid, safe='')}"
+        endpoint = (
+            f"/clients/del/{quote((email or '').strip(), safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/{inbound_id}/delClient/{quote(client_uuid, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="POST",
@@ -540,7 +598,11 @@ class XUIClient:
     async def clear_client_ips(
         self, conn: PanelConnection, cookies: Dict[str, str] | None, email: str
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/clearClientIps/{quote(email, safe='')}"
+        endpoint = (
+            f"/clients/clearIps/{quote(email, safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/clearClientIps/{quote(email, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="POST",
@@ -557,7 +619,11 @@ class XUIClient:
         inbound_id: int,
         email: str,
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/{inbound_id}/resetClientTraffic/{quote(email, safe='')}"
+        endpoint = (
+            f"/clients/resetTraffic/{quote(email, safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/{inbound_id}/resetClientTraffic/{quote(email, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="POST",
@@ -569,7 +635,11 @@ class XUIClient:
     async def client_ips(
         self, conn: PanelConnection, cookies: Dict[str, str] | None, email: str
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        endpoint = f"/inbounds/clientIps/{quote(email, safe='')}"
+        endpoint = (
+            f"/clients/ips/{quote(email, safe='')}"
+            if conn.api_version == "v3"
+            else f"/inbounds/clientIps/{quote(email, safe='')}"
+        )
         return await self.request(
             conn=conn,
             method="POST",

@@ -178,6 +178,7 @@ class ProvisioningClientService:
         total_gb: float,
         expiry_days: int,
         tg_id: str = "",
+        group_name: str | None = None,
     ) -> dict[str, Any]:
         return await self.owner._create_client_for_actor_impl(
             actor_user_id=actor_user_id,
@@ -188,4 +189,5 @@ class ProvisioningClientService:
             total_gb=total_gb,
             expiry_days=expiry_days,
             tg_id=tg_id,
+            group_name=group_name,
         )

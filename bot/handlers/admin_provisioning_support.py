@@ -23,6 +23,19 @@ def inbound_access_keyboard(rows: list, prefix: str, *, include_panel_name: bool
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def group_select_keyboard(groups: list[dict], prefix: str) -> InlineKeyboardMarkup:
+    buttons = []
+    for group in groups:
+        group_id = int(group.get("id") or 0)
+        if group_id <= 0:
+            continue
+        name = str(group.get("name") or "").strip() or f"group-{group_id}"
+        if bool(group.get("is_default")):
+            name = f"⭐ {name}"
+        buttons.append([inline_button(name[:60], f"{prefix}:{group_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def create_tg_id_choice_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
     return yes_no_inline_keyboard("pcu:tg_choice:yes", "pcu:tg_choice:no", lang)
 

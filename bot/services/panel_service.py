@@ -26,7 +26,6 @@ from bot.utils import gb_to_bytes, parse_epoch
 
 logger = logging.getLogger(__name__)
 
-
 class PanelService:
     def __init__(
         self,
@@ -44,6 +43,34 @@ class PanelService:
         self.sub_url_strip_port_rules = sub_url_strip_port_rules or {}
         self.sub_url_base_overrides = sub_url_base_overrides or {}
         self._disabled_cache: dict[tuple[int, int | None, tuple[int, ...] | None], tuple[float, list[Dict[str, Any]]]] = {}
+        self._panel_capability_cache: dict[tuple[int, str], tuple[float, bool]] = {}
+
+    async def supports_client_groups(self, panel_id: int, *, ttl_seconds: int = 120) -> bool:
+        cache_key = (int(panel_id), "client_groups")
+        now_ts = time.time()
+        cached = self._panel_capability_cache.get(cache_key)
+        if cached is not None and now_ts - cached[0] <= ttl_seconds:
+            return bool(cached[1])
+        panel = await self.get_panel(panel_id)
+        if panel is None or str(panel.get("api_version") or "legacy") != "v3":
+            self._panel_capability_cache[cache_key] = (now_ts, False)
+            return False
+        try:
+            raw, _ = await self._with_auth_request(
+                panel_id,
+                lambda conn, cookies: self.xui.request(
+                    conn=conn,
+                    method="GET",
+                    endpoint="/clients/groups",
+                    cookies=cookies,
+                    payload=None,
+                ),
+            )
+            supported = isinstance(raw, dict) and raw.get("success", True) is not False
+        except Exception:
+            supported = False
+        self._panel_capability_cache[cache_key] = (now_ts, supported)
+        return supported
 
     async def _build_conn(self, panel_id: int) -> PanelConnection:
         panel = await self.db.get_panel(panel_id)
@@ -806,6 +833,7 @@ class PanelService:
     ) -> None:
         inbound, current, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
         changed = mutator(dict(current))
+        email = str(changed.get("email") or current.get("email") or "").strip()
         payload_client = {
             "id": changed.get("uuid") or changed.get("id"),
             "flow": changed.get("flow", ""),
@@ -819,10 +847,24 @@ class PanelService:
             "subId": changed.get("subId", ""),
             "reset": int(changed.get("reset") or 0),
         }
-        update_payload = {
-            "id": int(inbound.get("id") or inbound_id),
-            "settings": json.dumps({"clients": [payload_client]}, ensure_ascii=False),
-        }
+        conn = await self._build_conn(panel_id)
+        update_payload = (
+            {"id": int(inbound.get("id") or inbound_id), "settings": json.dumps({"clients": [payload_client]}, ensure_ascii=False)}
+            if conn.api_version != "v3"
+            else {
+                "email": email,
+                "enable": bool(payload_client["enable"]),
+                "comment": str(payload_client["comment"] or ""),
+                "limitIp": int(payload_client["limitIp"] or 0),
+                "totalGB": int(payload_client["totalGB"] or 0),
+                "expiryTime": int(payload_client["expiryTime"] or 0),
+                "tgId": str(payload_client["tgId"] or ""),
+                "subId": str(payload_client["subId"] or ""),
+                "id": str(payload_client["id"] or ""),
+                "flow": str(payload_client["flow"] or ""),
+                "reset": int(payload_client["reset"] or 0),
+            }
+        )
         try:
             await self._with_auth_request(
                 panel_id,
@@ -830,6 +872,7 @@ class PanelService:
                     conn,
                     cookies,
                     client_uuid=client_uuid,
+                    email=email,
                     payload=update_payload,
                 ),
             )
@@ -906,6 +949,22 @@ class PanelService:
             "id": inbound_id,
             "settings": json.dumps({"clients": [payload_client]}, ensure_ascii=False),
         }
+        conn = await self._build_conn(panel_id)
+        if conn.api_version == "v3":
+            payload = {
+                "client": {
+                    "email": email,
+                    "enable": bool(enable),
+                    "comment": comment.strip(),
+                    "totalGB": total_bytes,
+                    "expiryTime": expiry_ms,
+                    "tgId": tg_id.strip(),
+                    "subId": payload_client["subId"],
+                    "id": client_uuid,
+                    "flow": flow,
+                },
+                "inboundIds": [inbound_id],
+            }
         try:
             await self._with_auth_request(
                 panel_id,
@@ -937,6 +996,7 @@ class PanelService:
                     cookies,
                     inbound_id=inbound_id,
                     client_uuid=client_uuid,
+                    email=client_email,
                 ),
             )
         except XUIError as exc:
@@ -951,15 +1011,28 @@ class PanelService:
             )
 
     async def get_client_traffic_by_uuid(self, panel_id: int, client_uuid: str) -> Dict[str, Any]:
+        client_email = ""
+        conn = await self._build_conn(panel_id)
+        if conn.api_version == "v3":
+            clients = await self.list_clients(panel_id)
+            match = next((item for item in clients if str(item.get("uuid") or "").strip() == client_uuid.strip()), None)
+            client_email = str((match or {}).get("email") or "").strip()
+            if not client_email:
+                raise ValueError("client email not found for v3 traffic lookup.")
         try:
             raw, _ = await self._with_auth_request(
                 panel_id,
-                lambda conn, cookies: self.xui.get_client_traffics_by_id(conn, cookies, client_uuid),
+                lambda conn, cookies: self.xui.get_client_traffics_by_id(
+                    conn,
+                    cookies,
+                    client_uuid,
+                    email=client_email,
+                ),
             )
         except XUIError as exc:
             await self.db.set_panel_login_status(panel_id, ok=False, last_error=str(exc))
             raise
-        item = self._pick_traffic_obj(raw, client_uuid)
+        item = self._pick_traffic_obj(raw, client_email or client_uuid)
         up = int(item.get("up") or 0)
         down = int(item.get("down") or 0)
         total = int(item.get("total") or -1)

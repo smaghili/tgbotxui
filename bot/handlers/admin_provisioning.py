@@ -20,6 +20,7 @@ from .admin_provisioning_support import (
     delete_confirm_keyboard as _delete_confirm_keyboard,
     edit_panel_select_keyboard as _edit_panel_select_keyboard,
     edit_search_results_keyboard as _edit_search_results_keyboard,
+    group_select_keyboard as _group_select_keyboard,
     inbound_access_keyboard as _inbound_access_keyboard,
     owner_pick_keyboard as _owner_pick_keyboard,
     send_config_bundle as _send_config_bundle,
@@ -331,6 +332,137 @@ async def _visible_inbound_ids_for_actor(
     return {row.inbound_id for row in rows if row.panel_id == panel_id}
 
 
+def _message_target(target: Message | CallbackQuery) -> Message | None:
+    return target.message if isinstance(target, CallbackQuery) else target
+
+
+async def _show_target_text(
+    target: Message | CallbackQuery,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    message = _message_target(target)
+    if isinstance(target, CallbackQuery):
+        if message is not None:
+            await message.edit_text(text, reply_markup=reply_markup)
+        return
+    await target.answer(text, reply_markup=reply_markup)
+
+
+async def _render_create_target_picker(
+    target: Message | CallbackQuery,
+    state: FSMContext,
+    *,
+    actor_user_id: int,
+    panel_id: int,
+    settings: Settings,
+    services: ServiceContainer,
+    lang: str | None,
+    edit: bool,
+) -> bool:
+    if await services.panel_service.supports_client_groups(panel_id):
+        group_service = services.admin_provisioning_service.client_group_service
+        groups = await group_service.list_groups(panel_id=panel_id)
+        if not groups:
+            await group_service.ensure_default_group(panel_id=panel_id)
+            groups = await group_service.list_groups(panel_id=panel_id)
+        await state.update_data(create_panel_id=panel_id)
+        await _show_target_text(
+            target,
+            t("admin_create_user_pick_group", lang),
+            reply_markup=_group_select_keyboard(groups, f"pcu:target:{panel_id}:group"),
+        )
+        return True
+
+    rows = [
+        row
+        for row in await services.admin_provisioning_service.list_accessible_inbounds_for_actor(
+            actor_user_id=actor_user_id,
+            settings=settings,
+        )
+        if int(row.panel_id) == panel_id
+    ]
+    if not rows:
+        if isinstance(target, CallbackQuery):
+            await target.answer(t("admin_create_user_no_access", lang), show_alert=True)
+        else:
+            await _show_target_text(target, t("admin_create_user_no_access", lang))
+        return True
+    if len(rows) == 1:
+        message = _message_target(target)
+        if message is not None:
+            selected = rows[0]
+            await state.update_data(
+                create_panel_id=int(selected.panel_id),
+                create_inbound_id=int(selected.inbound_id),
+                create_group_id=0,
+                create_group_name="",
+            )
+            await state.set_state(ProvisioningStates.waiting_create_email)
+            await answer_with_cancel(message, t("admin_create_enter_email", lang), lang=lang)
+        return True
+    grouped_rows = _group_inbound_rows_by_panel(rows)
+    await _show_target_text(
+        target,
+        t("admin_create_user_pick_inbound", lang),
+        reply_markup=_inbound_access_keyboard(
+            rows,
+            "pcu:target",
+            include_panel_name=(not edit and len(grouped_rows) > 1),
+        )
+    )
+    return True
+
+
+async def _set_create_target_and_ask_email(
+    target: Message,
+    state: FSMContext,
+    *,
+    panel_id: int,
+    lang: str | None,
+    inbound_id: int = 0,
+    group_name: str = "",
+    group_id: int = 0,
+) -> None:
+    await state.update_data(
+        create_panel_id=panel_id,
+        create_inbound_id=inbound_id,
+        create_group_id=group_id,
+        create_group_name=group_name,
+    )
+    await state.set_state(ProvisioningStates.waiting_create_email)
+    await answer_with_cancel(target, t("admin_create_enter_email", lang), lang=lang)
+
+
+def _parse_create_target_callback(callback_data: str) -> tuple[int, str, int]:
+    _, _, panel_raw, target_kind, target_raw = callback_data.split(":", 4)
+    return int(panel_raw), target_kind, int(target_raw)
+
+
+async def _apply_group_create_target(
+    message: Message,
+    state: FSMContext,
+    *,
+    panel_id: int,
+    group_id: int,
+    services: ServiceContainer,
+    lang: str | None,
+) -> bool:
+    group = await services.admin_provisioning_service.client_group_service.get_group(panel_id=panel_id, group_id=group_id)
+    if group is None:
+        return False
+    await _set_create_target_and_ask_email(
+        message,
+        state,
+        panel_id=panel_id,
+        group_id=group_id,
+        group_name=str(group.get("name") or "").strip(),
+        lang=lang,
+    )
+    return True
+
+
 def _group_inbound_rows_by_panel(rows: list) -> dict[int, list]:
     grouped_rows: dict[int, list] = {}
     for inbound_row in rows:
@@ -490,27 +622,15 @@ async def start_create_user(
         )
         return
     panel_id = int(panels[0]["id"])
-    rows = [
-        row
-        for row in await services.admin_provisioning_service.list_accessible_inbounds_for_actor(
-            actor_user_id=message.from_user.id,
-            settings=settings,
-        )
-        if int(row.panel_id) == panel_id
-    ]
-    if not rows:
-        await message.answer(t("admin_create_user_no_access", lang))
-        return
-    grouped_rows = _group_inbound_rows_by_panel(rows)
-    if len(rows) == 1:
-        selected = rows[0]
-        await state.update_data(create_panel_id=selected.panel_id, create_inbound_id=selected.inbound_id)
-        await state.set_state(ProvisioningStates.waiting_create_email)
-        await answer_with_cancel(message, t("admin_create_enter_email", lang), lang=lang)
-        return
-    await message.answer(
-        t("admin_create_user_pick_inbound", lang),
-        reply_markup=_inbound_access_keyboard(rows, "pcu:pick", include_panel_name=len(grouped_rows) > 1),
+    await _render_create_target_picker(
+        message,
+        state,
+        actor_user_id=message.from_user.id,
+        panel_id=panel_id,
+        settings=settings,
+        services=services,
+        lang=lang,
+        edit=False,
     )
 
 
@@ -527,23 +647,21 @@ async def pick_create_user_panel(callback: CallbackQuery, state: FSMContext, set
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
-    rows = await services.admin_provisioning_service.list_accessible_inbounds_for_actor(
+    await _render_create_target_picker(
+        callback,
+        state,
         actor_user_id=callback.from_user.id,
+        panel_id=panel_id,
         settings=settings,
-    )
-    rows = [row for row in rows if int(row.panel_id) == panel_id]
-    if not rows:
-        await callback.answer(t("admin_create_user_no_access", lang), show_alert=True)
-        return
-    await callback.message.edit_text(
-        t("admin_create_user_pick_inbound", lang),
-        reply_markup=_inbound_access_keyboard(rows, "pcu:pick", include_panel_name=False),
+        services=services,
+        lang=lang,
+        edit=True,
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("pcu:pick:"))
-async def pick_create_user_inbound(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
+@router.callback_query(F.data.startswith("pcu:target:"))
+async def pick_create_user_target(callback: CallbackQuery, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
     if callback.data is None or callback.message is None:
@@ -551,15 +669,33 @@ async def pick_create_user_inbound(callback: CallbackQuery, state: FSMContext, s
         return
     lang = await _lang_for(callback, services)
     try:
-        _, _, panel_raw, inbound_raw = callback.data.split(":", 3)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
+        panel_id, target_kind, target_id = _parse_create_target_callback(callback.data)
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", lang), show_alert=True)
         return
-    await state.update_data(create_panel_id=panel_id, create_inbound_id=inbound_id)
-    await state.set_state(ProvisioningStates.waiting_create_email)
-    await answer_with_cancel(callback.message, t("admin_create_enter_email", lang), lang=lang)
+    if target_kind == "group":
+        if not await _apply_group_create_target(
+            callback.message,
+            state,
+            panel_id=panel_id,
+            group_id=target_id,
+            services=services,
+            lang=lang,
+        ):
+            await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+            return
+        await callback.answer()
+        return
+    if target_kind != "inbound":
+        await callback.answer(t("admin_invalid_data", lang), show_alert=True)
+        return
+    await _set_create_target_and_ask_email(
+        callback.message,
+        state,
+        panel_id=panel_id,
+        inbound_id=target_id,
+        lang=lang,
+    )
     await callback.answer()
 
 
@@ -694,6 +830,7 @@ async def _finish_create_user(
             total_gb=float(data["create_total_gb"]),
             expiry_days=int(data["create_expiry_days"]),
             tg_id=str(data.get("create_tg_id") or ""),
+            group_name=str(data.get("create_group_name") or "").strip() or None,
         )
     except Exception as exc:
         await _reply_with_delegated_or_generic_error(
