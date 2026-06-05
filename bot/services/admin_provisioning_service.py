@@ -1422,31 +1422,32 @@ class AdminProvisioningService:
         group_name: str | None = None,
     ) -> dict[str, Any]:
         async def _create() -> dict[str, Any]:
-            await self.client_group_service.ensure_default_group(
-                panel_id=panel_id,
-                group_name="مشتریان",
-                preferred_inbound_remark="in-2064-tcp",
-            )
-            resolved_inbound_ids = await self.client_group_service.resolve_group_inbound_ids(
-                panel_id=panel_id,
-                group_name=group_name or "مشتریان",
-            )
-            target_inbound_id = inbound_id
-            if resolved_inbound_ids:
-                target_inbound_id = int(resolved_inbound_ids[0])
+            resolved_inbound_ids: list[int] = []
+            if group_name:
+                resolved_inbound_ids = await self.client_group_service.resolve_group_inbound_ids(
+                    panel_id=panel_id,
+                    group_name=group_name,
+                )
+                if not resolved_inbound_ids:
+                    raise ValueError("no inbound is assigned to the selected group.")
+            target_inbound_ids = sorted({int(x) for x in (resolved_inbound_ids or [inbound_id]) if int(x) > 0})
+            if not target_inbound_ids:
+                raise ValueError("no inbound is available for client creation.")
+            target_inbound_id = target_inbound_ids[0]
             normalized_email = await self._apply_delegated_username_prefix(
                 actor_user_id=actor_user_id,
                 settings=settings,
                 client_email=client_email,
             )
-            allowed = await self.access_service.can_access_inbound(
-                user_id=actor_user_id,
-                settings=settings,
-                panel_id=panel_id,
-                inbound_id=target_inbound_id,
-            )
-            if not allowed:
-                raise ValueError("you do not have access to this inbound.")
+            for candidate_inbound_id in target_inbound_ids:
+                allowed = await self.access_service.can_access_inbound(
+                    user_id=actor_user_id,
+                    settings=settings,
+                    panel_id=panel_id,
+                    inbound_id=candidate_inbound_id,
+                )
+                if not allowed:
+                    raise ValueError("you do not have access to one or more selected inbounds.")
             context = await self.access_service.get_admin_context(actor_user_id, settings)
             if not context.is_full_admin:
                 profile = await self.db.get_delegated_admin_profile(actor_user_id)
@@ -1484,6 +1485,7 @@ class AdminProvisioningService:
                 created = await self.panel_service.create_client(
                     panel_id=panel_id,
                     inbound_id=target_inbound_id,
+                    inbound_ids=target_inbound_ids,
                     client_email=normalized_email,
                     total_gb=total_gb,
                     expiry_days=expiry_days,
@@ -1498,13 +1500,14 @@ class AdminProvisioningService:
                 )
                 raise
             try:
-                await self.db.upsert_client_owner(
-                    panel_id=panel_id,
-                    inbound_id=target_inbound_id,
-                    client_uuid=str(created["uuid"]),
-                    owner_user_id=actor_user_id,
-                    client_email=normalized_email,
-                )
+                for candidate_inbound_id in target_inbound_ids:
+                    await self.db.upsert_client_owner(
+                        panel_id=panel_id,
+                        inbound_id=candidate_inbound_id,
+                        client_uuid=str(created["uuid"]),
+                        owner_user_id=actor_user_id,
+                        client_email=normalized_email,
+                    )
             except Exception:
                 logger.exception(
                     "failed to persist client owner mapping",
@@ -1517,31 +1520,33 @@ class AdminProvisioningService:
                 created_email = str(created.get("email") or normalized_email)
                 total_bytes = gb_to_bytes(total_gb)
                 if current_parent_user_id is not None:
-                    await self._write_hierarchy_segment(
-                        panel_id=panel_id,
-                        inbound_id=target_inbound_id,
-                        client_uuid=created_uuid,
-                        owner_user_id=current_parent_user_id,
-                        actor_user_id=actor_user_id,
-                        start_bytes=0,
-                        end_bytes=total_bytes,
-                        is_billable=True,
-                        source="create_client",
-                        client_email=created_email,
-                    )
+                    for candidate_inbound_id in target_inbound_ids:
+                        await self._write_hierarchy_segment(
+                            panel_id=panel_id,
+                            inbound_id=candidate_inbound_id,
+                            client_uuid=created_uuid,
+                            owner_user_id=current_parent_user_id,
+                            actor_user_id=actor_user_id,
+                            start_bytes=0,
+                            end_bytes=total_bytes,
+                            is_billable=True,
+                            source="create_client",
+                            client_email=created_email,
+                        )
                 if last_parent_user_id != current_parent_user_id:
-                    await self._write_hierarchy_segment(
-                        panel_id=panel_id,
-                        inbound_id=target_inbound_id,
-                        client_uuid=created_uuid,
-                        owner_user_id=last_parent_user_id,
-                        actor_user_id=actor_user_id,
-                        start_bytes=0,
-                        end_bytes=total_bytes,
-                        is_billable=False,
-                        source="create_client_parent_change",
-                        client_email=created_email,
-                    )
+                    for candidate_inbound_id in target_inbound_ids:
+                        await self._write_hierarchy_segment(
+                            panel_id=panel_id,
+                            inbound_id=candidate_inbound_id,
+                            client_uuid=created_uuid,
+                            owner_user_id=last_parent_user_id,
+                            actor_user_id=actor_user_id,
+                            start_bytes=0,
+                            end_bytes=total_bytes,
+                            is_billable=False,
+                            source="create_client_parent_change",
+                            client_email=created_email,
+                        )
             if tg_id:
                 try:
                     resolved_user_id: int | None = None
@@ -1551,25 +1556,27 @@ class AdminProvisioningService:
                         user = await self.db.get_user_by_telegram_id(resolved_user_id)
                         if user is not None:
                             resolved_username = str(user.get("username") or "").strip() or None
-                            await self.panel_service.bind_service_to_user(
-                                panel_id=panel_id,
-                                telegram_user_id=resolved_user_id,
-                                client_email=normalized_email,
-                                service_name=None,
-                                inbound_id=target_inbound_id,
-                            )
+                            for candidate_inbound_id in target_inbound_ids:
+                                await self.panel_service.bind_service_to_user(
+                                    panel_id=panel_id,
+                                    telegram_user_id=resolved_user_id,
+                                    client_email=normalized_email,
+                                    service_name=None,
+                                    inbound_id=candidate_inbound_id,
+                                )
                     else:
                         user = await self.db.find_user_by_username(tg_id)
                         if user is not None:
                             resolved_user_id = int(user["telegram_user_id"])
                             resolved_username = str(user.get("username") or "").strip() or None
-                            await self.panel_service.bind_service_to_user(
-                                panel_id=panel_id,
-                                telegram_user_id=resolved_user_id,
-                                client_email=normalized_email,
-                                service_name=None,
-                                inbound_id=target_inbound_id,
-                            )
+                            for candidate_inbound_id in target_inbound_ids:
+                                await self.panel_service.bind_service_to_user(
+                                    panel_id=panel_id,
+                                    telegram_user_id=resolved_user_id,
+                                    client_email=normalized_email,
+                                    service_name=None,
+                                    inbound_id=candidate_inbound_id,
+                                )
                     if resolved_user_id is not None:
                         await self.panel_service.bind_services_for_telegram_identity(
                             telegram_user_id=resolved_user_id,

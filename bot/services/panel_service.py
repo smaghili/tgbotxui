@@ -891,6 +891,7 @@ class PanelService:
         *,
         panel_id: int,
         inbound_id: int,
+        inbound_ids: list[int] | None = None,
         client_email: str,
         total_gb: float,
         expiry_days: int,
@@ -951,6 +952,9 @@ class PanelService:
         }
         conn = await self._build_conn(panel_id)
         if conn.api_version == "v3":
+            normalized_inbound_ids = sorted({int(x) for x in (inbound_ids or [inbound_id]) if int(x) > 0})
+            if not normalized_inbound_ids:
+                raise ValueError("at least one inbound is required.")
             payload = {
                 "client": {
                     "email": email,
@@ -963,7 +967,7 @@ class PanelService:
                     "id": client_uuid,
                     "flow": flow,
                 },
-                "inboundIds": [inbound_id],
+                "inboundIds": normalized_inbound_ids,
             }
         try:
             await self._with_auth_request(
@@ -1010,13 +1014,26 @@ class PanelService:
                 last_synced_at=int(time.time()),
             )
 
-    async def get_client_traffic_by_uuid(self, panel_id: int, client_uuid: str) -> Dict[str, Any]:
+    async def get_client_traffic_by_uuid(
+        self,
+        panel_id: int,
+        client_uuid: str,
+        *,
+        inbound_id: int | None = None,
+    ) -> Dict[str, Any]:
         client_email = ""
         conn = await self._build_conn(panel_id)
         if conn.api_version == "v3":
-            clients = await self.list_clients(panel_id)
-            match = next((item for item in clients if str(item.get("uuid") or "").strip() == client_uuid.strip()), None)
-            client_email = str((match or {}).get("email") or "").strip()
+            if inbound_id is not None and inbound_id > 0:
+                try:
+                    _, config, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
+                    client_email = str(config.get("email") or "").strip()
+                except Exception:
+                    client_email = ""
+            if not client_email:
+                clients = await self.list_clients(panel_id)
+                match = next((item for item in clients if str(item.get("uuid") or "").strip() == client_uuid.strip()), None)
+                client_email = str((match or {}).get("email") or "").strip()
             if not client_email:
                 raise ValueError("client email not found for v3 traffic lookup.")
         try:
@@ -1052,7 +1069,7 @@ class PanelService:
 
     async def get_client_detail(self, panel_id: int, inbound_id: int, client_uuid: str) -> Dict[str, Any]:
         _, config, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
-        traffic = await self.get_client_traffic_by_uuid(panel_id, client_uuid)
+        traffic = await self.get_client_traffic_by_uuid(panel_id, client_uuid, inbound_id=inbound_id)
         email = str(config.get("email") or traffic.get("email") or "").strip()
         now = int(time.time())
         last_online = traffic.get("last_online")
