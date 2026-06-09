@@ -297,6 +297,7 @@ async def _send_service_status(
     services: ServiceContainer,
     force_refresh: bool = True,
     target_user_id: int | None = None,
+    skip_autobind: bool = False,
 ) -> None:
     user_id = target_user_id if target_user_id is not None else message.from_user.id
     lang = await _user_lang(services, user_id)
@@ -320,7 +321,7 @@ async def _send_service_status(
                 last_run_ts = 0
             should_autobind = int(time.time()) - last_run_ts >= STATUS_AUTOBIND_COOLDOWN_SECONDS
             skipped_autobind_due_to_cooldown = not should_autobind
-        if should_autobind:
+        if should_autobind and not skip_autobind:
             try:
                 await services.panel_service.bind_services_for_telegram_identity(
                     telegram_user_id=user_id,
@@ -366,6 +367,7 @@ async def _send_service_status(
 
     if (
         skipped_autobind_due_to_cooldown
+        and not skip_autobind
         and message.from_user is not None
         and message.from_user.id == user_id
         and len(service_rows) <= 1
@@ -609,6 +611,7 @@ async def status_missing_receive_link(message: Message, state: FSMContext, setti
             services=services,
             force_refresh=True,
             target_user_id=user_id,
+            skip_autobind=True,
         )
         return
     await _answer_with_main_menu(
