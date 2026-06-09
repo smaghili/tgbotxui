@@ -481,7 +481,10 @@ class PanelService:
                 lambda current_conn, cookies: self.xui.list_clients(current_conn, cookies),
             )
             rows = raw.get("obj") if isinstance(raw, dict) else None
-            for row in rows if isinstance(rows, list) else []:
+            if not isinstance(rows, list):
+                logger.debug(f"Panel {panel_id}: list_clients v3 returned empty or invalid obj: {type(rows)}")
+                rows = []
+            for row in rows:
                 parsed = self._parse_client_from_dict(row, panel_id=panel_id)
                 if parsed is None:
                     continue
