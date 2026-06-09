@@ -269,6 +269,14 @@ class PanelService:
             inbound_name = self.inbound_label(inbound)
         return panel_name, inbound_name
 
+    async def get_panel_api_version(self, panel_id: int) -> str:
+        """Get API version for a panel (v3 or legacy)."""
+        try:
+            conn = await self._build_conn(panel_id)
+            return conn.api_version
+        except Exception:
+            return "legacy"
+
     async def list_online_clients(
         self,
         panel_id: int,

@@ -1072,8 +1072,8 @@ async def show_users_inbounds_for_panel_message(
         )
         return
 
-    conn = await services.panel_service._build_conn(panel_id)
-    if conn.api_version == "v3":
+    api_version = await services.panel_service.get_panel_api_version(panel_id)
+    if api_version == "v3":
         await message.answer(t("admin_fetching_inbounds", None))
         try:
             clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
@@ -1131,8 +1131,8 @@ async def show_users_inbounds_for_panel_callback(
         await callback.message.edit_text(t("admin_panel_not_found", None))
         return
 
-    conn = await services.panel_service._build_conn(panel_id)
-    if conn.api_version == "v3":
+    api_version = await services.panel_service.get_panel_api_version(panel_id)
+    if api_version == "v3":
         try:
             clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
         except Exception as exc:

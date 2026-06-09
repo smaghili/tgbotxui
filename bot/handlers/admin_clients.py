@@ -512,8 +512,8 @@ async def users_pick_inbound(callback: CallbackQuery, settings: Settings, servic
         await callback.answer(t("admin_panel_not_found", None), show_alert=True)
         return
 
-    conn = await services.panel_service._build_conn(panel_id)
-    if conn.api_version == "v3":
+    api_version = await services.panel_service.get_panel_api_version(panel_id)
+    if api_version == "v3":
         owner_filter, allowed_inbound_ids = await _actor_scope(
             user_id=callback.from_user.id,
             settings=settings,
