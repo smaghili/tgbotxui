@@ -22,7 +22,7 @@ from .admin_shared import (
     two_button_inline_keyboard,
     yes_no_inline_keyboard,
 )
-from .config_bundle import send_existing_config_bundle_for_email, send_rotation_preview_bundle_for_email
+from .config_bundle import send_existing_config_bundle_for_email, send_existing_config_bundles_for_email, send_rotation_preview_bundle_for_email
 
 router = Router(name="common")
 logger = logging.getLogger(__name__)
@@ -722,12 +722,11 @@ async def get_config_from_status(callback: CallbackQuery, settings: Settings, se
     await callback.answer(t("status_prepare_config", lang))
     try:
         if callback.message is not None:
-            await send_existing_config_bundle_for_email(
+            await send_existing_config_bundles_for_email(
                 callback.message,
                 services=services,
                 settings=settings,
                 panel_id=int(row["panel_id"]),
-                inbound_id=row.get("inbound_id"),
                 client_email=str(row["client_email"]),
                 config_name=str(row.get("service_name") or row.get("client_email")),
                 total_bytes=int(row.get("total_bytes", -1)),
