@@ -168,6 +168,13 @@ async def _filter_admin_owned_status_rows(
 
     visible: list[dict] = []
     for row in service_rows:
+        # First check: service already belongs to this user in database
+        row_telegram_user_id = int(row.get("telegram_user_id") or 0)
+        if row_telegram_user_id == user_id:
+            visible.append(row)
+            continue
+
+        # Second check: verify via panel tg_id field (fallback for services added by other admins)
         panel_id = int(row.get("panel_id") or 0)
         inbound_id = int(row.get("inbound_id") or 0)
         client_id = str(row.get("client_id") or "").strip()
