@@ -140,6 +140,60 @@ async def send_existing_config_bundle_for_email(
     return vless_uri, sub_url
 
 
+async def send_existing_config_bundles_for_email(
+    message: Message,
+    *,
+    services: ServiceContainer,
+    settings: Settings,
+    panel_id: int,
+    client_email: str,
+    config_name: str,
+    total_bytes: int,
+    expiry: int | None,
+    lang: str | None,
+    filename: str = "config_qr.png",
+) -> list[dict[str, str]]:
+    bundles = await services.panel_service.list_client_config_bundles_by_email(
+        panel_id=panel_id,
+        client_email=client_email,
+    )
+    if not bundles:
+        raise ValueError("client config was not found on any inbound.")
+
+    total_label, expiry_label = existing_bundle_labels(
+        settings=settings,
+        total_bytes=total_bytes,
+        expiry=expiry,
+        lang=lang,
+    )
+
+    sent: list[dict[str, str]] = []
+    for bundle in bundles:
+        inbound_name = str(bundle.get("inbound_name") or "").strip()
+        bundle_name = config_name if not inbound_name else f"{config_name} | {inbound_name}"
+        vless_uri = str(bundle.get("vless_uri") or "").strip()
+        sub_url = str(bundle.get("sub_url") or "").strip()
+        await send_config_bundle_card(
+            message,
+            config_name=bundle_name,
+            total_label=total_label,
+            expiry_label=expiry_label,
+            vless_uri=vless_uri,
+            sub_url=sub_url,
+            lang=lang,
+            filename=filename,
+        )
+        sent.append(
+            {
+                "inbound_id": str(bundle.get("inbound_id") or ""),
+                "inbound_name": inbound_name,
+                "vless_uri": vless_uri,
+                "sub_url": sub_url,
+            }
+        )
+    return sent
+
+
 async def send_rotation_preview_bundle_for_email(
     message: Message,
     *,

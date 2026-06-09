@@ -6,7 +6,9 @@ from bot.handlers import (
     admin_access,
     admin_bind,
     admin_cancel,
+    admin_client_actions,
     admin_client_bulk,
+    admin_client_detail,
     admin_clients,
     admin_finance,
     admin_inbound_location,
@@ -28,5 +30,7 @@ router.include_router(admin_access.router)
 router.include_router(admin_inbound_location.router)
 router.include_router(admin_provisioning.router)
 router.include_router(admin_client_bulk.router)
+router.include_router(admin_client_detail.router)
+router.include_router(admin_client_actions.router)
 router.include_router(admin_clients.router)
 router.include_router(admin_bind.router)

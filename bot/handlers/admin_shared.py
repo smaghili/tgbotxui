@@ -851,9 +851,10 @@ async def show_inbounds_overview_for_panel(message: Message, services: ServiceCo
 
 def parse_client_callback(data: str, prefix: str) -> tuple[int, int, str]:
     try:
-        action, panel_raw, inbound_raw, client_uuid = data.split(":", 3)
-        if action != prefix:
+        expected_prefix = f"{prefix}:"
+        if not data.startswith(expected_prefix):
             raise ValueError
+        panel_raw, inbound_raw, client_uuid = data[len(expected_prefix) :].split(":", 2)
         return int(panel_raw), int(inbound_raw), client_uuid
     except Exception as exc:
         raise ValueError("callback_data_invalid") from exc
@@ -861,9 +862,10 @@ def parse_client_callback(data: str, prefix: str) -> tuple[int, int, str]:
 
 def parse_client_callback_with_value(data: str, prefix: str) -> tuple[int, int, str, str]:
     try:
-        action, panel_raw, inbound_raw, client_uuid, value = data.split(":", 4)
-        if action != prefix:
+        expected_prefix = f"{prefix}:"
+        if not data.startswith(expected_prefix):
             raise ValueError
+        panel_raw, inbound_raw, client_uuid, value = data[len(expected_prefix) :].split(":", 3)
         return int(panel_raw), int(inbound_raw), client_uuid, value
     except Exception as exc:
         raise ValueError("callback_data_invalid") from exc

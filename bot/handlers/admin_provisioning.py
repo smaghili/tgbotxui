@@ -46,7 +46,12 @@ from .admin_shared import (
     render_client_detail,
     yes_no_inline_keyboard,
 )
-from .config_bundle import send_config_bundle_card, send_existing_config_bundle_for_email, send_rotation_preview_bundle_for_email
+from .config_bundle import (
+    send_config_bundle_card,
+    send_existing_config_bundle_for_email,
+    send_existing_config_bundles_for_email,
+    send_rotation_preview_bundle_for_email,
+)
 
 router = Router(name="admin_provisioning")
 EDIT_SEARCH_RESULTS_PER_PAGE = 20
@@ -1146,12 +1151,11 @@ async def edit_config_get_config(callback: CallbackQuery, settings: Settings, se
         client_email = str(detail.get("email") or "").strip()
         if not client_email:
             raise ValueError("client email was not found.")
-        await send_existing_config_bundle_for_email(
+        await send_existing_config_bundles_for_email(
             callback.message,
             services=services,
             settings=settings,
             panel_id=panel_id,
-            inbound_id=inbound_id,
             client_email=client_email,
             config_name=client_email,
             total_bytes=int(detail.get("total") or 0),

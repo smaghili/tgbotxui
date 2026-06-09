@@ -290,8 +290,15 @@ class PanelService:
             owner_admin_user_id=owner_admin_user_id,
             allowed_inbound_ids=allowed_inbound_ids,
         )
-        clients.sort(key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"]))
-        return clients
+        deduped: list[Dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for client in sorted(clients, key=lambda item: (item["email"].lower(), item["inbound_id"], item["uuid"])):
+            dedupe_key = (str(client.get("email") or "").strip().lower(), str(client.get("uuid") or "").strip().lower())
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            deduped.append(client)
+        return deduped
 
     @staticmethod
     def _parse_last_online_value(raw: Any) -> int | None:
@@ -2006,6 +2013,49 @@ class PanelService:
         if target_client is None:
             raise ValueError("client not found on inbound.")
         return await self._build_client_subscription_url(panel_id, target_client)
+
+    async def list_client_config_bundles_by_email(
+        self,
+        panel_id: int,
+        client_email: str,
+    ) -> list[dict[str, Any]]:
+        inbounds = await self.list_inbounds(panel_id)
+        email_norm = client_email.strip().lower()
+        if not email_norm:
+            return []
+
+        bundles: list[dict[str, Any]] = []
+        sub_url = ""
+
+        for inbound in inbounds:
+            inbound_id = int(inbound.get("id") or 0)
+            if inbound_id <= 0:
+                continue
+            matched_client: dict[str, Any] | None = None
+            for client in self._extract_inbound_clients(inbound):
+                if str(client.get("email") or "").strip().lower() == email_norm:
+                    matched_client = client
+                    break
+            if matched_client is None:
+                continue
+
+            vless_uri = await self.get_client_vless_uri_by_email(
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_email=client_email,
+            )
+            if not sub_url:
+                sub_url = await self._build_client_subscription_url(panel_id, matched_client)
+            bundles.append(
+                {
+                    "inbound_id": inbound_id,
+                    "inbound_name": self.inbound_label(inbound),
+                    "vless_uri": vless_uri,
+                    "sub_url": sub_url,
+                }
+            )
+
+        return bundles
 
     @staticmethod
     def _pick_traffic_obj(raw: Dict[str, Any], client_email: str) -> Dict[str, Any]:
