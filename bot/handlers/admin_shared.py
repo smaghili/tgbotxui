@@ -1071,27 +1071,50 @@ async def show_users_inbounds_for_panel_message(
             reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
         )
         return
-    await message.answer(t("admin_fetching_inbounds", None))
-    try:
-        inbounds = await services.panel_service.list_inbounds(panel_id)
-    except Exception as exc:
+
+    conn = await services.panel_service._build_conn(panel_id)
+    if conn.api_version == "v3":
+        await message.answer(t("admin_fetching_inbounds", None))
+        try:
+            clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
+        except Exception as exc:
+            await message.answer(
+                f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
+                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+            )
+            return
+        if not clients:
+            await message.answer(
+                t("admin_inbound_clients_empty", None, panel=panel["name"], inbound="تمام مشتریان"),
+                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+            )
+            return
         await message.answer(
-            f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
-            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+            t("admin_inbound_clients_header", None, panel=panel["name"], inbound="تمام مشتریان", count=len(clients)),
+            reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
         )
-        return
-    if allowed_inbound_ids is not None:
-        inbounds = [item for item in inbounds if int(item.get("id") or 0) in allowed_inbound_ids]
-    if not inbounds:
+    else:
+        await message.answer(t("admin_fetching_inbounds", None))
+        try:
+            inbounds = await services.panel_service.list_inbounds(panel_id)
+        except Exception as exc:
+            await message.answer(
+                f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
+                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+            )
+            return
+        if allowed_inbound_ids is not None:
+            inbounds = [item for item in inbounds if int(item.get("id") or 0) in allowed_inbound_ids]
+        if not inbounds:
+            await message.answer(
+                t("admin_no_inbound_for_panel", None),
+                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+            )
+            return
         await message.answer(
-            t("admin_no_inbound_for_panel", None),
-            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
+            t("admin_panel_and_pick_inbound", None, name=panel["name"]),
+            reply_markup=users_inbounds_keyboard(panel_id, inbounds),
         )
-        return
-    await message.answer(
-        t("admin_panel_and_pick_inbound", None, name=panel["name"]),
-        reply_markup=users_inbounds_keyboard(panel_id, inbounds),
-    )
 
 
 async def show_users_inbounds_for_panel_callback(
@@ -1107,20 +1130,36 @@ async def show_users_inbounds_for_panel_callback(
     if panel is None:
         await callback.message.edit_text(t("admin_panel_not_found", None))
         return
-    try:
-        inbounds = await services.panel_service.list_inbounds(panel_id)
-    except Exception as exc:
-        await callback.message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
-        return
-    if allowed_inbound_ids is not None:
-        inbounds = [item for item in inbounds if int(item.get("id") or 0) in allowed_inbound_ids]
-    if not inbounds:
-        await callback.message.edit_text(t("admin_no_inbound_for_panel", None))
-        return
-    await callback.message.edit_text(
-        t("admin_panel_and_pick_inbound", None, name=panel["name"]),
-        reply_markup=users_inbounds_keyboard(panel_id, inbounds),
-    )
+
+    conn = await services.panel_service._build_conn(panel_id)
+    if conn.api_version == "v3":
+        try:
+            clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
+        except Exception as exc:
+            await callback.message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
+            return
+        if not clients:
+            await callback.message.edit_text(t("admin_inbound_clients_empty", None, panel=panel["name"], inbound="تمام مشتریان"))
+            return
+        await callback.message.edit_text(
+            t("admin_inbound_clients_header", None, panel=panel["name"], inbound="تمام مشتریان", count=len(clients)),
+            reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
+        )
+    else:
+        try:
+            inbounds = await services.panel_service.list_inbounds(panel_id)
+        except Exception as exc:
+            await callback.message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
+            return
+        if allowed_inbound_ids is not None:
+            inbounds = [item for item in inbounds if int(item.get("id") or 0) in allowed_inbound_ids]
+        if not inbounds:
+            await callback.message.edit_text(t("admin_no_inbound_for_panel", None))
+            return
+        await callback.message.edit_text(
+            t("admin_panel_and_pick_inbound", None, name=panel["name"]),
+            reply_markup=users_inbounds_keyboard(panel_id, inbounds),
+        )
 
 
 async def show_online_clients_for_panel_message(

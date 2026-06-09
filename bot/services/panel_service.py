@@ -346,6 +346,12 @@ class PanelService:
     def _normalize_client_field(self, value: Any) -> str:
         return str(value or "").strip()
 
+    def _extract_row_uuid_and_email(self, row: Dict[str, Any]) -> tuple[str, str]:
+        """Extract uuid and email from list_clients row safely."""
+        uuid = str(row.get("uuid") or "").strip()
+        email = str(row.get("email") or "").strip()
+        return uuid, email
+
     def _extract_inbound_ids(self, inbound_ids_raw: Any) -> list[int]:
         if not isinstance(inbound_ids_raw, list):
             return []
@@ -633,7 +639,7 @@ class PanelService:
         for row in rows:
             status = "active"
             try:
-                detail = await self.get_client_detail(panel_id, int(row["inbound_id"]), str(row["uuid"]))
+                detail = await self.get_client_detail(panel_id, int(row["inbound_id"]), str(row["uuid"]), client_email=str(row.get("email", "")))
                 enabled = bool(detail.get("enabled", row.get("enabled", True)))
                 total = int(detail.get("total") or 0)
                 used = int(detail.get("used") or 0)
@@ -678,7 +684,7 @@ class PanelService:
         low_traffic: list[Dict[str, Any]] = []
         for row in rows:
             try:
-                detail = await self.get_client_detail(panel_id, int(row["inbound_id"]), str(row["uuid"]))
+                detail = await self.get_client_detail(panel_id, int(row["inbound_id"]), str(row["uuid"]), client_email=str(row.get("email", "")))
             except Exception:
                 continue
             total = int(detail.get("total") or 0)
@@ -731,7 +737,7 @@ class PanelService:
                 if inbound_id <= 0 or not client_uuid:
                     continue
                 try:
-                    detail = await self.get_client_detail(panel_id, inbound_id, client_uuid)
+                    detail = await self.get_client_detail(panel_id, inbound_id, client_uuid, client_email=email)
                     total = int(detail.get("total") or 0)
                     used = int(detail.get("used") or 0)
                     expiry = parse_epoch(detail.get("expiry"))
@@ -1188,8 +1194,10 @@ class PanelService:
     async def delete_client(self, panel_id: int, inbound_id: int, client_uuid: str) -> None:
         client_email = ""
         try:
-            detail = await self.get_client_detail(panel_id, inbound_id, client_uuid)
-            client_email = str(detail.get("email") or "").strip()
+            clients = await self.list_clients(panel_id)
+            match = next((c for c in clients if str(c.get("uuid") or "").strip() == client_uuid.strip()), None)
+            if match:
+                client_email = str(match.get("email") or "").strip()
         except Exception:
             client_email = ""
         try:
@@ -1224,8 +1232,7 @@ class PanelService:
         client_email = ""
         conn = await self._build_conn(panel_id)
         if conn.api_version == "v3":
-            allowed_inbound_ids = {inbound_id} if inbound_id is not None and inbound_id > 0 else None
-            clients = await self.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
+            clients = await self.list_clients(panel_id)
             match = next((item for item in clients if str(item.get("uuid") or "").strip() == client_uuid.strip()), None)
             client_email = str((match or {}).get("email") or "").strip()
             if not client_email:
@@ -1271,10 +1278,10 @@ class PanelService:
         conn = await self._build_conn(panel_id)
         if conn.api_version == "v3":
             if not client_email:
-                clients = await self.list_clients(panel_id, allowed_inbound_ids={inbound_id})
+                clients = await self.list_clients(panel_id)
                 match = next((row for row in clients if row.get("uuid") == client_uuid), None)
                 if match is None:
-                    raise ValueError("client not found on this inbound.")
+                    raise ValueError("client not found on this panel.")
                 client_email = match.get("email", "")
             raw, _ = await self._with_auth_request(
                 panel_id,

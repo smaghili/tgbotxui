@@ -506,15 +506,43 @@ async def users_pick_inbound(callback: CallbackQuery, settings: Settings, servic
     except (ValueError, IndexError):
         await callback.answer(t("admin_invalid_data", None), show_alert=True)
         return
-    await _render_inbound_clients_view(
-        callback.message,
-        services=services,
-        settings=settings,
-        actor_user_id=callback.from_user.id,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        page=1,
-    )
+
+    panel = await services.panel_service.get_panel(panel_id)
+    if panel is None:
+        await callback.answer(t("admin_panel_not_found", None), show_alert=True)
+        return
+
+    conn = await services.panel_service._build_conn(panel_id)
+    if conn.api_version == "v3":
+        owner_filter, allowed_inbound_ids = await _actor_scope(
+            user_id=callback.from_user.id,
+            settings=settings,
+            services=services,
+            panel_id=panel_id,
+        )
+        clients = await services.panel_service.list_clients(
+            panel_id,
+            owner_admin_user_id=owner_filter,
+            allowed_inbound_ids=allowed_inbound_ids,
+        )
+        if not clients:
+            await callback.message.edit_text(t("admin_inbound_clients_empty", None, panel=panel["name"], inbound="تمام مشتریان"))
+            await callback.answer()
+            return
+        await callback.message.edit_text(
+            t("admin_inbound_clients_header", None, panel=panel["name"], inbound="تمام مشتریان", count=len(clients)),
+            reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
+        )
+    else:
+        await _render_inbound_clients_view(
+            callback.message,
+            services=services,
+            settings=settings,
+            actor_user_id=callback.from_user.id,
+            panel_id=panel_id,
+            inbound_id=inbound_id,
+            page=1,
+        )
     await callback.answer()
 
 
