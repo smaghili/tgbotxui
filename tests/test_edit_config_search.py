@@ -1,4 +1,4 @@
-from bot.handlers.admin_provisioning import _edit_search_results_keyboard
+from bot.handlers.admin_provisioning import EDIT_SEARCH_MIN_QUERY_LEN, _edit_search_results_keyboard
 from bot.handlers.admin_shared import parse_client_callback
 
 
@@ -52,3 +52,7 @@ def test_edit_search_result_callback_payload_matches_handler_parser() -> None:
 
 def test_shared_client_callback_parser_still_supports_cr_prefix() -> None:
     assert parse_client_callback("cr:7:2:uuid-1", "cr") == (7, 2, "uuid-1")
+
+
+def test_edit_search_requires_stable_min_query_length() -> None:
+    assert EDIT_SEARCH_MIN_QUERY_LEN == 3

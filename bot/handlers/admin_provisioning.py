@@ -50,6 +50,7 @@ from .config_bundle import send_config_bundle_card, send_existing_config_bundle_
 
 router = Router(name="admin_provisioning")
 EDIT_SEARCH_RESULTS_PER_PAGE = 20
+EDIT_SEARCH_MIN_QUERY_LEN = 3
 
 
 async def _lang_for(source: Message | CallbackQuery, services: ServiceContainer) -> str | None:
@@ -393,14 +394,13 @@ async def _render_create_target_picker(
         message = _message_target(target)
         if message is not None:
             selected = rows[0]
-            await state.update_data(
-                create_panel_id=int(selected.panel_id),
-                create_inbound_id=int(selected.inbound_id),
-                create_group_id=0,
-                create_group_name="",
+            await _set_create_target_and_ask_email(
+                message,
+                state,
+                panel_id=int(selected.panel_id),
+                inbound_id=int(selected.inbound_id),
+                lang=lang,
             )
-            await state.set_state(ProvisioningStates.waiting_create_email)
-            await answer_with_cancel(message, t("admin_create_enter_email", lang), lang=lang)
         return True
     grouped_rows = _group_inbound_rows_by_panel(rows)
     await _show_target_text(
@@ -472,10 +472,8 @@ def _group_inbound_rows_by_panel(rows: list) -> dict[int, list]:
 
 async def _resolve_panel_for_edit_search(
     message: Message,
-    state: FSMContext,
     *,
     actor_user_id: int,
-    query: str,
     settings: Settings,
     services: ServiceContainer,
     lang: str | None,
@@ -616,7 +614,8 @@ async def start_create_user(
         return
     if len(panels) > 1:
         await state.set_state(ProvisioningStates.waiting_create_panel_select)
-        await message.answer(
+        await _show_target_text(
+            message,
             t("admin_create_user_pick_panel", lang),
             reply_markup=panel_select_keyboard(panels, "pcu:pick_panel"),
         )
@@ -706,11 +705,11 @@ async def create_user_email(message: Message, state: FSMContext, settings: Setti
     lang = await _lang_for(message, services)
     email = (message.text or "").strip()
     if not email:
-        await answer_with_cancel(message, t("bind_config_id_empty", lang), lang=lang)
+        await message.answer(t("bind_config_id_empty", lang))
         return
     await state.update_data(create_email=email)
     await state.set_state(ProvisioningStates.waiting_create_traffic_gb)
-    await answer_with_cancel(message, t("admin_create_enter_traffic", lang), lang=lang)
+    await message.answer(t("admin_create_enter_traffic", lang))
 
 
 @router.message(ProvisioningStates.waiting_create_traffic_gb)
@@ -723,7 +722,7 @@ async def create_user_traffic(message: Message, state: FSMContext, settings: Set
         if gb <= 0:
             raise ValueError
     except ValueError:
-        await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
+        await message.answer(t("admin_invalid_positive_number", lang))
         return
     is_delegated_admin = await services.access_service.is_delegated_admin(message.from_user.id)
     profile = await _delegated_profile_for(message, services=services, is_delegated_admin=is_delegated_admin)
@@ -734,11 +733,11 @@ async def create_user_traffic(message: Message, state: FSMContext, settings: Set
     )
     if delegated_limit_error is not None:
         error_key, minimum = delegated_limit_error
-        await answer_with_cancel(message, t(error_key, lang, minimum=minimum), lang=lang)
+        await message.answer(t(error_key, lang, minimum=minimum))
         return
     await state.update_data(create_total_gb=gb)
     await state.set_state(ProvisioningStates.waiting_create_expiry_days)
-    await answer_with_cancel(message, t("admin_create_enter_days", lang), lang=lang)
+    await message.answer(t("admin_create_enter_days", lang))
 
 
 @router.message(ProvisioningStates.waiting_create_expiry_days)
@@ -751,7 +750,7 @@ async def create_user_days(message: Message, state: FSMContext, settings: Settin
         if days <= 0:
             raise ValueError
     except ValueError:
-        await answer_with_cancel(message, t("admin_invalid_positive_number", lang), lang=lang)
+        await message.answer(t("admin_invalid_positive_number", lang))
         return
     is_delegated_admin = await services.access_service.is_delegated_admin(message.from_user.id)
     profile = await _delegated_profile_for(message, services=services, is_delegated_admin=is_delegated_admin)
@@ -762,7 +761,7 @@ async def create_user_days(message: Message, state: FSMContext, settings: Settin
     )
     if delegated_limit_error is not None:
         error_key, minimum = delegated_limit_error
-        await answer_with_cancel(message, t(error_key, lang, minimum=minimum), lang=lang)
+        await message.answer(t(error_key, lang, minimum=minimum))
         return
     await state.update_data(create_expiry_days=days)
     await state.set_state(ProvisioningStates.waiting_create_tg_id_choice)
@@ -791,7 +790,7 @@ async def create_user_tg_choice_yes(callback: CallbackQuery, state: FSMContext, 
     await state.set_state(ProvisioningStates.waiting_create_tg_id)
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=None)
-        await answer_with_cancel(callback.message, t("admin_create_enter_tg", lang), lang=lang)
+        await callback.message.answer(t("admin_create_enter_tg", lang))
     await callback.answer()
 
 
@@ -802,7 +801,7 @@ async def create_user_tg_value(message: Message, state: FSMContext, settings: Se
     lang = await _lang_for(message, services)
     normalized = normalize_tg_id((message.text or "").strip())
     if normalized is None:
-        await answer_with_cancel(message, t("admin_tgid_invalid", lang), lang=lang)
+        await message.answer(t("admin_tgid_invalid", lang))
         return
     await state.update_data(create_tg_id=normalized)
     await _finish_create_user(message, state, settings, services, lang, actor_user_id=message.from_user.id)
@@ -872,21 +871,19 @@ async def resolve_vless_config(message: Message, state: FSMContext, settings: Se
         await answer_with_cancel(message, t("admin_edit_config_prompt", lang), lang=lang)
         return
     if not raw.lower().startswith("vless://"):
-        if len(raw) < 2:
-            await answer_with_cancel(message, t("admin_search_too_short", lang), lang=lang)
+        await state.update_data(edit_search_query=raw)
+        if len(raw) < EDIT_SEARCH_MIN_QUERY_LEN:
+            await message.answer(t("admin_search_too_short", lang))
             return
         panel_id = await _resolve_panel_for_edit_search(
             message,
-            state,
             actor_user_id=message.from_user.id,
-            query=raw,
             settings=settings,
             services=services,
             lang=lang,
         )
         if panel_id is None:
             return
-        await state.clear()
         try:
             await _show_edit_search_results(
                 message,
@@ -897,9 +894,8 @@ async def resolve_vless_config(message: Message, state: FSMContext, settings: Se
                 services=services,
                 lang=lang,
             )
-            await _restore_admin_menu(message, services=services, settings=settings, lang=lang)
         except Exception as exc:
-            await answer_with_cancel(message, t("admin_edit_config_error", lang, error=exc), lang=lang)
+            await message.answer(t("admin_edit_config_error", lang, error=exc))
         return
     try:
         ref = await services.admin_provisioning_service.resolve_client_from_vless_for_actor(
@@ -949,11 +945,9 @@ async def pick_panel_for_edit_search(
         return
     data = await state.get_data()
     query = str(data.get("edit_search_query") or "").strip()
-    if len(query) < 2:
-        await state.clear()
+    if len(query) < EDIT_SEARCH_MIN_QUERY_LEN:
         await callback.answer(t("admin_search_too_short", lang), show_alert=True)
         return
-    await state.clear()
     try:
         await _show_edit_search_results(
             callback,
@@ -964,7 +958,6 @@ async def pick_panel_for_edit_search(
             services=services,
             lang=lang,
         )
-        await _restore_admin_menu(callback, services=services, settings=settings, lang=lang)
     except Exception as exc:
         if callback.message is not None:
             await callback.message.edit_text(t("admin_edit_config_error", lang, error=exc))

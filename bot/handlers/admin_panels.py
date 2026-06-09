@@ -263,10 +263,8 @@ async def handle_management(message: Message, settings: Settings, services: Serv
 
 @router.message(F.text.in_(button_variants("btn_back")))
 async def handle_back(message: Message, settings: Settings, services: ServiceContainer) -> None:
-    await message.answer(
-        t("menu_main", None),
-        reply_markup=main_keyboard(await services.access_service.is_any_admin(message.from_user.id, settings)),
-    )
+    is_admin = await services.access_service.is_any_admin(message.from_user.id, settings)
+    await message.answer(t("menu_main", None), reply_markup=main_keyboard(is_admin))
 
 
 @router.message(F.text.in_(button_variants("btn_cleanup_settings")))
@@ -339,10 +337,10 @@ async def add_panel_get_url(message: Message, state: FSMContext) -> None:
     payload = await state.get_data()
     if payload.get("api_version") == "v3":
         await state.set_state(AddPanelStates.waiting_api_token)
-        await answer_with_cancel(message, t("panel_add_enter_api_token", None))
+        await message.answer(t("panel_add_enter_api_token", None))
         return
     await state.set_state(AddPanelStates.waiting_username)
-    await answer_with_cancel(message, t("panel_add_enter_user", None))
+    await message.answer(t("panel_add_enter_user", None))
 
 
 @router.message(AddPanelStates.waiting_api_token)
@@ -366,7 +364,7 @@ async def add_panel_get_api_token(message: Message, state: FSMContext, settings:
 async def add_panel_get_username(message: Message, state: FSMContext) -> None:
     await state.update_data(username=(message.text or "").strip())
     await state.set_state(AddPanelStates.waiting_password)
-    await answer_with_cancel(message, t("panel_add_enter_pass", None))
+    await message.answer(t("panel_add_enter_pass", None))
 
 
 @router.message(AddPanelStates.waiting_password)

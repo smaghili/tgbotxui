@@ -21,9 +21,13 @@ router = Router(name="admin_cancel")
 async def handle_cancel(message: Message, state: FSMContext, settings: Settings, services: ServiceContainer) -> None:
     await state.clear()
     is_admin = await services.access_service.is_any_admin(message.from_user.id, settings)
-    await message.answer(
-        t("operation_cancelled", None),
-        reply_markup=await admin_keyboard_for_user(user_id=message.from_user.id, settings=settings, services=services)
+    reply_markup = (
+        await admin_keyboard_for_user(
+            user_id=message.from_user.id,
+            settings=settings,
+            services=services,
+        )
         if is_admin
-        else main_keyboard(False),
+        else main_keyboard(False)
     )
+    await message.answer(t("operation_cancelled", None), reply_markup=reply_markup)

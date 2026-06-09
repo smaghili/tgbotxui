@@ -26,6 +26,10 @@ from bot.utils import gb_to_bytes, parse_epoch
 
 logger = logging.getLogger(__name__)
 
+# Constants for client management
+CLIENT_ONLINE_THRESHOLD = 300  # seconds (5 minutes)
+DISABLED_CLIENTS_CACHE_TTL = 20  # seconds
+
 class PanelService:
     def __init__(
         self,
@@ -339,6 +343,94 @@ class PanelService:
                 out[str(key).strip().lower()] = parsed
         return out
 
+    def _normalize_client_field(self, value: Any) -> str:
+        return str(value or "").strip()
+
+    def _extract_inbound_ids(self, inbound_ids_raw: Any) -> list[int]:
+        if not isinstance(inbound_ids_raw, list):
+            return []
+        inbound_ids: list[int] = []
+        for value in inbound_ids_raw:
+            try:
+                inbound_id = int(value)
+                if inbound_id > 0:
+                    inbound_ids.append(inbound_id)
+            except (TypeError, ValueError):
+                continue
+        return inbound_ids
+
+    def _parse_client_from_dict(self, client_dict: dict, panel_id: int | None = None) -> tuple[dict, list[int]] | None:
+        if not isinstance(client_dict, dict):
+            if panel_id:
+                logger.debug(f"Panel {panel_id}: Skipping non-dict row in client list")
+            return None
+        client = client_dict.get("client")
+        inbound_ids_raw = client_dict.get("inboundIds")
+        if not isinstance(client, dict):
+            if panel_id:
+                logger.debug(f"Panel {panel_id}: Skipping row with missing/invalid 'client' field")
+            return None
+        if not isinstance(inbound_ids_raw, list):
+            if panel_id:
+                logger.debug(f"Panel {panel_id}: Skipping row with missing/invalid 'inboundIds' field")
+            return None
+        email = self._normalize_client_field(client.get("email"))
+        uuid = self._normalize_client_field(client.get("uuid")) or self._normalize_client_field(client.get("id"))
+        if not email or not uuid:
+            if panel_id:
+                logger.debug(f"Panel {panel_id}: Skipping client with missing email or uuid")
+            return None
+        inbound_ids = self._extract_inbound_ids(inbound_ids_raw)
+        if not inbound_ids:
+            if panel_id:
+                logger.debug(f"Panel {panel_id}: Skipping client with no valid inbound IDs")
+            return None
+        return ({
+            "email": email,
+            "uuid": uuid,
+            "sub_id": self._normalize_client_field(client.get("subId")),
+            "comment": self._normalize_client_field(client.get("comment")),
+            "tg_id": self._normalize_client_field(client.get("tgId")),
+            "enabled": bool(client.get("enable", True)),
+        }, inbound_ids)
+
+    def _client_belongs_to_owner(
+        self,
+        inbound_ids: list[int],
+        uuid: str,
+        comment: str,
+        owner_admin_user_id: int,
+        owner_map: dict[tuple[int, str], int],
+    ) -> bool:
+        """Check if client belongs to owner without nested loop."""
+        for inbound_id in inbound_ids:
+            owner_id = self._owner_id_for_client(
+                mapped_owner_id=owner_map.get((inbound_id, uuid)),
+                comment=comment,
+            )
+            if owner_id == owner_admin_user_id:
+                return True
+        return False
+
+    def _build_client_row(
+        self,
+        panel_id: int,
+        inbound_id: int,
+        client: dict,
+        last_online: int | None = None,
+    ) -> Dict[str, Any]:
+        return {
+            "panel_id": panel_id,
+            "inbound_id": inbound_id,
+            "uuid": client["uuid"],
+            "email": client["email"],
+            "enabled": client["enabled"],
+            "tg_id": client["tg_id"],
+            "sub_id": client["sub_id"],
+            "comment": client["comment"],
+            "last_online": last_online,
+        }
+
     async def list_clients(
         self,
         panel_id: int,
@@ -364,62 +456,138 @@ class PanelService:
         if owner_admin_user_id is not None:
             owner_map = await self.db.list_client_owners_for_panel(panel_id)
 
-        inbounds = await self.list_inbounds(panel_id)
+        conn = await self._build_conn(panel_id)
+        query_norm = (email_query or "").strip().lower()
         matched: list[Dict[str, Any]] = []
         seen: set[tuple[int, str]] = set()
-        query_norm = (email_query or "").strip().lower()
-        for inbound in inbounds:
-            inbound_id = int(inbound.get("id") or 0)
-            if inbound_id <= 0:
-                continue
-            if allowed_inbound_ids is not None and inbound_id not in allowed_inbound_ids:
-                continue
-            for client in self._extract_inbound_clients(inbound):
-                email = str(client.get("email") or "").strip()
-                uuid = str(client.get("uuid") or client.get("id") or "").strip()
-                sub_id = str(client.get("subId") or "").strip()
-                comment = str(client.get("comment") or "").strip()
-                if not email or not uuid:
+
+        if conn.api_version == "v3":
+            raw, _ = await self._with_auth_request(
+                panel_id,
+                lambda current_conn, cookies: self.xui.list_clients(current_conn, cookies),
+            )
+            rows = raw.get("obj") if isinstance(raw, dict) else None
+            for row in rows if isinstance(rows, list) else []:
+                parsed = self._parse_client_from_dict(row, panel_id=panel_id)
+                if parsed is None:
                     continue
-                if owner_admin_user_id is not None:
-                    owner_id = self._owner_id_for_client(
-                        mapped_owner_id=owner_map.get((inbound_id, uuid)),
-                        comment=comment,
-                    )
-                    if owner_id != owner_admin_user_id:
-                        continue
-                candidates = {email.lower(), uuid.lower(), sub_id.lower()}
-                if online_only and not any(c and c in online_keys for c in candidates):
-                    continue
-                is_enabled = bool(client.get("enable", True))
-                if enabled is not None and is_enabled is not enabled:
-                    continue
-                if query_norm and query_norm not in email.lower():
-                    continue
-                dedupe_key = (inbound_id, uuid)
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
-                last_online = None
-                if include_last_online:
-                    for candidate in candidates:
-                        if candidate and candidate in last_online_map:
-                            last_online = last_online_map[candidate]
-                            break
-                matched.append(
-                    {
-                        "panel_id": panel_id,
-                        "inbound_id": inbound_id,
-                        "uuid": uuid,
-                        "email": email,
-                        "enabled": is_enabled,
-                        "tg_id": str(client.get("tgId") or "").strip(),
-                        "sub_id": sub_id,
-                        "comment": comment,
-                        "last_online": last_online,
-                    }
+                client, inbound_ids = parsed
+                self._filter_and_add_clients(
+                    matched, seen, client, inbound_ids, panel_id,
+                    allowed_inbound_ids, owner_admin_user_id, owner_map,
+                    enabled, query_norm, online_only, online_keys,
+                    include_last_online, last_online_map
                 )
+        else:
+            inbounds = await self.list_inbounds(panel_id)
+            for inbound in inbounds:
+                inbound_id = int(inbound.get("id") or 0)
+                if inbound_id <= 0:
+                    continue
+                if allowed_inbound_ids is not None and inbound_id not in allowed_inbound_ids:
+                    continue
+                for client_dict in self._extract_inbound_clients(inbound):
+                    if not isinstance(client_dict, dict):
+                        continue
+                    email = self._normalize_client_field(client_dict.get("email"))
+                    uuid = self._normalize_client_field(client_dict.get("uuid")) or self._normalize_client_field(client_dict.get("id"))
+                    if not email or not uuid:
+                        continue
+                    client = {
+                        "email": email,
+                        "uuid": uuid,
+                        "sub_id": self._normalize_client_field(client_dict.get("subId")),
+                        "comment": self._normalize_client_field(client_dict.get("comment")),
+                        "tg_id": self._normalize_client_field(client_dict.get("tgId")),
+                        "enabled": bool(client_dict.get("enable", True)),
+                    }
+                    self._filter_and_add_client(
+                        matched, seen, client, inbound_id, panel_id,
+                        owner_admin_user_id, owner_map,
+                        enabled, query_norm, online_only, online_keys,
+                        include_last_online, last_online_map
+                    )
         return matched
+
+    def _filter_and_add_clients(
+        self,
+        matched: list[Dict[str, Any]],
+        seen: set[tuple[int, str]],
+        client: dict,
+        inbound_ids: list[int],
+        panel_id: int,
+        allowed_inbound_ids: set[int] | None,
+        owner_admin_user_id: int | None,
+        owner_map: dict[tuple[int, str], int],
+        enabled: bool | None,
+        query_norm: str,
+        online_only: bool,
+        online_keys: set[str],
+        include_last_online: bool,
+        last_online_map: dict[str, int],
+    ) -> None:
+        if allowed_inbound_ids is not None:
+            inbound_ids = [i for i in inbound_ids if i in allowed_inbound_ids]
+            if not inbound_ids:
+                return
+
+        email = client["email"]
+        uuid = client["uuid"]
+        enabled_value = client["enabled"]
+        candidates = {email.lower(), uuid.lower(), client["sub_id"].lower()}
+
+        if owner_admin_user_id is not None:
+            if not self._client_belongs_to_owner(
+                inbound_ids, uuid, client["comment"],
+                owner_admin_user_id, owner_map
+            ):
+                return
+
+        if enabled is not None and enabled_value is not enabled:
+            return
+
+        if online_only and not any(c and c in online_keys for c in candidates):
+            return
+
+        if query_norm and query_norm not in email.lower():
+            return
+
+        last_online = None
+        if include_last_online:
+            for candidate in candidates:
+                if candidate and candidate in last_online_map:
+                    last_online = last_online_map[candidate]
+                    break
+
+        for inbound_id in inbound_ids:
+            dedupe_key = (inbound_id, uuid)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            matched.append(self._build_client_row(panel_id, inbound_id, client, last_online))
+
+    def _filter_and_add_client(
+        self,
+        matched: list[Dict[str, Any]],
+        seen: set[tuple[int, str]],
+        client: dict,
+        inbound_id: int,
+        panel_id: int,
+        owner_admin_user_id: int | None,
+        owner_map: dict[tuple[int, str], int],
+        enabled: bool | None,
+        query_norm: str,
+        online_only: bool,
+        online_keys: set[str],
+        include_last_online: bool,
+        last_online_map: dict[str, int],
+    ) -> None:
+        self._filter_and_add_clients(
+            matched, seen, client, [inbound_id], panel_id,
+            None, owner_admin_user_id, owner_map,
+            enabled, query_norm, online_only, online_keys,
+            include_last_online, last_online_map
+        )
 
     async def search_clients_by_email(
         self,
@@ -452,7 +620,7 @@ class PanelService:
         )
         now_ts = time.time()
         cached = self._disabled_cache.get(cache_key)
-        if cached is not None and now_ts - cached[0] <= 20:
+        if cached is not None and now_ts - cached[0] <= DISABLED_CLIENTS_CACHE_TTL:
             return [dict(row) for row in cached[1]]
 
         rows = await self.list_clients(
@@ -823,6 +991,49 @@ class PanelService:
             raise ValueError("client not found on this inbound.")
         return inbound, current, clients
 
+    def _build_client_update_payload(self, changed: dict, current: dict) -> tuple[dict, str]:
+        """Build normalized client payload for updates."""
+        email = self._normalize_client_field(changed.get("email") or current.get("email"))
+        return ({
+            "id": str(changed.get("uuid") or changed.get("id") or "").strip(),
+            "flow": self._normalize_client_field(changed.get("flow")),
+            "email": email,
+            "comment": self._normalize_client_field(changed.get("comment")),
+            "limitIp": int(changed.get("limitIp") or 0),
+            "totalGB": int(changed.get("totalGB") or 0),
+            "expiryTime": int(changed.get("expiryTime") or 0),
+            "enable": bool(changed.get("enable", True)),
+            "tgId": changed.get("tgId", ""),
+            "subId": self._normalize_client_field(changed.get("subId")),
+            "reset": int(changed.get("reset") or 0),
+        }, email)
+
+    def _build_update_request_payload(
+        self,
+        payload_client: dict,
+        conn: PanelConnection,
+        inbound_id: int | None = None,
+        inbound: dict | None = None,
+    ) -> dict:
+        """Build API request payload based on API version."""
+        if conn.api_version != "v3":
+            return {
+                "id": int(inbound.get("id") or inbound_id),
+                "settings": json.dumps({"clients": [payload_client]}, ensure_ascii=False),
+            }
+        return {
+            "email": payload_client["email"],
+            "enable": payload_client["enable"],
+            "comment": payload_client["comment"],
+            "limitIp": payload_client["limitIp"],
+            "totalGB": payload_client["totalGB"],
+            "expiryTime": payload_client["expiryTime"],
+            "subId": payload_client["subId"],
+            "id": payload_client["id"],
+            "flow": payload_client["flow"],
+            "reset": payload_client["reset"],
+        }
+
     async def _update_client_by_mutation(
         self,
         *,
@@ -833,41 +1044,16 @@ class PanelService:
     ) -> None:
         inbound, current, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
         changed = mutator(dict(current))
-        email = str(changed.get("email") or current.get("email") or "").strip()
-        payload_client = {
-            "id": changed.get("uuid") or changed.get("id"),
-            "flow": changed.get("flow", ""),
-            "email": changed.get("email", ""),
-            "comment": changed.get("comment", ""),
-            "limitIp": int(changed.get("limitIp") or 0),
-            "totalGB": int(changed.get("totalGB") or 0),
-            "expiryTime": int(changed.get("expiryTime") or 0),
-            "enable": bool(changed.get("enable", True)),
-            "tgId": changed.get("tgId", ""),
-            "subId": changed.get("subId", ""),
-            "reset": int(changed.get("reset") or 0),
-        }
+        payload_client, email = self._build_client_update_payload(changed, current)
+
         conn = await self._build_conn(panel_id)
-        update_payload = (
-            {"id": int(inbound.get("id") or inbound_id), "settings": json.dumps({"clients": [payload_client]}, ensure_ascii=False)}
-            if conn.api_version != "v3"
-            else {
-                "email": email,
-                "enable": bool(payload_client["enable"]),
-                "comment": str(payload_client["comment"] or ""),
-                "limitIp": int(payload_client["limitIp"] or 0),
-                "totalGB": int(payload_client["totalGB"] or 0),
-                "expiryTime": int(payload_client["expiryTime"] or 0),
-                "subId": str(payload_client["subId"] or ""),
-                "id": str(payload_client["id"] or ""),
-                "flow": str(payload_client["flow"] or ""),
-                "reset": int(payload_client["reset"] or 0),
-            }
-        )
+        update_payload = self._build_update_request_payload(payload_client, conn, inbound_id, inbound)
+
         if conn.api_version == "v3":
             normalized_tg_id = self._normalize_v3_tg_id(payload_client.get("tgId"))
             if normalized_tg_id is not None:
                 update_payload["tgId"] = normalized_tg_id
+
         try:
             await self._with_auth_request(
                 panel_id,
@@ -1038,16 +1224,10 @@ class PanelService:
         client_email = ""
         conn = await self._build_conn(panel_id)
         if conn.api_version == "v3":
-            if inbound_id is not None and inbound_id > 0:
-                try:
-                    _, config, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
-                    client_email = str(config.get("email") or "").strip()
-                except Exception:
-                    client_email = ""
-            if not client_email:
-                clients = await self.list_clients(panel_id)
-                match = next((item for item in clients if str(item.get("uuid") or "").strip() == client_uuid.strip()), None)
-                client_email = str((match or {}).get("email") or "").strip()
+            allowed_inbound_ids = {inbound_id} if inbound_id is not None and inbound_id > 0 else None
+            clients = await self.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
+            match = next((item for item in clients if str(item.get("uuid") or "").strip() == client_uuid.strip()), None)
+            client_email = str((match or {}).get("email") or "").strip()
             if not client_email:
                 raise ValueError("client email not found for v3 traffic lookup.")
         try:
@@ -1081,13 +1261,58 @@ class PanelService:
             "email": item.get("email"),
         }
 
-    async def get_client_detail(self, panel_id: int, inbound_id: int, client_uuid: str) -> Dict[str, Any]:
+    async def get_client_detail(
+        self,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        client_email: str | None = None,
+    ) -> Dict[str, Any]:
+        conn = await self._build_conn(panel_id)
+        if conn.api_version == "v3":
+            if not client_email:
+                clients = await self.list_clients(panel_id, allowed_inbound_ids={inbound_id})
+                match = next((row for row in clients if row.get("uuid") == client_uuid), None)
+                if match is None:
+                    raise ValueError("client not found on this inbound.")
+                client_email = match.get("email", "")
+            raw, _ = await self._with_auth_request(
+                panel_id,
+                lambda current_conn, cookies: self.xui.get_client(current_conn, cookies, client_email),
+            )
+            obj = raw.get("obj") if isinstance(raw, dict) else None
+            client = obj.get("client") if isinstance(obj, dict) else None
+            if not isinstance(client, dict):
+                raise ValueError("client detail response is invalid.")
+            traffic = await self.get_client_traffic_by_uuid(panel_id, client_uuid, inbound_id=inbound_id)
+            email = str(client.get("email") or traffic.get("email") or "").strip()
+            now = int(time.time())
+            last_online = traffic.get("last_online")
+            online = bool(last_online and (now - int(last_online) <= CLIENT_ONLINE_THRESHOLD))
+            enabled = bool(client.get("enable", traffic.get("enabled", True)))
+            expiry = parse_epoch(client.get("expiryTime")) or traffic.get("expiry")
+            total_bytes = int(client.get("totalGB") or 0)
+            return {
+                "uuid": str(client.get("uuid") or client.get("id") or client_uuid),
+                "email": email,
+                "enabled": enabled,
+                "online": online,
+                "last_online": last_online,
+                "expiry": expiry,
+                "up": int(traffic.get("up") or 0),
+                "down": int(traffic.get("down") or 0),
+                "used": int(traffic.get("used") or 0),
+                "total": total_bytes,
+                "limit_ip": int(client.get("limitIp") or 0),
+                "tg_id": str(client.get("tgId") or ""),
+                "comment": str(client.get("comment") or ""),
+            }
         _, config, _ = await self._get_client_config(panel_id, inbound_id, client_uuid)
         traffic = await self.get_client_traffic_by_uuid(panel_id, client_uuid, inbound_id=inbound_id)
         email = str(config.get("email") or traffic.get("email") or "").strip()
         now = int(time.time())
         last_online = traffic.get("last_online")
-        online = bool(last_online and (now - int(last_online) <= 300))
+        online = bool(last_online and (now - int(last_online) <= CLIENT_ONLINE_THRESHOLD))
         enabled = bool(config.get("enable", traffic.get("enabled", True)))
         expiry = parse_epoch(config.get("expiryTime")) or traffic.get("expiry")
         total_bytes = int(config.get("totalGB") or 0)

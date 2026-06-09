@@ -752,9 +752,9 @@ async def online_search_execute(message: Message, state: FSMContext, settings: S
     if len(query) < 2:
         await message.answer(t("admin_search_too_short", None))
         return
-    await state.clear()
     panel = await services.panel_service.get_panel(panel_id)
     if panel is None:
+        await state.clear()
         await answer_with_admin_menu(message, t("admin_panel_not_found", None), settings=settings, services=services)
         return
     try:
@@ -771,6 +771,7 @@ async def online_search_execute(message: Message, state: FSMContext, settings: S
             allowed_inbound_ids=allowed_inbound_ids,
         )
     except Exception as exc:
+        await state.clear()
         await answer_with_admin_menu(
             message,
             f"{t('admin_error_fetch_online', None)}:\n{exc}",

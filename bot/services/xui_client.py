@@ -435,6 +435,28 @@ class XUIClient:
             payload=None,
         )
 
+    async def list_clients(
+        self, conn: PanelConnection, cookies: Dict[str, str] | None
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        return await self.request(
+            conn=conn,
+            method="GET",
+            endpoint="/clients/list",
+            cookies=cookies,
+            payload=None,
+        )
+
+    async def get_client(
+        self, conn: PanelConnection, cookies: Dict[str, str] | None, email: str
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        return await self.request(
+            conn=conn,
+            method="GET",
+            endpoint=f"/clients/get/{quote(email, safe='')}",
+            cookies=cookies,
+            payload=None,
+        )
+
     async def get_default_settings(
         self, conn: PanelConnection, cookies: Dict[str, str] | None
     ) -> Tuple[Dict[str, Any], Dict[str, str]]:
