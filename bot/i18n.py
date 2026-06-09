@@ -529,6 +529,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_online_header": {"fa": "پنل: {name}\nتعداد کاربران آنلاین: {count}\n\nروی کاربر کلیک کنید:", "en": "Panel: {name}\nOnline users: {count}\n\nTap a user:"},
     "admin_inbound_clients_empty": {"fa": "پنل: {panel}\nاینباند: {inbound}\n\nکاربری برای این اینباند ثبت نشده است.", "en": "Panel: {panel}\nInbound: {inbound}\n\nNo clients for this inbound."},
     "admin_inbound_clients_header": {"fa": "پنل: {panel}\nاینباند: {inbound}\nتعداد کاربران: {count}", "en": "Panel: {panel}\nInbound: {inbound}\nClients: {count}"},
+    "admin_panel_clients_empty": {"fa": "پنل: {panel}\n\nکاربری ثبت نشده است.", "en": "Panel: {panel}\n\nNo clients found."},
+    "admin_panel_clients_header": {"fa": "پنل: {panel}\nتعداد کاربران: {count}", "en": "Panel: {panel}\nClients: {count}"},
     "admin_reset_done": {"fa": "ترافیک ریست شد.", "en": "Traffic has been reset."},
     "admin_traffic_limit_applied": {"fa": "محدودیت ترافیک اعمال شد.", "en": "Traffic limit applied."},
     "admin_expiry_updated": {"fa": "تاریخ انقضا بروزرسانی شد.", "en": "Expiry date updated."},

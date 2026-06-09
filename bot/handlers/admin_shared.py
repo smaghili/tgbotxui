@@ -1085,12 +1085,12 @@ async def show_users_inbounds_for_panel_message(
             return
         if not clients:
             await message.answer(
-                t("admin_inbound_clients_empty", None, panel=panel["name"], inbound="تمام مشتریان"),
+                t("admin_panel_clients_empty", None, panel=panel["name"]),
                 reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
             )
             return
         await message.answer(
-            t("admin_inbound_clients_header", None, panel=panel["name"], inbound="تمام مشتریان", count=len(clients)),
+            t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
             reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
         )
     else:
@@ -1139,10 +1139,10 @@ async def show_users_inbounds_for_panel_callback(
             await callback.message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
             return
         if not clients:
-            await callback.message.edit_text(t("admin_inbound_clients_empty", None, panel=panel["name"], inbound="تمام مشتریان"))
+            await callback.message.edit_text(t("admin_panel_clients_empty", None, panel=panel["name"]))
             return
         await callback.message.edit_text(
-            t("admin_inbound_clients_header", None, panel=panel["name"], inbound="تمام مشتریان", count=len(clients)),
+            t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
             reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
         )
     else:

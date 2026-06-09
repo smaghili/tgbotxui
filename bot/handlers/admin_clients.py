@@ -38,10 +38,10 @@ from .admin_shared import (
     set_client_action_context,
     show_online_clients_for_panel_callback,
     load_online_clients_for_actor,
+    show_users_inbounds_for_panel_message,
     show_online_clients_for_actor_message,
     show_users_inbounds_for_panel_callback,
     normalize_tg_id,
-    users_panel_select_keyboard,
 )
 
 router = Router(name="admin_clients")
@@ -84,21 +84,28 @@ async def _answer_delegated_message_error(
 async def start_users_list(message: Message, settings: Settings, services: ServiceContainer) -> None:
     if await reject_if_not_any_admin(message, settings, services):
         return
-    if await services.access_service.is_delegated_admin(message.from_user.id):
-        access_rows = await services.admin_provisioning_service.list_visible_inbounds_for_actor(
-            actor_user_id=message.from_user.id,
-            settings=settings,
-        )
-        visible_panel_ids = {row.panel_id for row in access_rows}
-        panels = [panel for panel in await services.panel_service.list_panels() if int(panel["id"]) in visible_panel_ids]
-    else:
-        panels = await services.panel_service.list_panels()
-    if not panels:
-        await answer_with_admin_menu(message, t("bind_no_panel", None), settings=settings, services=services)
+    panel_id = await _resolve_panel_or_prompt(
+        message,
+        services,
+        settings=settings,
+        actor_user_id=message.from_user.id,
+        action_text_key="admin_default_not_selected_list_users",
+        action_prefix="users_panel_pick",
+    )
+    if panel_id is None:
         return
-    await message.answer(
-        t("admin_default_not_selected_list_users", None),
-        reply_markup=users_panel_select_keyboard(panels),
+    _, allowed_inbound_ids = await _actor_scope(
+        user_id=message.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+    )
+    await show_users_inbounds_for_panel_message(
+        message,
+        services,
+        settings,
+        panel_id,
+        allowed_inbound_ids=allowed_inbound_ids,
     )
 
 
@@ -526,11 +533,11 @@ async def users_pick_inbound(callback: CallbackQuery, settings: Settings, servic
             allowed_inbound_ids=allowed_inbound_ids,
         )
         if not clients:
-            await callback.message.edit_text(t("admin_inbound_clients_empty", None, panel=panel["name"], inbound="تمام مشتریان"))
+            await callback.message.edit_text(t("admin_panel_clients_empty", None, panel=panel["name"]))
             await callback.answer()
             return
         await callback.message.edit_text(
-            t("admin_inbound_clients_header", None, panel=panel["name"], inbound="تمام مشتریان", count=len(clients)),
+            t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
             reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
         )
     else:
