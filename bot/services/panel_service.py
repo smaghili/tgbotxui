@@ -482,8 +482,12 @@ class PanelService:
             )
             rows = raw.get("obj") if isinstance(raw, dict) else None
             if not isinstance(rows, list):
-                logger.debug(f"Panel {panel_id}: list_clients v3 returned empty or invalid obj: {type(rows)}")
+                logger.warning(f"Panel {panel_id}: list_clients v3 returned invalid obj (type={type(rows).__name__}): {str(raw)[:300]}")
                 rows = []
+            else:
+                logger.debug(f"Panel {panel_id}: list_clients v3 got {len(rows)} rows")
+                if rows:
+                    logger.debug(f"Panel {panel_id}: sample row keys: {list(rows[0].keys()) if isinstance(rows[0], dict) else type(rows[0])}")
             for row in rows:
                 parsed = self._parse_client_from_dict(row, panel_id=panel_id)
                 if parsed is None:
