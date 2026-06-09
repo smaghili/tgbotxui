@@ -868,8 +868,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
         "en": "✅ Access removed.",
     },
     "admin_delegated_target_unknown": {
-        "fa": "این یوزرنیم در دیتابیس ربات پیدا نشد. کاربر باید حداقل یک‌بار /start بزند یا آیدی عددی وارد شود.",
-        "en": "Username was not found in bot database. User should run /start once or use numeric ID.",
+        "fa": "یوزرنیم با موفقیت ثبت شد. کاربر میتواند بعداً /start بزند تا دسترسی فعال شود.",
+        "en": "Username registered. User can run /start later to activate access.",
     },
     "admin_bulk_actions": {"fa": "عملیات گروهی", "en": "Bulk Actions"},
     "admin_bulk_add_traffic": {"fa": "افزودن حجم به تمامی کاربران", "en": "Add traffic to all users"},

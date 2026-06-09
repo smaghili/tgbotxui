@@ -93,12 +93,34 @@ class DelegatedAccessService:
             user = await self.db.get_user_by_telegram_id(user_id)
             if user is not None:
                 title = str(user.get("full_name") or user.get("username") or "").strip() or None
+            else:
+                # Create user if not found (auto-register by user_id)
+                await self.db.upsert_user(
+                    telegram_user_id=user_id,
+                    full_name="",
+                    username=None,
+                    is_admin=False,
+                )
             return user_id, title
-        user = await self.db.find_user_by_username(raw)
-        if user is None:
-            raise ValueError("username was not found in bot database.")
-        title = str(user.get("full_name") or user.get("username") or "").strip() or None
-        return int(user["telegram_user_id"]), title
+
+        # Try to find by username first
+        username_normalized = raw.lstrip("@").lower()
+        user = await self.db.find_user_by_username(username_normalized)
+        if user is not None:
+            title = str(user.get("full_name") or user.get("username") or "").strip() or None
+            return int(user["telegram_user_id"]), title
+
+        # Username not found - create a placeholder user with username
+        # This allows admin to pre-register a user by username before they run /start
+        # The user_id will be a negative number (invalid but unique)
+        placeholder_user_id = -(abs(hash(username_normalized)) % 2147483647)
+        await self.db.upsert_user(
+            telegram_user_id=placeholder_user_id,
+            full_name="",
+            username=username_normalized,
+            is_admin=False,
+        )
+        return placeholder_user_id, username_normalized
 
     async def grant_delegated_admin_access(
         self,

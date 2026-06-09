@@ -426,6 +426,15 @@ async def handle_start(message: Message, settings: Settings, services: ServiceCo
         username=user.username,
         is_admin=_is_admin(user.id, settings),
     )
+    # Merge placeholder admin records if user was pre-registered by username
+    if user.username:
+        try:
+            await services.admin_access_handler_service.merge_placeholder_user(
+                real_user_id=user.id,
+                username=user.username,
+            )
+        except Exception:
+            pass
     await services.panel_service.bind_services_for_telegram_identity(
         telegram_user_id=user.id,
         username=user.username,

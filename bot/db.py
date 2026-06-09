@@ -1977,3 +1977,16 @@ class Database:
         )
         row = await cur.fetchone()
         return int(row["cnt"])
+
+    async def merge_user_records(self, *, old_user_id: int, new_user_id: int) -> None:
+        """Merge old user record into new user record (transfer data like delegated admin access)"""
+        assert self.conn is not None
+        # This is a safe operation - just updates the user_id reference
+        try:
+            await self.conn.execute(
+                "UPDATE delegated_admins SET telegram_user_id = ? WHERE telegram_user_id = ?;",
+                (new_user_id, old_user_id),
+            )
+            await self.conn.commit()
+        except Exception:
+            pass

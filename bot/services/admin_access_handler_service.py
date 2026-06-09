@@ -143,3 +143,21 @@ class AdminAccessHandlerService:
 
     async def deactivate_delegated_admin(self, user_id: int) -> None:
         await self.delegated_admin_repository.deactivate(user_id)
+
+    async def merge_placeholder_user(self, *, real_user_id: int, username: str) -> None:
+        """Merge placeholder user record (created by username) to real user ID when they run /start"""
+        if not username:
+            return
+        username_normalized = username.lstrip("@").lower()
+        placeholder_user_id = -(abs(hash(username_normalized)) % 2147483647)
+        try:
+            # Transfer any delegated admin records from placeholder to real user
+            placeholder_admin = await self.delegated_admin_repository.get_by_user_id(placeholder_user_id)
+            if placeholder_admin:
+                # Update the placeholder admin record to use real user ID
+                await self.db.merge_user_records(
+                    old_user_id=placeholder_user_id,
+                    new_user_id=real_user_id,
+                )
+        except Exception:
+            pass
