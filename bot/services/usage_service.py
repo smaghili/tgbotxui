@@ -692,6 +692,24 @@ class UsageService:
             usage = await self.panel_service.fetch_client_usage(service_row["panel_id"], service_row["client_email"])
         except XUIError as exc:
             if self._is_missing_client_error(exc):
+                try:
+                    matches = await self.panel_service.search_clients_by_email(
+                        int(service_row["panel_id"]),
+                        str(service_row["client_email"]),
+                    )
+                except Exception:
+                    matches = []
+                email_norm = str(service_row.get("client_email") or "").strip().lower()
+                if any(str(item.get("email") or "").strip().lower() == email_norm for item in matches):
+                    logger.info(
+                        "kept service row after traffic lookup missing error because client still exists on panel",
+                        extra={
+                            "service_id": service_row["id"],
+                            "panel_id": service_row["panel_id"],
+                            "client_email": service_row["client_email"],
+                        },
+                    )
+                    return
                 await self.db.mark_user_service_deleted(
                     service_id=int(service_row["id"]),
                     status="deleted",

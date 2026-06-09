@@ -55,7 +55,7 @@ from .config_bundle import (
 
 router = Router(name="admin_provisioning")
 EDIT_SEARCH_RESULTS_PER_PAGE = 20
-EDIT_SEARCH_MIN_QUERY_LEN = 3
+EDIT_SEARCH_MIN_QUERY_LEN = 2
 
 
 async def _lang_for(source: Message | CallbackQuery, services: ServiceContainer) -> str | None:
@@ -518,6 +518,20 @@ async def _show_edit_search_results(
     lang: str | None,
     page: int = 1,
 ) -> None:
+    def _dedupe_clients(rows: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen: set[tuple[int, str, str]] = set()
+        for row in rows:
+            panel_key = int(row.get("panel_id") or 0)
+            email_key = str(row.get("email") or "").strip().lower()
+            uuid_key = str(row.get("uuid") or "").strip().lower()
+            dedupe_key = (panel_key, email_key, uuid_key)
+            if not email_key or not uuid_key or dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            deduped.append(row)
+        return deduped
+
     owner_filter = await services.access_service.owner_filter_for_user(user_id=actor_user_id, settings=settings)
     clients: list[dict] = []
     scope = str(panel_id)
@@ -542,6 +556,7 @@ async def _show_edit_search_results(
             )
             for client in panel_clients:
                 clients.append({**client, "panel_id": current_panel_id})
+        clients = _dedupe_clients(clients)
     else:
         panel = await services.panel_service.get_panel(panel_id)
         if panel is None:
@@ -562,7 +577,7 @@ async def _show_edit_search_results(
             owner_admin_user_id=owner_filter,
             allowed_inbound_ids=allowed_inbound_ids,
         )
-        clients = [{**client, "panel_id": panel_id} for client in clients]
+        clients = _dedupe_clients([{**client, "panel_id": panel_id} for client in clients])
     target_text = t("admin_edit_search_result_header", lang, query=query, panel=panel_label, count=len(clients))
     markup = _edit_search_results_keyboard(scope, clients, query=query, lang=lang, page=page)
     if not clients:
