@@ -378,8 +378,14 @@ class PanelService:
             if panel_id:
                 logger.debug(f"Panel {panel_id}: Skipping non-dict row in client list")
             return None
+
+        # v3 panels may return either:
+        # - {"client": {...}, "inboundIds": [...]}
+        # - {"email": "...", "uuid": "...", "inboundIds": [...], ...}
         client = client_dict.get("client")
         inbound_ids_raw = client_dict.get("inboundIds")
+        if client is None:
+            client = client_dict
         if not isinstance(client, dict):
             if panel_id:
                 logger.debug(f"Panel {panel_id}: Skipping row with missing/invalid 'client' field")
