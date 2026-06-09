@@ -86,7 +86,9 @@ class CommonHandlerService:
         client_uuid: str,
         telegram_user_id: int,
     ) -> None:
-        if inbound_id <= 0 or not client_uuid:
+        if not client_uuid:
+            return
+        if inbound_id <= 0:
             return
         try:
             await panel_service.set_client_tg_id(
@@ -96,7 +98,47 @@ class CommonHandlerService:
                 tg_id=str(telegram_user_id),
             )
         except Exception:
-            return
+            pass
+
+    async def bind_and_sync_service_for_user(
+        self,
+        *,
+        panel_service: Any,
+        telegram_user_id: int,
+        panel_id: int,
+        client_email: str,
+        service_name: str | None,
+        inbound_id: int | None = None,
+    ) -> Any:
+        result = await panel_service.bind_service_to_user(
+            panel_id=panel_id,
+            telegram_user_id=telegram_user_id,
+            client_email=client_email,
+            service_name=service_name,
+            inbound_id=inbound_id,
+        )
+
+        # Try to sync TG ID to panel by finding client first
+        try:
+            target_inbound, target_client = await panel_service._find_client_on_panel(
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_email=client_email,
+            )
+            if target_inbound and target_client:
+                actual_inbound_id = int(target_inbound.get("id") or 0)
+                client_uuid = str(target_client.get("uuid") or target_client.get("id") or "").strip()
+                if actual_inbound_id > 0 and client_uuid:
+                    await self._sync_client_tg_id_if_possible(
+                        panel_service=panel_service,
+                        panel_id=panel_id,
+                        inbound_id=actual_inbound_id,
+                        client_uuid=client_uuid,
+                        telegram_user_id=telegram_user_id,
+                    )
+        except Exception:
+            pass
+        return result
 
     async def bind_missing_status_service_by_link(
         self,
@@ -121,36 +163,40 @@ class CommonHandlerService:
             if not email:
                 continue
             inbound_id = int(match.get("inbound_id") or 0)
-            client_uuid = str(match.get("id") or match.get("client_id") or "").strip()
+            client_uuid_actual = str(match.get("uuid") or match.get("id") or match.get("client_id") or "").strip()
             existing = await self.db.get_user_services_by_panel_email(panel_id, email)
-            if any(int(row.get("telegram_user_id") or 0) == telegram_user_id for row in existing):
-                await self._sync_client_tg_id_if_possible(
-                    panel_service=panel_service,
-                    panel_id=panel_id,
-                    inbound_id=inbound_id,
-                    client_uuid=client_uuid,
-                    telegram_user_id=telegram_user_id,
-                )
+
+            # Check if service already exists for this user
+            user_already_has_service = any(int(row.get("telegram_user_id") or 0) == telegram_user_id for row in existing)
+
+            # Always sync TG ID to the panel
+            await self._sync_client_tg_id_if_possible(
+                panel_service=panel_service,
+                panel_id=panel_id,
+                inbound_id=inbound_id,
+                client_uuid=client_uuid_actual,
+                telegram_user_id=telegram_user_id,
+            )
+
+            if user_already_has_service:
                 return StatusMissingServiceResult(
                     status="exists",
                     panel_id=panel_id,
                     inbound_id=inbound_id if inbound_id > 0 else None,
                     client_email=email,
                 )
-            await panel_service.bind_service_to_user(
-                panel_id=panel_id,
-                telegram_user_id=telegram_user_id,
-                client_email=email,
-                service_name=None,
-                inbound_id=inbound_id if inbound_id > 0 else None,
-            )
-            await self._sync_client_tg_id_if_possible(
-                panel_service=panel_service,
-                panel_id=panel_id,
-                inbound_id=inbound_id,
-                client_uuid=client_uuid,
-                telegram_user_id=telegram_user_id,
-            )
+
+            # Add service to this user
+            try:
+                await panel_service.bind_service_to_user(
+                    panel_id=panel_id,
+                    telegram_user_id=telegram_user_id,
+                    client_email=email,
+                    service_name=None,
+                    inbound_id=inbound_id if inbound_id > 0 else None,
+                )
+            except Exception:
+                continue
             return StatusMissingServiceResult(
                 status="added",
                 panel_id=panel_id,

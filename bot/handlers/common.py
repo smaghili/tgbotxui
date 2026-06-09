@@ -171,12 +171,24 @@ async def _filter_admin_owned_status_rows(
         panel_id = int(row.get("panel_id") or 0)
         inbound_id = int(row.get("inbound_id") or 0)
         client_id = str(row.get("client_id") or "").strip()
-        if panel_id <= 0 or inbound_id <= 0 or not client_id:
+        client_email = str(row.get("client_email") or "").strip()
+
+        if panel_id <= 0:
             continue
+
         try:
-            detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_id)
+            api_version = await services.panel_service.get_panel_api_version(panel_id)
+            if api_version == "v3":
+                # v3: inbound_id not required
+                detail = await services.panel_service.get_client_detail(panel_id, 1, client_id, client_email=client_email)
+            else:
+                # legacy: inbound_id required
+                if inbound_id <= 0 or not client_id:
+                    continue
+                detail = await services.panel_service.get_client_detail(panel_id, inbound_id, client_id)
         except Exception:
             continue
+
         tg_id = str(detail.get("tg_id") or detail.get("tgId") or "").strip().lower()
         if tg_id in candidates:
             visible.append(row)

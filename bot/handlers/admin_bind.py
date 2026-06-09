@@ -119,9 +119,10 @@ async def bind_finalize(message: Message, state: FSMContext, settings: Settings,
         service_name = None
     await message.answer(t("bind_checking_service", lang))
     try:
-        usage = await services.panel_service.bind_service_to_user(
-            panel_id=data["panel_id"],
+        usage = await services.common_handler_service.bind_and_sync_service_for_user(
+            panel_service=services.panel_service,
             telegram_user_id=data["telegram_user_id"],
+            panel_id=data["panel_id"],
             client_email=data["client_email"],
             service_name=service_name,
         )
@@ -177,9 +178,10 @@ async def bind_by_command(message: Message, settings: Settings, services: Servic
         await message.answer(f"{exc}\n{t('bind_need_default_panel', lang)}")
         return
     try:
-        usage = await services.panel_service.bind_service_to_user(
-            panel_id=panel_id,
+        usage = await services.common_handler_service.bind_and_sync_service_for_user(
+            panel_service=services.panel_service,
             telegram_user_id=telegram_user_id,
+            panel_id=panel_id,
             client_email=client_email,
             service_name=service_name,
         )

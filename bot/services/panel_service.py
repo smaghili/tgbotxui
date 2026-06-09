@@ -2092,10 +2092,16 @@ class PanelService:
         else:
             status = "active"
         remain = None if total < 0 else max(total - used, 0)
+        inbound_ids = item.get("inboundIds")
+        inbound_id = None
+        if isinstance(inbound_ids, list) and inbound_ids:
+            inbound_id = int(inbound_ids[0]) if inbound_ids[0] else None
+        if inbound_id is None:
+            inbound_id = item.get("inboundId")
         return {
             "client_email": item.get("email") or client_email,
             "client_id": item.get("id") or item.get("clientId"),
-            "inbound_id": item.get("inboundId"),
+            "inbound_id": inbound_id,
             "service_name": item.get("email") or client_email,
             "total_bytes": total,
             "used_bytes": used,

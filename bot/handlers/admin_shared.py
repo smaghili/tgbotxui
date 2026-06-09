@@ -234,9 +234,10 @@ async def bind_services_for_tg_identity(
             resolved_username = str(user.get("username") or "").strip() or None
     if resolved_user_id is None:
         return
-    await services.panel_service.bind_service_to_user(
-        panel_id=panel_id,
+    await services.common_handler_service.bind_and_sync_service_for_user(
+        panel_service=services.panel_service,
         telegram_user_id=resolved_user_id,
+        panel_id=panel_id,
         client_email=client_email,
         service_name=None,
         inbound_id=inbound_id,
