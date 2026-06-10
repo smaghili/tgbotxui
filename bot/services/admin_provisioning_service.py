@@ -318,6 +318,54 @@ class AdminProvisioningService:
             client_email=client_email,
         )
 
+    async def _update_client_comments_for_new_parent(
+        self,
+        *,
+        child_user_id: int,
+        new_parent_user_id: int | None,
+    ) -> None:
+        """Update all clients' comments to reflect new parent ID"""
+        for panel in await self.panel_service.list_panels():
+            panel_id = int(panel["id"])
+            try:
+                clients = await self.panel_service.list_clients(panel_id, owner_admin_user_id=child_user_id)
+            except Exception:
+                continue
+            for client in clients:
+                inbound_id = int(client.get("inbound_id") or 0)
+                client_uuid = str(client.get("uuid") or "").strip()
+                if inbound_id <= 0 or not client_uuid:
+                    continue
+                try:
+                    detail = await self.panel_service.get_client_detail(panel_id, inbound_id, client_uuid)
+                except Exception:
+                    continue
+                comment = str(detail.get("comment") or "").strip()
+                if _owner_id_from_comment(comment) != child_user_id:
+                    continue
+
+                # Update comment with new parent ID
+                finance_tag = _delegate_finance_comment_tag(comment)
+                if new_parent_user_id is None:
+                    # No parent - comment format: "child_id"
+                    new_comment = str(child_user_id)
+                else:
+                    # Has parent - comment format: "parent_id" or "parent_id:tag"
+                    new_comment = str(new_parent_user_id)
+                    if finance_tag:
+                        new_comment = f"{new_parent_user_id}:{finance_tag}"
+
+                if new_comment != comment:
+                    try:
+                        await self.panel_service.update_client_comment(
+                            panel_id=panel_id,
+                            inbound_id=inbound_id,
+                            client_uuid=client_uuid,
+                            comment=new_comment,
+                        )
+                    except Exception:
+                        pass
+
     async def _snapshot_existing_clients_for_parent(
         self,
         *,
@@ -1175,6 +1223,13 @@ class AdminProvisioningService:
         old_parent_user_id = int(delegated.get("parent_user_id") or 0) or None
         if old_parent_user_id == new_parent_user_id:
             return
+
+        # Update all clients' comments to reflect new parent ID
+        await self._update_client_comments_for_new_parent(
+            child_user_id=child_user_id,
+            new_parent_user_id=new_parent_user_id,
+        )
+
         if old_parent_user_id is not None:
             await self._snapshot_existing_clients_for_parent(
                 actor_user_id=actor_user_id,
@@ -1482,6 +1537,11 @@ class AdminProvisioningService:
                     )
                     raise
             try:
+                # Determine comment: use parent ID if delegated admin, otherwise use actor ID
+                delegated = await self.db.get_delegated_admin_by_user_id(actor_user_id)
+                parent_user_id = int(delegated.get("parent_user_id") or 0) or None if delegated else None
+                comment_owner_id = parent_user_id or actor_user_id
+
                 created = await self.panel_service.create_client(
                     panel_id=panel_id,
                     inbound_id=target_inbound_id,
@@ -1490,7 +1550,7 @@ class AdminProvisioningService:
                     total_gb=total_gb,
                     expiry_days=expiry_days,
                     tg_id=tg_id,
-                    comment=str(actor_user_id),
+                    comment=str(comment_owner_id),
                 )
             except Exception:
                 await self._refund_charge_bundle(

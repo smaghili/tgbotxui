@@ -336,7 +336,8 @@ class PanelService:
     @classmethod
     def _owner_id_for_client(cls, *, mapped_owner_id: int | None, comment: str) -> int | None:
         comment_owner_id = cls._owner_id_from_comment(comment)
-        return mapped_owner_id or comment_owner_id
+        # Prefer comment owner (allows manual updates in panel) over database mapping
+        return comment_owner_id or mapped_owner_id
 
 
     async def _get_last_online_map(self, panel_id: int) -> dict[str, int]:
@@ -357,6 +358,49 @@ class PanelService:
             if parsed is not None:
                 out[str(key).strip().lower()] = parsed
         return out
+
+    async def _sync_client_owner_from_comment(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+        comment: str,
+        owner_map: dict[tuple[int, str], int],
+    ) -> None:
+        comment_owner_id = None
+        if comment:
+            owner_raw = comment.strip().split(":", 1)[0].strip()
+            if owner_raw.isdigit():
+                comment_owner_id = int(owner_raw)
+
+        db_owner_id = owner_map.get((inbound_id, client_uuid))
+
+        if comment_owner_id is None and db_owner_id is not None:
+            try:
+                await self.db.delete_client_owner(
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                )
+            except Exception:
+                pass
+            return
+
+        if db_owner_id == comment_owner_id:
+            return
+
+        if comment_owner_id is not None:
+            try:
+                await self.db.upsert_client_owner(
+                    panel_id=panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                    owner_user_id=comment_owner_id,
+                    client_email="",
+                )
+            except Exception:
+                pass
 
     def _normalize_client_field(self, value: Any) -> str:
         return str(value or "").strip()
@@ -486,7 +530,7 @@ class PanelService:
         conn = await self._build_conn(panel_id)
         query_norm = (email_query or "").strip().lower()
         matched: list[Dict[str, Any]] = []
-        seen: set[tuple[int, str]] = set()
+        seen: set[tuple[str, str]] = set()
 
         if conn.api_version == "v3":
             raw, _ = await self._with_auth_request(
@@ -541,12 +585,20 @@ class PanelService:
                         enabled, query_norm, online_only, online_keys,
                         include_last_online, last_online_map
                     )
+                    # Sync comment owner to database if different from mapping
+                    await self._sync_client_owner_from_comment(
+                        panel_id=panel_id,
+                        inbound_id=inbound_id,
+                        client_uuid=uuid,
+                        comment=client.get("comment", ""),
+                        owner_map=owner_map,
+                    )
         return matched
 
     def _filter_and_add_clients(
         self,
         matched: list[Dict[str, Any]],
-        seen: set[tuple[int, str]],
+        seen: set[tuple[str, str]],
         client: dict,
         inbound_ids: list[int],
         panel_id: int,
@@ -593,17 +645,16 @@ class PanelService:
                     last_online = last_online_map[candidate]
                     break
 
-        for inbound_id in inbound_ids:
-            dedupe_key = (inbound_id, uuid)
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            matched.append(self._build_client_row(panel_id, inbound_id, client, last_online))
+        dedupe_key = (email.lower(), uuid.lower())
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        matched.append(self._build_client_row(panel_id, inbound_ids[0], client, last_online))
 
     def _filter_and_add_client(
         self,
         matched: list[Dict[str, Any]],
-        seen: set[tuple[int, str]],
+        seen: set[tuple[str, str]],
         client: dict,
         inbound_id: int,
         panel_id: int,

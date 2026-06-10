@@ -175,6 +175,11 @@ class AccessService:
         if context.is_full_admin:
             return None
         if context.is_delegated_admin:
+            delegated = await self.db.get_delegated_admin_by_user_id(user_id)
+            if delegated:
+                parent_user_id = int(delegated.get("parent_user_id") or 0) or None
+                if parent_user_id is not None:
+                    return parent_user_id
             return user_id
         return None
 

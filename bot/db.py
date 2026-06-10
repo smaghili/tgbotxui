@@ -1193,6 +1193,23 @@ class Database:
         row = await cur.fetchone()
         return int(row["owner_user_id"]) if row else None
 
+    async def delete_client_owner(
+        self,
+        *,
+        panel_id: int,
+        inbound_id: int,
+        client_uuid: str,
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            DELETE FROM client_owners
+            WHERE panel_id=? AND inbound_id=? AND client_uuid=?;
+            """,
+            (panel_id, inbound_id, client_uuid),
+        )
+        await self.conn.commit()
+
     async def list_client_owners_for_panel(self, panel_id: int) -> dict[tuple[int, str], int]:
         assert self.conn is not None
         cur = await self.conn.execute(
