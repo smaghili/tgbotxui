@@ -7,7 +7,6 @@ from bot.handlers.admin_shared import (
     client_list_keyboard,
     panels_glass_keyboard,
     panel_select_keyboard,
-    users_clients_keyboard,
     yes_no_inline_keyboard,
 )
 from bot.handlers.admin_access import _delegated_detail_keyboard, _delegated_subordinates_keyboard
@@ -53,15 +52,6 @@ def test_edit_config_actions_keyboard_includes_toggle_button() -> None:
     assert t("admin_edit_show_detail", "fa") not in labels
 
 
-def test_users_clients_keyboard_does_not_include_bulk_button() -> None:
-    markup = users_clients_keyboard(1, 2, [{"email": "u1", "uuid": "uuid-1"}], "fa")
-    labels = [button.text for row in markup.inline_keyboard for button in row]
-    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-
-    assert t("admin_bulk_actions", "fa") not in labels
-    assert "uo:1:2:uuid-1" in callbacks
-
-
 def test_disabled_clients_keyboard_uses_disabled_detail_callback() -> None:
     markup = client_list_keyboard(
         1,
@@ -71,7 +61,7 @@ def test_disabled_clients_keyboard_uses_disabled_detail_callback() -> None:
     )
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
-    assert "uodl:1:2:uuid-1" in callbacks
+    assert "uodl:1:2:uuid-1:1" in callbacks
     assert "uol:1:2:uuid-1" not in callbacks
 
 
@@ -86,8 +76,58 @@ def test_low_traffic_clients_keyboard_uses_low_traffic_detail_callback() -> None
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
     assert any("u1" in label for label in labels)
-    assert "uolr:1:2:uuid-1" in callbacks
+    assert "uolr:1:2:uuid-1:1" in callbacks
     assert "uop:lr:1:1" in callbacks
+
+
+def test_users_list_keyboard_uses_users_list_pagination_callback() -> None:
+    clients = [
+        {"email": f"u{i}", "uuid": f"uuid-{i}", "inbound_id": 2, "enabled": True}
+        for i in range(25)
+    ]
+
+    markup = client_list_keyboard(1, clients, "fa", mode="list", page=1)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "uop:list:1:2" in callbacks
+    assert "ucl:1:2:uuid-0:1" in callbacks
+    assert "uol:1:2" not in callbacks
+
+
+def test_online_clients_keyboard_keeps_current_page_in_detail_callback() -> None:
+    clients = [
+        {"email": f"u{i}", "uuid": f"uuid-{i}", "inbound_id": 2, "enabled": True}
+        for i in range(45)
+    ]
+
+    markup = client_list_keyboard(1, clients, "fa", mode="on", page=3)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "uol:1:2:uuid-40:3" in callbacks
+
+
+def test_last_online_clients_keyboard_uses_dedicated_detail_callback() -> None:
+    clients = [
+        {"email": f"u{i}", "uuid": f"uuid-{i}", "inbound_id": 2, "last_online": 123 + i, "enabled": True}
+        for i in range(25)
+    ]
+
+    markup = client_list_keyboard(1, clients, "fa", mode="lo", page=2, show_last_online=True)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "uoltl:1:2:uuid-20:2" in callbacks
+
+
+def test_search_clients_keyboard_uses_search_detail_callback_with_query() -> None:
+    clients = [
+        {"email": f"u{i}", "uuid": f"uuid-{i}", "inbound_id": 2, "enabled": True}
+        for i in range(25)
+    ]
+
+    markup = client_list_keyboard(1, clients, "fa", mode="sr", page=2, query="ali:test")
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "uolsr:1:2:uuid-20:2:ali test" in callbacks
 
 
 def test_inbounds_overview_includes_status_and_inactive_counts() -> None:

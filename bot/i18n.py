@@ -565,6 +565,8 @@ TEXTS: dict[str, dict[Lang, str]] = {
     "admin_back_to_users_list": {"fa": "⬅️ بازگشت به لیست کاربران", "en": "⬅️ Back to users list"},
     "admin_back_to_disabled_list": {"fa": "⬅️ بازگشت به لیست غیرفعال‌ها", "en": "⬅️ Back to disabled list"},
     "admin_back_to_low_traffic_list": {"fa": "⬅️ بازگشت به لیست کم‌حجم‌ها", "en": "⬅️ Back to low traffic list"},
+    "admin_back_to_last_online_list": {"fa": "⬅️ بازگشت به لیست آخرین آنلاین", "en": "⬅️ Back to last online list"},
+    "admin_back_to_search_results": {"fa": "⬅️ بازگشت به نتایج جستجو", "en": "⬅️ Back to search results"},
     "admin_default_not_selected_low_traffic": {
         "fa": "برای نمایش کاربران کم‌حجم، پنل را انتخاب کنید:",
         "en": "Select a panel to show low traffic users:",

@@ -10,12 +10,9 @@ from .admin_shared import (
     action_panel_select_keyboard,
     answer_with_admin_menu,
     ensure_client_access,
-    inbound_display_name,
     panel_bulk_actions_keyboard,
     parse_client_callback,
     parse_client_callback_with_value,
-    single_button_inline_keyboard,
-    users_clients_keyboard,
 )
 
 
@@ -233,56 +230,6 @@ async def resolve_panel_or_prompt(
         return None
     await message.answer(t(action_text_key, None), reply_markup=action_panel_select_keyboard(panels, action_prefix))
     return None
-
-
-async def render_inbound_clients_view(
-    message: Message,
-    *,
-    services: ServiceContainer,
-    settings: Settings,
-    actor_user_id: int,
-    panel_id: int,
-    inbound_id: int,
-    page: int = 1,
-) -> None:
-    panel = await services.panel_service.get_panel(panel_id)
-    if panel is None:
-        await message.edit_text(t("admin_panel_not_found", None))
-        return
-    try:
-        inbounds = await services.panel_service.list_inbounds(panel_id)
-        owner_filter, allowed_inbound_ids = await actor_scope(
-            user_id=actor_user_id,
-            settings=settings,
-            services=services,
-            panel_id=panel_id,
-        )
-        if allowed_inbound_ids is not None and inbound_id not in allowed_inbound_ids:
-            await message.edit_text(t("no_admin_access", None))
-            return
-        clients = await services.panel_service.list_inbound_clients(
-            panel_id,
-            inbound_id,
-            owner_admin_user_id=owner_filter,
-        )
-    except Exception as exc:
-        await message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
-        return
-    target = next((x for x in inbounds if int(x.get("id") or -1) == inbound_id), None)
-    inbound_name = inbound_display_name(target or {"id": inbound_id, "remark": f"inbound-{inbound_id}"})
-    if not clients:
-        await message.edit_text(
-            t("admin_inbound_clients_empty", None, panel=panel["name"], inbound=inbound_name),
-            reply_markup=single_button_inline_keyboard(
-                t("admin_back_to_inbounds", None),
-                f"users_panel_pick:{panel_id}",
-            ),
-        )
-        return
-    await message.edit_text(
-        t("admin_inbound_clients_header", None, panel=panel["name"], inbound=inbound_name, count=len(clients)),
-        reply_markup=users_clients_keyboard(panel_id, inbound_id, clients, page=page),
-    )
 
 
 async def bulk_clients_for_panel(

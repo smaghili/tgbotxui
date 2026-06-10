@@ -3,7 +3,7 @@
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup
 
-from bot.callbacks import NOOP, encode_inbound_page, encode_online_page
+from bot.callbacks import MAX_QUERY_LEN, NOOP, encode_online_page
 from bot.config import Settings
 from bot.i18n import t
 from bot.keyboards import admin_keyboard, cancel_only_keyboard
@@ -12,7 +12,6 @@ from bot.services.container import ServiceContainer
 from bot.utils import (
     display_name_from_parts,
     format_bytes,
-    inbound_display_name as format_inbound_display_name,
     now_jalali_datetime,
     parse_epoch,
     relative_remaining_time,
@@ -323,56 +322,6 @@ def online_panel_select_keyboard(panels: list[dict]) -> InlineKeyboardMarkup:
     return panel_select_keyboard(panels, "online_panel_pick")
 
 
-def inbound_display_name(inbound: dict) -> str:
-    return format_inbound_display_name(inbound)
-
-
-def users_inbounds_keyboard(panel_id: int, inbounds: list[dict]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for inbound in inbounds:
-        inbound_id = inbound.get("id")
-        if inbound_id is None:
-            continue
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=inbound_display_name(inbound),
-                    callback_data=f"users_inbound_pick:{panel_id}:{int(inbound_id)}",
-                )
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def users_clients_keyboard(
-    panel_id: int,
-    inbound_id: int,
-    clients: list[dict],
-    lang: str | None = None,
-    *,
-    page: int = 1,
-) -> InlineKeyboardMarkup:
-    page, total_pages, start, end = paginate_window(len(clients), page, CLIENTS_PER_PAGE)
-    page_buttons: list[InlineKeyboardButton] = []
-    for client in clients[start:end]:
-        email = str(client.get("email") or "").strip()
-        uuid = str(client.get("uuid") or "").strip()
-        if not email or not uuid:
-            continue
-        page_buttons.append(inline_button(_truncate_button_text(email), f"uo:{panel_id}:{inbound_id}:{uuid}"))
-    rows = chunk_buttons(page_buttons, columns=2)
-    nav_row = _pagination_nav_row(
-        page=page,
-        total_pages=total_pages,
-        lang=lang,
-        callback_for_page=lambda target_page: encode_inbound_page(panel_id, inbound_id, target_page),
-    )
-    if nav_row is not None:
-        rows.append(nav_row)
-    rows.append([inline_button(t("admin_back_to_inbounds", lang), f"users_panel_pick:{panel_id}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def panel_bulk_actions_keyboard(panel_id: int, lang: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -390,6 +339,32 @@ def _build_pagination_callback(
     query: str | None = None,
 ) -> str:
     return encode_online_page(mode, panel_id, page, query)
+
+
+def _sanitize_callback_query(query: str | None) -> str:
+    return (query or "").replace(":", " ").strip()[:MAX_QUERY_LEN]
+
+
+def _build_detail_callback(
+    *,
+    mode: str,
+    panel_id: int,
+    inbound_id: int,
+    client_uuid: str,
+    page: int,
+    query: str | None = None,
+) -> str:
+    if mode == "list":
+        return f"ucl:{panel_id}:{inbound_id}:{client_uuid}:{page}"
+    if mode == "ds":
+        return f"uodl:{panel_id}:{inbound_id}:{client_uuid}:{page}"
+    if mode == "lr":
+        return f"uolr:{panel_id}:{inbound_id}:{client_uuid}:{page}"
+    if mode == "lo":
+        return f"uoltl:{panel_id}:{inbound_id}:{client_uuid}:{page}"
+    if mode == "sr":
+        return f"uolsr:{panel_id}:{inbound_id}:{client_uuid}:{page}:{_sanitize_callback_query(query)}"
+    return f"uol:{panel_id}:{inbound_id}:{client_uuid}:{page}"
 
 
 def online_clients_keyboard(
@@ -441,9 +416,20 @@ def client_list_keyboard(
             text = _truncate_button_text(f"🟢 {email}")
         else:
             text = _truncate_button_text(f"⚫ {email}")
-        detail_prefix = "uodl" if mode == "ds" else "uolr" if mode == "lr" else "uol"
         target_panel_id = int(client.get("panel_id") or panel_id)
-        page_buttons.append(inline_button(text, f"{detail_prefix}:{target_panel_id}:{inbound_id}:{uuid}"))
+        page_buttons.append(
+            inline_button(
+                text,
+                _build_detail_callback(
+                    mode=mode,
+                    panel_id=target_panel_id,
+                    inbound_id=inbound_id,
+                    client_uuid=uuid,
+                    page=page,
+                    query=query,
+                ),
+            )
+        )
     rows = chunk_buttons(page_buttons, columns=2)
     nav_row = _pagination_nav_row(
         page=page,
@@ -458,7 +444,7 @@ def client_list_keyboard(
     )
     if nav_row is not None:
         rows.append(nav_row)
-    refresh_callback = f"uolp:{panel_id}" if mode == "on" else _build_pagination_callback(
+    refresh_callback = _build_pagination_callback(
         mode=mode,
         panel_id=panel_id,
         page=page,
@@ -1059,7 +1045,7 @@ async def show_inbounds_for_panel(message: Message, services: ServiceContainer, 
         )
 
 
-async def show_users_inbounds_for_panel_message(
+async def show_panel_clients_for_panel_message(
     message: Message,
     services: ServiceContainer,
     settings: Settings,
@@ -1075,52 +1061,28 @@ async def show_users_inbounds_for_panel_message(
         )
         return
 
-    api_version = await services.panel_service.get_panel_api_version(panel_id)
-    if api_version == "v3":
-        await message.answer(t("admin_fetching_inbounds", None))
-        try:
-            clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
-        except Exception as exc:
-            await message.answer(
-                f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
-                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
-            )
-            return
-        if not clients:
-            await message.answer(
-                t("admin_panel_clients_empty", None, panel=panel["name"]),
-                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
-            )
-            return
+    await message.answer(t("admin_fetching_inbounds", None))
+    try:
+        clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
+    except Exception as exc:
         await message.answer(
-            t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
-            reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
+            f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
         )
-    else:
-        await message.answer(t("admin_fetching_inbounds", None))
-        try:
-            inbounds = await services.panel_service.list_inbounds(panel_id)
-        except Exception as exc:
-            await message.answer(
-                f"{t('admin_error_fetch_inbounds', None)}:\n{exc}",
-                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
-            )
-            return
-        if allowed_inbound_ids is not None:
-            inbounds = [item for item in inbounds if int(item.get("id") or 0) in allowed_inbound_ids]
-        if not inbounds:
-            await message.answer(
-                t("admin_no_inbound_for_panel", None),
-                reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
-            )
-            return
+        return
+    if not clients:
         await message.answer(
-            t("admin_panel_and_pick_inbound", None, name=panel["name"]),
-            reply_markup=users_inbounds_keyboard(panel_id, inbounds),
+            t("admin_panel_clients_empty", None, panel=panel["name"]),
+            reply_markup=await admin_reply_markup_for_message(message, settings=settings, services=services),
         )
+        return
+    await message.answer(
+        t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
+        reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
+    )
 
 
-async def show_users_inbounds_for_panel_callback(
+async def show_panel_clients_for_panel_callback(
     callback: CallbackQuery,
     services: ServiceContainer,
     panel_id: int,
@@ -1134,35 +1096,18 @@ async def show_users_inbounds_for_panel_callback(
         await callback.message.edit_text(t("admin_panel_not_found", None))
         return
 
-    api_version = await services.panel_service.get_panel_api_version(panel_id)
-    if api_version == "v3":
-        try:
-            clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
-        except Exception as exc:
-            await callback.message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
-            return
-        if not clients:
-            await callback.message.edit_text(t("admin_panel_clients_empty", None, panel=panel["name"]))
-            return
-        await callback.message.edit_text(
-            t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
-            reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
-        )
-    else:
-        try:
-            inbounds = await services.panel_service.list_inbounds(panel_id)
-        except Exception as exc:
-            await callback.message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
-            return
-        if allowed_inbound_ids is not None:
-            inbounds = [item for item in inbounds if int(item.get("id") or 0) in allowed_inbound_ids]
-        if not inbounds:
-            await callback.message.edit_text(t("admin_no_inbound_for_panel", None))
-            return
-        await callback.message.edit_text(
-            t("admin_panel_and_pick_inbound", None, name=panel["name"]),
-            reply_markup=users_inbounds_keyboard(panel_id, inbounds),
-        )
+    try:
+        clients = await services.panel_service.list_clients(panel_id, allowed_inbound_ids=allowed_inbound_ids)
+    except Exception as exc:
+        await callback.message.edit_text(f"{t('admin_error_fetch_inbounds', None)}:\n{exc}")
+        return
+    if not clients:
+        await callback.message.edit_text(t("admin_panel_clients_empty", None, panel=panel["name"]))
+        return
+    await callback.message.edit_text(
+        t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
+        reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
+    )
 
 
 async def show_online_clients_for_panel_message(

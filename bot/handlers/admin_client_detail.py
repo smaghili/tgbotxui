@@ -3,6 +3,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
+from bot.callbacks import MAX_QUERY_LEN
 from bot.config import Settings
 from bot.i18n import t
 from bot.services.container import ServiceContainer
@@ -10,6 +11,7 @@ from .admin_client_helpers import scoped_client_from_callback as _scoped_client_
 from .admin_shared import (
     callback_error_alert,
     client_confirm_reset_keyboard,
+    ensure_client_access,
     reject_callback_if_not_any_admin,
     render_client_detail,
 )
@@ -17,11 +19,54 @@ from .admin_shared import (
 router = Router(name="admin_client_detail")
 
 
+def _parse_detail_origin_callback(data: str, prefix: str) -> tuple[int, int, str, int, str | None]:
+    expected_prefix = f"{prefix}:"
+    if not data.startswith(expected_prefix):
+        raise ValueError("callback_data_invalid")
+    try:
+        rest = data[len(expected_prefix) :]
+        if prefix == "uolsr":
+            panel_raw, inbound_raw, client_uuid, page_raw, query = rest.split(":", 4)
+            return int(panel_raw), int(inbound_raw), client_uuid, int(page_raw), query[:MAX_QUERY_LEN]
+        panel_raw, inbound_raw, client_uuid, page_raw = rest.split(":", 3)
+        return int(panel_raw), int(inbound_raw), client_uuid, int(page_raw), None
+    except Exception as exc:
+        raise ValueError("callback_data_invalid") from exc
+
+
+async def _scoped_detail_origin_from_callback(
+    callback: CallbackQuery,
+    *,
+    settings: Settings,
+    services: ServiceContainer,
+    prefix: str,
+) -> tuple[int, int, str, int, str | None] | None:
+    if callback.data is None:
+        await callback.answer()
+        return None
+    try:
+        panel_id, inbound_id, client_uuid, page, query = _parse_detail_origin_callback(callback.data, prefix)
+    except ValueError:
+        await callback.answer(t("admin_invalid_data", None), show_alert=True)
+        return None
+    if not await ensure_client_access(
+        user_id=callback.from_user.id,
+        settings=settings,
+        services=services,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+    ):
+        await callback.answer(t("no_admin_access", None), show_alert=True)
+        return None
+    return panel_id, inbound_id, client_uuid, page, query
+
+
 @router.callback_query(F.data.startswith("uol:"))
 async def online_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    client_ref = await _scoped_client_from_callback(
+    client_ref = await _scoped_detail_origin_from_callback(
         callback,
         settings=settings,
         services=services,
@@ -29,7 +74,7 @@ async def online_open_detail(callback: CallbackQuery, settings: Settings, servic
     )
     if client_ref is None:
         return
-    panel_id, inbound_id, client_uuid = client_ref
+    panel_id, inbound_id, client_uuid, page, _query = client_ref
     await render_client_detail(
         callback,
         services,
@@ -37,7 +82,7 @@ async def online_open_detail(callback: CallbackQuery, settings: Settings, servic
         panel_id=panel_id,
         inbound_id=inbound_id,
         client_uuid=client_uuid,
-        back_callback=f"uolp:{panel_id}",
+        back_callback=f"uop:on:{panel_id}:{page}",
         back_text=t("admin_back_to_online_list", None),
     )
     await callback.answer()
@@ -47,7 +92,7 @@ async def online_open_detail(callback: CallbackQuery, settings: Settings, servic
 async def disabled_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    client_ref = await _scoped_client_from_callback(
+    client_ref = await _scoped_detail_origin_from_callback(
         callback,
         settings=settings,
         services=services,
@@ -55,7 +100,7 @@ async def disabled_open_detail(callback: CallbackQuery, settings: Settings, serv
     )
     if client_ref is None:
         return
-    panel_id, inbound_id, client_uuid = client_ref
+    panel_id, inbound_id, client_uuid, page, _query = client_ref
     await render_client_detail(
         callback,
         services,
@@ -63,7 +108,7 @@ async def disabled_open_detail(callback: CallbackQuery, settings: Settings, serv
         panel_id=panel_id,
         inbound_id=inbound_id,
         client_uuid=client_uuid,
-        back_callback=f"uop:ds:{panel_id}:1",
+        back_callback=f"uop:ds:{panel_id}:{page}",
         back_text=t("admin_back_to_disabled_list", None),
     )
     await callback.answer()
@@ -73,7 +118,7 @@ async def disabled_open_detail(callback: CallbackQuery, settings: Settings, serv
 async def low_traffic_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    client_ref = await _scoped_client_from_callback(
+    client_ref = await _scoped_detail_origin_from_callback(
         callback,
         settings=settings,
         services=services,
@@ -81,7 +126,7 @@ async def low_traffic_open_detail(callback: CallbackQuery, settings: Settings, s
     )
     if client_ref is None:
         return
-    panel_id, inbound_id, client_uuid = client_ref
+    panel_id, inbound_id, client_uuid, page, _query = client_ref
     await render_client_detail(
         callback,
         services,
@@ -89,25 +134,25 @@ async def low_traffic_open_detail(callback: CallbackQuery, settings: Settings, s
         panel_id=panel_id,
         inbound_id=inbound_id,
         client_uuid=client_uuid,
-        back_callback=f"uop:lr:{panel_id}:1",
+        back_callback=f"uop:lr:{panel_id}:{page}",
         back_text=t("admin_back_to_low_traffic_list", None),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("uo:"))
-async def client_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+@router.callback_query(F.data.startswith("uoltl:"))
+async def last_online_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
         return
-    client_ref = await _scoped_client_from_callback(
+    client_ref = await _scoped_detail_origin_from_callback(
         callback,
         settings=settings,
         services=services,
-        prefix="uo",
+        prefix="uoltl",
     )
     if client_ref is None:
         return
-    panel_id, inbound_id, client_uuid = client_ref
+    panel_id, inbound_id, client_uuid, page, _query = client_ref
     await render_client_detail(
         callback,
         services,
@@ -115,7 +160,59 @@ async def client_open_detail(callback: CallbackQuery, settings: Settings, servic
         panel_id=panel_id,
         inbound_id=inbound_id,
         client_uuid=client_uuid,
-        back_callback=f"users_inbound_pick:{panel_id}:{inbound_id}",
+        back_callback=f"uop:lo:{panel_id}:{page}",
+        back_text=t("admin_back_to_last_online_list", None),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("uolsr:"))
+async def search_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    client_ref = await _scoped_detail_origin_from_callback(
+        callback,
+        settings=settings,
+        services=services,
+        prefix="uolsr",
+    )
+    if client_ref is None:
+        return
+    panel_id, inbound_id, client_uuid, page, query = client_ref
+    await render_client_detail(
+        callback,
+        services,
+        settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        back_callback=f"uop:sr:{panel_id}:{page}:{query or ''}",
+        back_text=t("admin_back_to_search_results", None),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ucl:"))
+async def users_list_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
+    if await reject_callback_if_not_any_admin(callback, settings, services):
+        return
+    client_ref = await _scoped_detail_origin_from_callback(
+        callback,
+        settings=settings,
+        services=services,
+        prefix="ucl",
+    )
+    if client_ref is None:
+        return
+    panel_id, inbound_id, client_uuid, page, _query = client_ref
+    await render_client_detail(
+        callback,
+        services,
+        settings,
+        panel_id=panel_id,
+        inbound_id=inbound_id,
+        client_uuid=client_uuid,
+        back_callback=f"uop:list:{panel_id}:{page}",
         back_text=t("admin_back_to_users_list", None),
     )
     await callback.answer()

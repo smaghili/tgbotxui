@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.callbacks import NOOP, parse_inbound_page, parse_online_page
+from bot.callbacks import NOOP, parse_online_page
 from bot.config import Settings
 from bot.i18n import button_variants, t
 from bot.services.container import ServiceContainer
@@ -15,7 +15,6 @@ from .admin_client_helpers import (
     actor_scope as _actor_scope,
     ensure_client_scope as _ensure_client_scope,
     low_traffic_threshold_mb as _low_traffic_threshold_mb,
-    render_inbound_clients_view as _render_inbound_clients_view,
     resolve_panel_or_prompt as _resolve_panel_or_prompt,
     scoped_client_from_callback as _scoped_client_from_callback,
     scoped_client_from_state as _scoped_client_from_state,
@@ -25,7 +24,6 @@ from .admin_shared import (
     answer_with_admin_menu,
     back_to_detail_keyboard,
     callback_error_alert,
-    client_confirm_reset_keyboard,
     client_expiry_menu_keyboard,
     client_iplimit_menu_keyboard,
     client_ips_log_keyboard,
@@ -34,13 +32,12 @@ from .admin_shared import (
     client_list_keyboard,
     reject_callback_if_not_any_admin,
     reject_if_not_any_admin,
-    render_client_detail,
     set_client_action_context,
     show_online_clients_for_panel_callback,
     load_online_clients_for_actor,
-    show_users_inbounds_for_panel_message,
+    show_panel_clients_for_panel_message,
     show_online_clients_for_actor_message,
-    show_users_inbounds_for_panel_callback,
+    show_panel_clients_for_panel_callback,
     normalize_tg_id,
 )
 
@@ -100,7 +97,7 @@ async def start_users_list(message: Message, settings: Settings, services: Servi
         services=services,
         panel_id=panel_id,
     )
-    await show_users_inbounds_for_panel_message(
+    await show_panel_clients_for_panel_message(
         message,
         services,
         settings,
@@ -309,7 +306,7 @@ async def users_pick_panel(callback: CallbackQuery, settings: Settings, services
         services=services,
         panel_id=panel_id,
     )
-    await show_users_inbounds_for_panel_callback(
+    await show_panel_clients_for_panel_callback(
         callback,
         services,
         panel_id,
@@ -499,84 +496,6 @@ async def pick_panel_for_last_online(callback: CallbackQuery, settings: Settings
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("users_inbound_pick:"))
-async def users_pick_inbound(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    if callback.message is None or callback.data is None:
-        await callback.answer()
-        return
-    try:
-        _, panel_raw, inbound_raw = callback.data.split(":", 2)
-        panel_id = int(panel_raw)
-        inbound_id = int(inbound_raw)
-    except (ValueError, IndexError):
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
-        return
-
-    panel = await services.panel_service.get_panel(panel_id)
-    if panel is None:
-        await callback.answer(t("admin_panel_not_found", None), show_alert=True)
-        return
-
-    api_version = await services.panel_service.get_panel_api_version(panel_id)
-    if api_version == "v3":
-        owner_filter, allowed_inbound_ids = await _actor_scope(
-            user_id=callback.from_user.id,
-            settings=settings,
-            services=services,
-            panel_id=panel_id,
-        )
-        clients = await services.panel_service.list_clients(
-            panel_id,
-            owner_admin_user_id=owner_filter,
-            allowed_inbound_ids=allowed_inbound_ids,
-        )
-        if not clients:
-            await callback.message.edit_text(t("admin_panel_clients_empty", None, panel=panel["name"]))
-            await callback.answer()
-            return
-        await callback.message.edit_text(
-            t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients)),
-            reply_markup=client_list_keyboard(panel_id, clients, mode="list", page=1),
-        )
-    else:
-        await _render_inbound_clients_view(
-            callback.message,
-            services=services,
-            settings=settings,
-            actor_user_id=callback.from_user.id,
-            panel_id=panel_id,
-            inbound_id=inbound_id,
-            page=1,
-        )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("uip:"))
-async def users_inbound_paginate(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    if callback.data is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        parsed = parse_inbound_page(callback.data)
-    except ValueError:
-        await callback.answer(t("admin_invalid_data", None), show_alert=True)
-        return
-    await _render_inbound_clients_view(
-        callback.message,
-        services=services,
-        settings=settings,
-        actor_user_id=callback.from_user.id,
-        panel_id=parsed.panel_id,
-        inbound_id=parsed.inbound_id,
-        page=parsed.page,
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data.startswith("uolp:"))
 async def online_refresh_list(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
     if await reject_callback_if_not_any_admin(callback, settings, services):
@@ -678,6 +597,14 @@ async def online_paginate(callback: CallbackQuery, settings: Settings, services:
             )
             text = t("admin_online_header", None, name=panel["name"], count=len(clients))
             markup = online_clients_keyboard(parsed.panel_id, clients, page=parsed.page)
+        elif parsed.mode == "list":
+            clients = await services.panel_service.list_clients(
+                parsed.panel_id,
+                owner_admin_user_id=owner_filter,
+                allowed_inbound_ids=allowed_inbound_ids,
+            )
+            text = t("admin_panel_clients_header", None, panel=panel["name"], count=len(clients))
+            markup = client_list_keyboard(parsed.panel_id, clients, mode="list", page=parsed.page)
         elif parsed.mode == "ds":
             clients = await services.panel_service.list_disabled_clients(
                 parsed.panel_id,
@@ -914,173 +841,6 @@ async def online_show_last_online(callback: CallbackQuery, settings: Settings, s
         ),
     )
     await callback.answer()
-
-
-@router.callback_query(F.data.startswith("uol:"))
-async def online_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    client_ref = await _scoped_client_from_callback(
-        callback,
-        settings=settings,
-        services=services,
-        prefix="uol",
-    )
-    if client_ref is None:
-        return
-    panel_id, inbound_id, client_uuid = client_ref
-    await render_client_detail(
-        callback,
-        services,
-        settings,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-        back_callback=f"uolp:{panel_id}",
-        back_text=t("admin_back_to_online_list", None),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("uodl:"))
-async def disabled_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    client_ref = await _scoped_client_from_callback(
-        callback,
-        settings=settings,
-        services=services,
-        prefix="uodl",
-    )
-    if client_ref is None:
-        return
-    panel_id, inbound_id, client_uuid = client_ref
-    await render_client_detail(
-        callback,
-        services,
-        settings,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-        back_callback=f"uop:ds:{panel_id}:1",
-        back_text=t("admin_back_to_disabled_list", None),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("uolr:"))
-async def low_traffic_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    client_ref = await _scoped_client_from_callback(
-        callback,
-        settings=settings,
-        services=services,
-        prefix="uolr",
-    )
-    if client_ref is None:
-        return
-    panel_id, inbound_id, client_uuid = client_ref
-    await render_client_detail(
-        callback,
-        services,
-        settings,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-        back_callback=f"uop:lr:{panel_id}:1",
-        back_text=t("admin_back_to_low_traffic_list", None),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("uo:"))
-async def client_open_detail(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    client_ref = await _scoped_client_from_callback(
-        callback,
-        settings=settings,
-        services=services,
-        prefix="uo",
-    )
-    if client_ref is None:
-        return
-    panel_id, inbound_id, client_uuid = client_ref
-    await render_client_detail(
-        callback,
-        services,
-        settings,
-        panel_id=panel_id,
-        inbound_id=inbound_id,
-        client_uuid=client_uuid,
-        back_callback=f"users_inbound_pick:{panel_id}:{inbound_id}",
-        back_text=t("admin_back_to_users_list", None),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("cr:"))
-async def client_refresh(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    client_ref = await _scoped_client_from_callback(
-        callback,
-        settings=settings,
-        services=services,
-        prefix="cr",
-    )
-    if client_ref is None:
-        return
-    panel_id, inbound_id, client_uuid = client_ref
-    await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
-    await callback.answer(t("admin_refresh_done", None))
-
-
-@router.callback_query(F.data.startswith("ra:"))
-async def client_reset_confirm(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    client_ref = await _scoped_client_from_callback(
-        callback,
-        settings=settings,
-        services=services,
-        prefix="ra",
-        require_message=True,
-    )
-    if client_ref is None:
-        return
-    panel_id, inbound_id, client_uuid = client_ref
-    await callback.message.edit_reply_markup(reply_markup=client_confirm_reset_keyboard(panel_id, inbound_id, client_uuid))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("ry:"))
-async def client_reset_yes(callback: CallbackQuery, settings: Settings, services: ServiceContainer) -> None:
-    if await reject_callback_if_not_any_admin(callback, settings, services):
-        return
-    client_ref = await _scoped_client_from_callback(
-        callback,
-        settings=settings,
-        services=services,
-        prefix="ry",
-    )
-    if client_ref is None:
-        return
-    panel_id, inbound_id, client_uuid = client_ref
-    try:
-        await services.admin_provisioning_service.reset_client_traffic_for_actor(
-            actor_user_id=callback.from_user.id,
-            settings=settings,
-            panel_id=panel_id,
-            inbound_id=inbound_id,
-            client_uuid=client_uuid,
-        )
-    except Exception as exc:
-        await callback_error_alert(callback, exc)
-        return
-    await render_client_detail(callback, services, settings, panel_id=panel_id, inbound_id=inbound_id, client_uuid=client_uuid)
-    await callback.answer(t("admin_reset_done", None))
 
 
 @router.callback_query(F.data.startswith("tm:"))
